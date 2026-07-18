@@ -1,0 +1,202 @@
+import websocket from "@fastify/websocket";
+import type { FastifyInstance } from "fastify";
+import WebSocket, { type RawData } from "ws";
+import {
+  clientControlMessageSchema,
+  type ServerMessage,
+} from "../../shared/realtime-protocol";
+import { getQwenConfig } from "../config";
+import { QwenRealtimeClient } from "./qwen-realtime-client";
+import { RealtimeSessionController } from "./realtime-session-controller";
+
+const MAX_INPUT_FRAME_BYTES = 64 * 1024;
+const MAX_BROWSER_BUFFERED_BYTES = 1024 * 1024;
+
+function rawDataToBuffer(data: RawData): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  if (Array.isArray(data)) return Buffer.concat(data);
+  return Buffer.from(data);
+}
+
+export async function registerRealtimeGateway(
+  app: FastifyInstance,
+  options: { clientOrigin: string },
+): Promise<void> {
+  await app.register(websocket);
+
+  app.get("/ws/realtime", { websocket: true }, (browser, request) => {
+    const origin = request.headers.origin;
+    if (origin && origin !== options.clientOrigin) {
+      browser.close(1008, "Origin is not allowed");
+      return;
+    }
+
+    let qwen: QwenRealtimeClient | undefined;
+    let controller: RealtimeSessionController | undefined;
+    let browserClosed = false;
+    let configureStarted = false;
+
+    const send = (message: ServerMessage) => {
+      if (browser.readyState === WebSocket.OPEN) {
+        browser.send(JSON.stringify(message));
+      }
+    };
+
+    const sendError = (
+      code: string,
+      message: string,
+      recoverable: boolean,
+    ) => {
+      send({ type: "error", code, message, recoverable });
+    };
+
+    const configure = async (
+      message: Extract<
+        ReturnType<typeof clientControlMessageSchema.parse>,
+        { type: "session.configure" }
+      >,
+    ) => {
+      if (configureStarted) {
+        sendError("ALREADY_CONFIGURED", "The session is already configured.", true);
+        return;
+      }
+
+      configureStarted = true;
+      send({ type: "session.state", state: "connecting" });
+
+      try {
+        qwen = new QwenRealtimeClient(getQwenConfig(), {
+          onEvent: (event) => controller?.handleQwenEvent(event),
+          onMalformedEvent: (raw) => {
+            request.log.warn(
+              { payloadLength: raw.length },
+              "Ignoring malformed Qwen event",
+            );
+          },
+          onClose: (code, reason) => {
+            if (browserClosed) return;
+            sendError(
+              "UPSTREAM_CLOSED",
+              `The Qwen connection closed (${code}${reason ? `: ${reason}` : ""}).`,
+              false,
+            );
+            send({ type: "session.state", state: "ended" });
+            browser.close(1011, "Qwen connection closed");
+          },
+        });
+
+        const sessionId = await qwen.connect({
+          instructions: message.instructions,
+          voice: message.voice,
+          maxHistoryTurns: message.maxHistoryTurns,
+        });
+
+        if (browserClosed) {
+          qwen.close();
+          return;
+        }
+
+        controller = new RealtimeSessionController(qwen, {
+          send,
+          sendAudio: (audio) => {
+            if (
+              browser.readyState !== WebSocket.OPEN ||
+              browser.bufferedAmount > MAX_BROWSER_BUFFERED_BYTES
+            ) {
+              return false;
+            }
+            browser.send(audio, { binary: true });
+            return true;
+          },
+          closeWithError: () => {
+            qwen?.close();
+            if (browser.readyState === WebSocket.OPEN) {
+              browser.close(1011, "Context repair failed");
+            }
+          },
+          warn: (error, logMessage) => {
+            request.log.warn({ error }, logMessage);
+          },
+          error: (error, logMessage) => {
+            request.log.error({ error }, logMessage);
+          },
+        });
+
+        send({ type: "session.ready", sessionId });
+        send({ type: "session.state", state: "ready" });
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : "Unknown error";
+        request.log.error({ error }, "Failed to configure realtime session");
+        sendError("SESSION_CONFIGURATION_FAILED", errorMessage, false);
+        send({ type: "session.state", state: "ended" });
+      }
+    };
+
+    const handleControlMessage = async (raw: string) => {
+      let json: unknown;
+      try {
+        json = JSON.parse(raw);
+      } catch {
+        sendError("INVALID_JSON", "Control message must be valid JSON.", true);
+        return;
+      }
+
+      const parsed = clientControlMessageSchema.safeParse(json);
+      if (!parsed.success) {
+        sendError(
+          "INVALID_MESSAGE",
+          parsed.error.issues[0]?.message ?? "Invalid control message.",
+          true,
+        );
+        return;
+      }
+
+      const message = parsed.data;
+      if (message.type === "session.configure") {
+        await configure(message);
+        return;
+      }
+
+      if (!controller) {
+        sendError("SESSION_NOT_READY", "Wait for session.ready first.", true);
+        return;
+      }
+
+      controller.handleControl(message);
+    };
+
+    browser.on("message", (data: RawData, isBinary: boolean) => {
+      if (!isBinary) {
+        void handleControlMessage(data.toString()).catch((error: unknown) => {
+          request.log.error({ error }, "Failed to process browser control message");
+          sendError("GATEWAY_ERROR", "The gateway could not process the request.", true);
+        });
+        return;
+      }
+
+      if (!controller) return;
+      const pcm = rawDataToBuffer(data);
+      if (
+        pcm.length === 0 ||
+        pcm.length > MAX_INPUT_FRAME_BYTES ||
+        pcm.length % 2 !== 0
+      ) {
+        sendError("INVALID_AUDIO_FRAME", "Invalid PCM16 audio frame.", true);
+        return;
+      }
+
+      controller.appendAudio(pcm);
+    });
+
+    browser.on("close", () => {
+      browserClosed = true;
+      controller?.dispose();
+      qwen?.close();
+    });
+
+    browser.on("error", (error) => {
+      request.log.warn({ error }, "Browser WebSocket error");
+    });
+  });
+}

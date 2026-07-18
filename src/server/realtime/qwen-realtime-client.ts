@@ -1,0 +1,213 @@
+import WebSocket, { type RawData } from "ws";
+import type { QwenConfig } from "../config";
+import type {
+  QwenServerEvent,
+  QwenSessionConfiguration,
+} from "./qwen-types";
+
+const CONNECTION_TIMEOUT_MS = 15_000;
+
+export interface QwenRealtimeClientHandlers {
+  onEvent: (event: QwenServerEvent) => void;
+  onClose: (code: number, reason: string) => void;
+  onMalformedEvent: (raw: string) => void;
+}
+
+export type QwenSocketFactory = (
+  url: URL,
+  options: WebSocket.ClientOptions,
+) => WebSocket;
+
+export class QwenRealtimeClient {
+  private socket?: WebSocket;
+  private configured = false;
+
+  public constructor(
+    private readonly config: QwenConfig,
+    private readonly handlers: QwenRealtimeClientHandlers,
+    private readonly createSocket: QwenSocketFactory = (url, options) =>
+      new WebSocket(url, options),
+  ) {}
+
+  public connect(session: QwenSessionConfiguration): Promise<string> {
+    if (this.socket) {
+      throw new Error("The upstream Qwen connection has already been created.");
+    }
+
+    const url = new URL(this.config.endpoint);
+    url.searchParams.set("model", this.config.model);
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let sessionId = "unknown";
+
+      const settleWithError = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        reject(error);
+      };
+
+      const timeout = setTimeout(() => {
+        this.socket?.terminate();
+        settleWithError(
+          new Error("Timed out while connecting to Qwen Realtime API."),
+        );
+      }, CONNECTION_TIMEOUT_MS);
+
+      this.socket = this.createSocket(url, {
+        headers: {
+          Authorization: `Bearer ${this.config.apiKey}`,
+          "User-Agent": "ai-role-player-demo/0.1.0",
+          ...(this.config.workspaceId
+            ? { "X-DashScope-WorkSpace": this.config.workspaceId }
+            : {}),
+        },
+      });
+
+      this.socket.on("message", (data: RawData) => {
+        const raw = data.toString();
+        let event: QwenServerEvent;
+
+        try {
+          event = JSON.parse(raw) as QwenServerEvent;
+        } catch {
+          this.handlers.onMalformedEvent(raw);
+          return;
+        }
+
+        if (event.type === "session.created") {
+          sessionId = event.session?.id ?? "unknown";
+          this.send({
+            type: "session.update",
+            session: {
+              modalities: ["audio", "text"],
+              voice: session.voice,
+              instructions: session.instructions,
+              input_audio_format: "pcm",
+              output_audio_format: "pcm",
+              max_history_turns: session.maxHistoryTurns,
+              turn_detection: null,
+            },
+          });
+        }
+
+        if (event.type === "session.updated" && !settled) {
+          settled = true;
+          this.configured = true;
+          clearTimeout(timeout);
+          resolve(sessionId);
+        }
+
+        if (event.type === "error" && !settled) {
+          settleWithError(
+            new Error(event.error?.message ?? "Qwen rejected the session."),
+          );
+        }
+
+        this.handlers.onEvent(event);
+      });
+
+      this.socket.on("unexpected-response", (_request, response) => {
+        settleWithError(
+          new Error(
+            `Qwen WebSocket handshake failed with HTTP ${response.statusCode}. Check the API key, workspace ID, region, and model permission.`,
+          ),
+        );
+      });
+
+      this.socket.on("error", (error) => {
+        settleWithError(error);
+      });
+
+      this.socket.on("close", (code, reason) => {
+        this.configured = false;
+        clearTimeout(timeout);
+        if (!settled) {
+          settleWithError(
+            new Error(
+              `Qwen connection closed before it was ready (${code}: ${reason.toString() || "no reason"}).`,
+            ),
+          );
+        }
+        this.handlers.onClose(code, reason.toString());
+      });
+    });
+  }
+
+  public appendAudio(pcm16: Buffer): void {
+    this.assertReady();
+    this.send({
+      type: "input_audio_buffer.append",
+      audio: pcm16.toString("base64"),
+    });
+  }
+
+  public commitAudioAndCreateResponse(): void {
+    this.assertReady();
+    this.send({ type: "input_audio_buffer.commit" });
+    this.send({
+      type: "response.create",
+      response: { modalities: ["audio", "text"] },
+    });
+  }
+
+  public clearAudio(): void {
+    this.assertReady();
+    this.send({ type: "input_audio_buffer.clear" });
+  }
+
+  public cancelResponse(): void {
+    this.assertReady();
+    this.send({ type: "response.cancel" });
+  }
+
+  public deleteConversationItem(itemId: string): void {
+    this.assertReady();
+    this.send({ type: "conversation.item.delete", item_id: itemId });
+  }
+
+  public createAssistantTextItem(input: {
+    itemId: string;
+    previousItemId?: string;
+    text: string;
+  }): void {
+    this.assertReady();
+    this.send({
+      type: "conversation.item.create",
+      ...(input.previousItemId
+        ? { previous_item_id: input.previousItemId }
+        : {}),
+      item: {
+        id: input.itemId,
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: input.text }],
+      },
+    });
+  }
+
+  public close(): void {
+    this.configured = false;
+    if (!this.socket) return;
+
+    if (this.socket.readyState === WebSocket.OPEN) {
+      this.socket.close(1000, "Browser session ended");
+    } else if (this.socket.readyState === WebSocket.CONNECTING) {
+      this.socket.terminate();
+    }
+  }
+
+  private assertReady(): void {
+    if (!this.configured || this.socket?.readyState !== WebSocket.OPEN) {
+      throw new Error("Qwen session is not ready for audio yet.");
+    }
+  }
+
+  private send(payload: object): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) {
+      throw new Error("Qwen WebSocket is not open.");
+    }
+    this.socket.send(JSON.stringify(payload));
+  }
+}

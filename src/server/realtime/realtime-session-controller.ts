@@ -1,0 +1,700 @@
+import { randomUUID } from "node:crypto";
+import {
+  INPUT_CHUNK_BYTES,
+  type ClientControlMessage,
+  type ServerMessage,
+  type SessionState,
+} from "../../shared/realtime-protocol";
+import { QwenRealtimeClient } from "./qwen-realtime-client";
+import type { QwenConversationItem, QwenServerEvent } from "./qwen-types";
+import {
+  SpeechPrefixEstimator,
+  type PrefixEstimate,
+} from "./speech-prefix-estimator";
+
+const REPAIR_TIMEOUT_MS = 10_000;
+
+type GenerationState =
+  | "generating"
+  | "cancel_requested"
+  | "completed"
+  | "cancelled"
+  | "failed";
+
+interface InterruptionSnapshot {
+  safePlayedMs: number;
+  transcript: string;
+  audioBytes: number;
+  generationCompleted: boolean;
+}
+
+interface ResponseRecord {
+  responseId: string;
+  generation: GenerationState;
+  playback: "pending" | "completed" | "interrupted";
+  suppressOutput: boolean;
+  transcript: string;
+  audioBytes: number;
+  assistantItemId?: string;
+  previousItemId?: string;
+  interruption?: InterruptionSnapshot;
+}
+
+interface RepairJob {
+  responseId: string;
+  stage: "waiting_terminal" | "waiting_delete" | "waiting_create";
+  estimate?: PrefixEstimate;
+  originalItemId?: string;
+  replacementItemId?: string;
+  timeout?: NodeJS.Timeout;
+}
+
+export interface RealtimeSessionControllerHandlers {
+  send: (message: ServerMessage) => void;
+  sendAudio: (audio: Buffer) => boolean;
+  closeWithError: (reason: string) => void;
+  warn: (error: unknown, message: string) => void;
+  error: (error: unknown, message: string) => void;
+}
+
+function responseItemTranscript(item: QwenConversationItem): string | undefined {
+  for (const content of item.content ?? []) {
+    const text = content.transcript ?? content.text;
+    if (text?.trim()) return text;
+  }
+  return undefined;
+}
+
+function isBenignCancellationRace(event: QwenServerEvent): boolean {
+  const message = `${event.error?.code ?? ""} ${event.error?.message ?? ""}`.toLowerCase();
+  const mentionsCancellation =
+    message.includes("cancel") || message.includes("inference");
+  const saysNothingIsActive =
+    message.includes("no active") ||
+    message.includes("not active") ||
+    message.includes("not found") ||
+    message.includes("no response") ||
+    message.includes("no inference");
+  return mentionsCancellation && saysNothingIsActive;
+}
+
+export class RealtimeSessionController {
+  private inputActive = false;
+  private inputBytes = 0;
+  private pendingCommit = false;
+  private awaitingResponseCreation = false;
+  private cancelWhenResponseCreated = false;
+  private activeGenerationResponseId?: string;
+  private lastSentState?: SessionState;
+  private repair?: RepairJob;
+  private readonly responses = new Map<string, ResponseRecord>();
+  private readonly responseIdByItemId = new Map<string, string>();
+  private readonly estimator = new SpeechPrefixEstimator();
+
+  public constructor(
+    private readonly qwen: QwenRealtimeClient,
+    private readonly handlers: RealtimeSessionControllerHandlers,
+  ) {}
+
+  public handleControl(message: ClientControlMessage): void {
+    switch (message.type) {
+      case "session.configure":
+        this.sendError("ALREADY_CONFIGURED", "The session is already configured.", true);
+        break;
+      case "input.start":
+        this.startInput();
+        break;
+      case "input.commit":
+        this.commitInput();
+        break;
+      case "input.clear":
+        this.clearInput();
+        break;
+      case "response.cancel":
+        this.interruptLatestResponse();
+        break;
+      case "playback.completed":
+        this.completePlayback(message.responseId);
+        break;
+      case "playback.interrupted":
+        this.interruptResponse(message.responseId, message.safePlayedMs);
+        break;
+    }
+  }
+
+  public appendAudio(pcm: Buffer): void {
+    if (!this.inputActive) return;
+    try {
+      this.qwen.appendAudio(pcm);
+      this.inputBytes += pcm.length;
+    } catch (error) {
+      this.handlers.error(error, "Failed to forward browser audio");
+      this.sendError("AUDIO_FORWARD_FAILED", "Could not forward microphone audio.", true);
+    }
+  }
+
+  public handleQwenEvent(event: QwenServerEvent): void {
+    switch (event.type) {
+      case "conversation.item.input_audio_transcription.delta":
+        this.handlers.send({
+          type: "transcript.user.delta",
+          itemId: event.item_id ?? "unknown",
+          text: event.text ?? "",
+          stash: event.stash ?? "",
+        });
+        break;
+
+      case "conversation.item.input_audio_transcription.completed":
+        this.handlers.send({
+          type: "transcript.user.done",
+          itemId: event.item_id ?? "unknown",
+          transcript: event.transcript ?? "",
+        });
+        break;
+
+      case "conversation.item.input_audio_transcription.failed":
+        this.sendError(
+          "TRANSCRIPTION_FAILED",
+          event.error?.message ?? "The user audio could not be transcribed.",
+          true,
+        );
+        break;
+
+      case "response.created":
+        this.handleResponseCreated(event);
+        break;
+
+      case "response.output_item.added":
+        this.handleOutputItemAdded(event);
+        break;
+
+      case "conversation.item.created":
+        this.handleConversationItemCreated(event);
+        break;
+
+      case "conversation.item.deleted":
+        this.handleConversationItemDeleted(event);
+        break;
+
+      case "response.audio_transcript.delta":
+        this.handleAssistantTranscriptDelta(event);
+        break;
+
+      case "response.audio_transcript.done":
+        this.handleAssistantTranscriptDone(event);
+        break;
+
+      case "response.audio.delta":
+        this.handleAssistantAudio(event);
+        break;
+
+      case "response.done":
+        this.handleResponseDone(event);
+        break;
+
+      case "error":
+        this.handleQwenError(event);
+        break;
+
+      default:
+        break;
+    }
+  }
+
+  public dispose(): void {
+    if (this.repair?.timeout) clearTimeout(this.repair.timeout);
+  }
+
+  private startInput(): void {
+    if (this.inputActive || this.pendingCommit) {
+      this.sendError("INPUT_ALREADY_ACTIVE", "A user turn is already active.", true);
+      return;
+    }
+
+    this.interruptLatestResponse();
+    this.inputActive = true;
+    this.inputBytes = 0;
+    this.sendState("listening");
+  }
+
+  private commitInput(): void {
+    if (!this.inputActive) {
+      this.sendError("NO_ACTIVE_INPUT", "No recording is active.", true);
+      return;
+    }
+
+    this.inputActive = false;
+    if (this.inputBytes < INPUT_CHUNK_BYTES) {
+      this.qwen.clearAudio();
+      this.inputBytes = 0;
+      this.sendError(
+        "RECORDING_TOO_SHORT",
+        "Please speak for at least 100 ms before submitting.",
+        true,
+      );
+      this.sendState("ready");
+      return;
+    }
+
+    this.pendingCommit = true;
+    this.inputBytes = 0;
+    this.sendState("processing");
+    this.maybeFlushCommit();
+  }
+
+  private clearInput(): void {
+    this.inputActive = false;
+    this.pendingCommit = false;
+    this.inputBytes = 0;
+    this.qwen.clearAudio();
+    this.sendState(this.repair ? "processing" : "ready");
+  }
+
+  private maybeFlushCommit(): void {
+    if (
+      !this.pendingCommit ||
+      this.repair ||
+      this.activeGenerationResponseId ||
+      this.awaitingResponseCreation
+    ) {
+      return;
+    }
+
+    this.pendingCommit = false;
+    this.awaitingResponseCreation = true;
+    this.qwen.commitAudioAndCreateResponse();
+    this.sendState("processing");
+  }
+
+  private handleResponseCreated(event: QwenServerEvent): void {
+    const responseId = event.response?.id ?? "unknown";
+    const record: ResponseRecord = {
+      responseId,
+      generation: "generating",
+      playback: "pending",
+      suppressOutput: false,
+      transcript: "",
+      audioBytes: 0,
+    };
+    this.responses.set(responseId, record);
+    this.awaitingResponseCreation = false;
+    this.activeGenerationResponseId = responseId;
+
+    if (this.cancelWhenResponseCreated) {
+      this.cancelWhenResponseCreated = false;
+      this.requestInterruption(record, 0);
+      return;
+    }
+
+    this.handlers.send({ type: "response.started", responseId });
+    this.sendState("processing");
+  }
+
+  private handleOutputItemAdded(event: QwenServerEvent): void {
+    const item = event.item;
+    if (
+      !event.response_id ||
+      !item?.id ||
+      item.type !== "message" ||
+      item.role !== "assistant"
+    ) {
+      return;
+    }
+
+    const record = this.responses.get(event.response_id);
+    if (!record) return;
+    record.assistantItemId = item.id;
+    this.responseIdByItemId.set(item.id, event.response_id);
+  }
+
+  private handleConversationItemCreated(event: QwenServerEvent): void {
+    const item = event.item;
+    if (!item?.id) return;
+
+    if (
+      this.repair?.stage === "waiting_create" &&
+      item.id === this.repair.replacementItemId
+    ) {
+      this.finishRepair();
+      return;
+    }
+
+    if (item.type !== "message" || item.role !== "assistant") return;
+    const responseId =
+      this.responseIdByItemId.get(item.id) ?? this.activeGenerationResponseId;
+    if (!responseId) return;
+    const record = this.responses.get(responseId);
+    if (!record) return;
+    record.assistantItemId = item.id;
+    record.previousItemId = event.previous_item_id;
+    this.responseIdByItemId.set(item.id, responseId);
+  }
+
+  private handleConversationItemDeleted(event: QwenServerEvent): void {
+    const repair = this.repair;
+    if (
+      !repair ||
+      repair.stage !== "waiting_delete" ||
+      event.item_id !== repair.originalItemId
+    ) {
+      return;
+    }
+
+    this.clearRepairTimeout();
+    const record = this.responses.get(repair.responseId);
+    const estimate = repair.estimate;
+    if (!record) {
+      this.failContextRepair("The interrupted response disappeared during repair.");
+      return;
+    }
+    if (!estimate?.transcript) {
+      this.finishRepair();
+      return;
+    }
+
+    repair.stage = "waiting_create";
+    repair.replacementItemId = `item_repair_${randomUUID().replaceAll("-", "")}`;
+    try {
+      this.qwen.createAssistantTextItem({
+        itemId: repair.replacementItemId,
+        ...(record.previousItemId
+          ? { previousItemId: record.previousItemId }
+          : {}),
+        text: estimate.transcript,
+      });
+    } catch (error) {
+      this.handlers.error(error, "Failed to recreate interrupted assistant context");
+      this.failContextRepair("Could not recreate interrupted assistant context.");
+      return;
+    }
+    this.armRepairTimeout();
+  }
+
+  private handleAssistantTranscriptDelta(event: QwenServerEvent): void {
+    const record = this.responseForEvent(event);
+    if (!record) return;
+    if (event.item_id) this.rememberItem(record, event.item_id);
+    record.transcript += event.delta ?? "";
+
+    if (!record.suppressOutput) {
+      this.handlers.send({
+        type: "transcript.assistant.delta",
+        responseId: record.responseId,
+        itemId: event.item_id ?? record.assistantItemId ?? "unknown",
+        delta: event.delta ?? "",
+      });
+    }
+  }
+
+  private handleAssistantTranscriptDone(event: QwenServerEvent): void {
+    const record = this.responseForEvent(event);
+    if (!record) return;
+    if (event.item_id) this.rememberItem(record, event.item_id);
+    if (event.transcript !== undefined) record.transcript = event.transcript;
+
+    if (!record.suppressOutput) {
+      this.handlers.send({
+        type: "transcript.assistant.done",
+        responseId: record.responseId,
+        itemId: event.item_id ?? record.assistantItemId ?? "unknown",
+        transcript: event.transcript ?? record.transcript,
+      });
+    }
+  }
+
+  private handleAssistantAudio(event: QwenServerEvent): void {
+    const record = this.responseForEvent(event);
+    if (!record || !event.delta) return;
+    if (event.item_id) this.rememberItem(record, event.item_id);
+    const audio = Buffer.from(event.delta, "base64");
+    record.audioBytes += audio.length;
+    if (record.suppressOutput) return;
+
+    if (!this.handlers.sendAudio(audio)) {
+      this.sendError(
+        "PLAYBACK_BACKPRESSURE",
+        "The browser connection is too slow for realtime playback.",
+        true,
+      );
+      this.requestInterruption(record, 0);
+      return;
+    }
+    this.sendState("speaking");
+  }
+
+  private handleResponseDone(event: QwenServerEvent): void {
+    const responseId = event.response?.id ?? this.activeGenerationResponseId;
+    if (!responseId) return;
+    const record = this.responses.get(responseId);
+    if (!record) return;
+
+    for (const item of event.response?.output ?? []) {
+      if (item.type === "message" && item.role === "assistant" && item.id) {
+        this.rememberItem(record, item.id);
+        const transcript = responseItemTranscript(item);
+        if (!record.interruption && transcript) record.transcript = transcript;
+      }
+    }
+
+    const status = event.response?.status ?? "failed";
+    record.generation = status;
+    if (this.activeGenerationResponseId === responseId) {
+      this.activeGenerationResponseId = undefined;
+    }
+    this.awaitingResponseCreation = false;
+
+    if (record.interruption) {
+      this.startRepair(record);
+      return;
+    }
+
+    this.handlers.send({
+      type: "response.done",
+      responseId,
+      status,
+      ...(event.response?.status_details?.reason
+        ? { reason: event.response.status_details.reason }
+        : {}),
+    });
+
+    if (status === "failed") {
+      this.sendError(
+        "RESPONSE_FAILED",
+        event.response?.status_details?.error?.message ??
+          "Qwen could not generate a response.",
+        true,
+      );
+      this.sendState(this.inputActive ? "listening" : "ready");
+    } else if (status === "cancelled") {
+      this.sendState(this.inputActive ? "listening" : "ready");
+    } else if (record.playback === "completed") {
+      this.finalizeCompletedPlayback(record);
+    }
+
+    if (status !== "completed") {
+      this.removeResponse(record);
+    }
+
+    this.maybeFlushCommit();
+  }
+
+  private handleQwenError(event: QwenServerEvent): void {
+    if (
+      this.repair?.stage === "waiting_terminal" &&
+      isBenignCancellationRace(event)
+    ) {
+      this.handlers.warn(event.error, "Ignoring a cancellation race during repair");
+      return;
+    }
+
+    if (this.repair) {
+      this.failContextRepair(
+        event.error?.message ?? "Qwen rejected a context repair operation.",
+      );
+      return;
+    }
+
+    const recoverable = event.error?.type !== "server_error";
+    this.sendError(
+      event.error?.code ?? "QWEN_ERROR",
+      event.error?.message ?? "Qwen returned an unknown error.",
+      recoverable,
+    );
+  }
+
+  private completePlayback(responseId: string): void {
+    const record = this.responses.get(responseId);
+    if (!record || record.playback === "interrupted") return;
+    record.playback = "completed";
+    if (record.generation === "completed") {
+      this.finalizeCompletedPlayback(record);
+    }
+  }
+
+  private finalizeCompletedPlayback(record: ResponseRecord): void {
+    if (record.transcript.trim() && record.audioBytes > 0) {
+      this.estimator.addCompletedSample(record.transcript, record.audioBytes / 48);
+    }
+    this.removeResponse(record);
+    this.sendState(this.inputActive ? "listening" : "ready");
+    this.maybeFlushCommit();
+  }
+
+  private interruptLatestResponse(): void {
+    if (this.repair) return;
+
+    if (this.activeGenerationResponseId) {
+      const record = this.responses.get(this.activeGenerationResponseId);
+      if (record) this.requestInterruption(record, 0);
+      return;
+    }
+
+    if (this.awaitingResponseCreation) {
+      this.cancelWhenResponseCreated = true;
+      return;
+    }
+
+    const latest = [...this.responses.values()]
+      .reverse()
+      .find((record) => record.playback === "pending");
+    if (latest) this.requestInterruption(latest, 0);
+  }
+
+  private interruptResponse(responseId: string, safePlayedMs: number): void {
+    const record = this.responses.get(responseId);
+    if (!record) {
+      this.sendError("UNKNOWN_RESPONSE", "The playback response is no longer active.", true);
+      return;
+    }
+    this.requestInterruption(record, safePlayedMs);
+  }
+
+  private requestInterruption(
+    record: ResponseRecord,
+    safePlayedMs: number,
+  ): void {
+    if (record.playback === "completed") return;
+    if (record.interruption) {
+      record.interruption.safePlayedMs = Math.min(
+        record.interruption.safePlayedMs,
+        safePlayedMs,
+      );
+      return;
+    }
+
+    record.playback = "interrupted";
+    record.suppressOutput = true;
+    record.interruption = {
+      safePlayedMs,
+      transcript: record.transcript,
+      audioBytes: record.audioBytes,
+      generationCompleted: record.generation === "completed",
+    };
+    this.repair = { responseId: record.responseId, stage: "waiting_terminal" };
+    this.armRepairTimeout();
+
+    if (record.generation === "generating") {
+      record.generation = "cancel_requested";
+      try {
+        this.qwen.cancelResponse();
+      } catch (error) {
+        this.handlers.warn(error, "Could not cancel Qwen response");
+      }
+      return;
+    }
+
+    if (record.generation !== "cancel_requested") this.startRepair(record);
+  }
+
+  private startRepair(record: ResponseRecord): void {
+    const repair = this.repair;
+    const interruption = record.interruption;
+    if (!repair || repair.responseId !== record.responseId || !interruption) return;
+    if (repair.stage !== "waiting_terminal") return;
+
+    repair.estimate = this.estimator.estimate({
+      transcript: interruption.transcript,
+      generatedAudioMs: interruption.audioBytes / 48,
+      safePlayedMs: interruption.safePlayedMs,
+      generationCompleted: interruption.generationCompleted,
+    });
+
+    const itemId = record.assistantItemId;
+    if (!itemId) {
+      if (!interruption.transcript.trim() && interruption.audioBytes === 0) {
+        this.finishRepair();
+      } else {
+        this.failContextRepair("Qwen did not provide an assistant item ID to repair.");
+      }
+      return;
+    }
+
+    repair.originalItemId = itemId;
+    repair.stage = "waiting_delete";
+    this.clearRepairTimeout();
+    try {
+      this.qwen.deleteConversationItem(itemId);
+    } catch (error) {
+      this.handlers.error(error, "Failed to delete interrupted assistant context");
+      this.failContextRepair("Could not delete interrupted assistant context.");
+      return;
+    }
+    this.armRepairTimeout();
+  }
+
+  private finishRepair(): void {
+    const repair = this.repair;
+    if (!repair?.estimate) return;
+    const record = this.responses.get(repair.responseId);
+    if (!record) return;
+
+    this.clearRepairTimeout();
+    this.handlers.send({
+      type: "response.reconciled",
+      responseId: repair.responseId,
+      ...(repair.originalItemId
+        ? { originalItemId: repair.originalItemId }
+        : {}),
+      ...(repair.replacementItemId
+        ? { replacementItemId: repair.replacementItemId }
+        : {}),
+      transcript: repair.estimate.transcript,
+      strategy: repair.estimate.strategy,
+      confidence: repair.estimate.confidence,
+    });
+    this.removeResponse(record);
+    this.repair = undefined;
+    this.sendState(
+      this.inputActive ? "listening" : this.pendingCommit ? "processing" : "ready",
+    );
+    this.maybeFlushCommit();
+  }
+
+  private failContextRepair(message: string): void {
+    this.clearRepairTimeout();
+    this.sendError("CONTEXT_STATE_UNCERTAIN", message, false);
+    this.sendState("ended");
+    this.handlers.closeWithError(message);
+  }
+
+  private responseForEvent(event: QwenServerEvent): ResponseRecord | undefined {
+    const responseId = event.response_id ?? this.activeGenerationResponseId;
+    return responseId ? this.responses.get(responseId) : undefined;
+  }
+
+  private rememberItem(record: ResponseRecord, itemId: string): void {
+    record.assistantItemId = itemId;
+    this.responseIdByItemId.set(itemId, record.responseId);
+  }
+
+  private removeResponse(record: ResponseRecord): void {
+    this.responses.delete(record.responseId);
+    if (record.assistantItemId) this.responseIdByItemId.delete(record.assistantItemId);
+  }
+
+  private armRepairTimeout(): void {
+    const repair = this.repair;
+    if (!repair) return;
+    this.clearRepairTimeout();
+    repair.timeout = setTimeout(() => {
+      this.failContextRepair(
+        `Timed out while repairing interrupted response ${repair.responseId}.`,
+      );
+    }, REPAIR_TIMEOUT_MS);
+  }
+
+  private clearRepairTimeout(): void {
+    if (this.repair?.timeout) clearTimeout(this.repair.timeout);
+    if (this.repair) this.repair.timeout = undefined;
+  }
+
+  private sendState(state: SessionState): void {
+    if (state === this.lastSentState) return;
+    this.lastSentState = state;
+    this.handlers.send({ type: "session.state", state });
+  }
+
+  private sendError(code: string, message: string, recoverable: boolean): void {
+    this.handlers.send({ type: "error", code, message, recoverable });
+  }
+}

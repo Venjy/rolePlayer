@@ -1,0 +1,46 @@
+# Dependencies and package-manager cache
+node_modules/
+.pnpm-store/
+
+# Build, test, and tool caches
+dist/
+coverage/
+.vite/
+*.tsbuildinfo
+.eslintcache
+.nyc_output/
+test-results/
+playwright-report/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs and temporary files
+*.log
+pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.swp
+*.swo
+*~
+
+# Editor and operating-system state
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+
+# Runtime SQLite data. Production must persist this outside the image/repo.
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+*.db
+*.db-shm
+*.db-wal
+*.db-journal

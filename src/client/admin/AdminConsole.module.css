@@ -1,0 +1,251 @@
+.console {
+  box-sizing: border-box;
+  min-height: 100dvh;
+  padding: 24px clamp(16px, 4vw, 48px) 48px;
+  background: var(--app-background, #f5f5f5);
+  color: var(--waveform-text, rgba(0, 0, 0, 0.88));
+}
+
+.header {
+  display: flex;
+  width: min(1440px, 100%);
+  margin: 0 auto 20px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.title.ant-typography,
+.title {
+  margin: 0 0 4px;
+}
+
+.headerActions {
+  flex: 0 0 auto;
+  justify-content: flex-end;
+}
+
+.globalAlert,
+.contentCard {
+  width: min(1440px, 100%);
+  margin-inline: auto;
+}
+
+.globalAlert {
+  margin-bottom: 16px;
+}
+
+.contentCard :global(.ant-card-body) {
+  padding-top: 8px;
+}
+
+.panel {
+  min-height: 340px;
+}
+
+.entityGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.pagination {
+  display: flex;
+  justify-content: center;
+  margin-top: 20px;
+}
+
+.toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 520px) auto;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 4px 0 20px;
+}
+
+.entityCard {
+  height: 100%;
+}
+
+.entityCard :global(.ant-card-body) {
+  display: flex;
+  min-height: 224px;
+  flex-direction: column;
+  padding: 18px;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cardTitle.ant-typography,
+.cardTitle {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.entityIcon {
+  display: inline-grid;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  place-items: center;
+  color: #1677ff;
+  background: color-mix(in srgb, #1677ff 12%, transparent);
+}
+
+.cardDescription.ant-typography,
+.cardDescription {
+  min-height: 44px;
+  margin: 16px 0 10px;
+}
+
+.tagCloud {
+  min-height: 28px;
+}
+
+.cardFooter {
+  display: flex;
+  margin-top: auto;
+  padding-top: 16px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-top: 1px solid var(--header-border, rgba(5, 5, 5, 0.08));
+}
+
+.personaSummary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.formAlert,
+.previewNote {
+  margin-bottom: 16px;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 16px;
+}
+
+.fullSpan {
+  grid-column: 1 / -1;
+}
+
+.fullWidth {
+  width: 100%;
+}
+
+.scoringList {
+  width: 100%;
+}
+
+.scoringRow {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) 140px 32px;
+  gap: 8px;
+  align-items: center;
+}
+
+.promptPreview.ant-typography,
+.promptPreview {
+  max-height: min(48dvh, 480px);
+  margin: 0;
+  overflow: auto;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 767px) {
+  .console {
+    padding: max(16px, env(safe-area-inset-top)) 12px
+      max(24px, env(safe-area-inset-bottom));
+  }
+
+  .header {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .headerActions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .contentCard :global(.ant-card-body) {
+    padding: 4px 12px 16px;
+  }
+
+  .toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .entityGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .toolbar > :global(.ant-btn) {
+    width: 100%;
+  }
+
+  .formGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .fullSpan {
+    grid-column: auto;
+  }
+
+  .scoringRow {
+    grid-template-columns: minmax(0, 1fr) 104px 32px;
+  }
+
+  .cardFooter {
+    align-items: flex-end;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1199px) {
+  .entityGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 420px) {
+  .scoringRow {
+    grid-template-columns: minmax(0, 1fr) 32px;
+  }
+
+  .scoringRow > :global(.ant-input-number) {
+    grid-column: 1;
+  }
+
+  .scoringRow > :global(.ant-btn) {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .console *,
+  .console *::before,
+  .console *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
