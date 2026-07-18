@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { useI18n } from "../i18n";
 import styles from "./VoiceWaveform.module.css";
 
 const BAR_WEIGHTS = [0.38, 0.58, 0.82, 1, 0.9, 0.68, 0.46, 0.72, 0.42];
@@ -56,6 +57,7 @@ export function VoiceWaveform({
   durationMs,
   className,
 }: VoiceWaveformProps) {
+  const { t } = useI18n();
   if (!recording) return null;
 
   const safeLevel = Number.isFinite(level) ? clamp(level, 0, 1) : 0;
@@ -63,7 +65,9 @@ export function VoiceWaveform({
   // visible without making loud input exceed the component bounds.
   const perceivedLevel = Math.sqrt(safeLevel);
   const duration = formatDuration(durationMs);
-  const instruction = cancelling ? "松开取消" : "松开发送";
+  const instruction = cancelling
+    ? t({ en: "Release to cancel", zh: "松开取消" })
+    : t({ en: "Release to send", zh: "松开发送" });
   const rootClassName = [
     styles.root,
     cancelling ? styles.cancelling : undefined,
@@ -73,7 +77,10 @@ export function VoiceWaveform({
     .join(" ");
 
   return (
-    <section className={rootClassName} aria-label="正在录音">
+    <section
+      className={rootClassName}
+      aria-label={t({ en: "Recording", zh: "正在录音" })}
+    >
       <div className={styles.waveform} aria-hidden="true">
         {BAR_WEIGHTS.map((weight, index) => {
           const restingScale = 0.14 + weight * 0.08;

@@ -9,6 +9,7 @@ Primary files:
 | File | Responsibility |
 | --- | --- |
 | `src/client/App.tsx` | App mode, catalog selection, active-session snapshot, theme, conversation data, audio/realtime orchestration |
+| `src/client/i18n/` | Locale initialization, translation selection, Ant Design locale, document language, and persistence |
 | `src/client/learner/LearnerLaunchPanel.tsx` | Searchable scenario/persona selection, compatibility, difficulty, summaries, and start action |
 | `src/client/admin/AdminConsole.tsx` | Searchable persona/scenario management tabs and CRUD entry points |
 | `src/client/admin/PersonaEditorDrawer.tsx` | Database-backed persona choices, legacy-value preservation, validation, and Instructions preview |
@@ -26,7 +27,7 @@ Standard controls should use Ant Design when a suitable component exists. The cu
 
 ### Learner launch
 
-The default surface contains the brand header, upper-right theme toggle and admin entry, startup/catalog errors, three launch choices, configuration summaries, and one primary start action:
+The default surface contains the brand header, upper-right language/theme controls and admin entry, startup/catalog errors, three launch choices, configuration summaries, and one primary start action:
 
 1. a searchable scenario selector;
 2. a searchable persona selector containing only the selected scenario's compatible personas;
@@ -56,7 +57,7 @@ A persona referenced by one or more scenarios cannot be deleted. The admin disab
 
 The active session uses a three-row CSS grid:
 
-1. Header — selected persona identity, realtime state, playback controls, end-session confirmation, and theme toggle.
+1. Header — selected persona identity, realtime state, playback controls, end-session confirmation, language control, and theme toggle.
 2. Conversation — the only vertically scrolling region.
 3. Voice composer — the hold-to-talk control, its hint, and the recording overlay anchor.
 
@@ -89,14 +90,14 @@ The conversation container uses `role="log"`, `aria-live="polite"`, and an acces
 
 The header maps application session states to user-visible status:
 
-| State | Header label | Meaning |
+| State | English / Chinese header label | Meaning |
 | --- | --- | --- |
-| `connecting` | `连接中` | Browser/Node/Qwen session is being established |
-| `ready` | `可以说话` | Ready for the next hold gesture |
-| `listening` | `正在聆听` | Microphone capture is active |
-| `processing` | `思考中` | Input is committed or interruption repair is pending |
-| `speaking` | `<persona name> 正在说话` | Assistant audio is actively playing |
-| `ended` | `已结束` | Realtime session is closed |
+| `connecting` | `Connecting` / `连接中` | Browser/Node/Qwen session is being established |
+| `ready` | `Ready to talk` / `可以说话` | Ready for the next hold gesture |
+| `listening` | `Listening` / `正在聆听` | Microphone capture is active |
+| `processing` | `Thinking` / `思考中` | Input is committed or interruption repair is pending |
+| `speaking` | `<persona> is speaking` / `<角色> 正在说话` | Assistant audio is actively playing |
+| `ended` | `Ended` / `已结束` | Realtime session is closed |
 
 The small equalizer beside the selected persona is shown only in `speaking`. It is decorative and hidden from assistive technology.
 
@@ -106,12 +107,12 @@ The primary control is a hold gesture, not a click/toggle recorder. It supports 
 
 ### Labels and visual precedence
 
-| Condition | Button label | Visual behavior |
+| Condition | English / Chinese button label | Visual behavior |
 | --- | --- | --- |
-| Idle, AI not speaking | `按住说话` | Primary green button |
-| AI audio playing | `按住打断并说话` | Attention color; remains enabled |
-| Hold/start/recording active | `松开发送` | Pressed state and waveform overlay |
-| Pointer is at least 72 px above its origin | `松开取消` | Danger button and cancellation waveform state |
+| Idle, AI not speaking | `Hold to talk` / `按住说话` | Primary green button |
+| AI audio playing | `Hold to interrupt and talk` / `按住打断并说话` | Attention color; remains enabled |
+| Hold/start/recording active | `Release to send` / `松开发送` | Pressed state and waveform overlay |
+| Pointer is at least 72 px above its origin | `Release to cancel` / `松开取消` | Danger button and cancellation waveform state |
 | Capture is finishing | Existing label with loading state | Input disabled until finish completes |
 
 Cancellation has the highest label priority, then an active gesture, then AI-speaking barge-in, then idle.
@@ -137,7 +138,7 @@ Window blur, document hidden, input becoming disabled, component unmount, and ex
 
 ### Barge-in while the selected persona speaks
 
-Holding **按住打断并说话** performs this order:
+Holding **Hold to interrupt and talk** / **按住打断并说话** performs this order:
 
 1. snapshot conservatively rendered audio duration;
 2. clear scheduled local audio immediately;
@@ -155,7 +156,7 @@ Scenario `interruptFrequency` is not this mechanism. It influences whether the r
 
 - nine decorative vertical bars;
 - elapsed recording time, updated by the parent every 100 ms;
-- `松开发送` or `松开取消` status text.
+- localized `Release to send` / `松开发送` or `Release to cancel` / `松开取消` status text.
 
 The audio engine reports normalized microphone RMS. The component clamps it to 0–1 and applies a square-root curve before scaling the bars, which makes quiet speech visible without letting loud input escape the component bounds. It is feedback only; it does not transform the audio sent to Qwen.
 
@@ -181,6 +182,14 @@ On change, the app updates all three layers:
 
 Project CSS variables cover surfaces that are not Ant Design components. Component-local styles, including the waveform, must respect the explicit app theme rather than independently overriding it from OS preference. Changing theme must not refetch/reset catalog choices, reconnect Qwen, dispose the audio engine, reset transcripts, or recreate the session. The learner launcher, admin console, drawers, and active chat must all support both themes.
 
+## Language contract
+
+The interface supports English (`en`) and Simplified Chinese (`zh`) from one React component tree. English is the first-run default. Initialization reads `role-player:locale` from `localStorage`; an absent, unsupported, or inaccessible value safely falls back to English. The upper-right language control is present on learner, admin, and active-session headers.
+
+Changing language updates the shared i18n context, Ant Design's locale object, `document.documentElement.lang`, and the saved preference. It must not reset catalog selection, close a drawer, reconnect Qwen, dispose audio, or clear an active transcript. User-facing strings include visible copy as well as validation messages, errors, placeholders, tooltips, empty states, and accessible names.
+
+Preset options keep their stable Chinese `value` as the form value and use `valueEn` as the English locale projection. Therefore changing language cannot silently alter a persona payload. Exact preset-backed snapshots are projected to English in learner/admin summaries, prompt previews, and the immutable session configuration created from an English launch; unmatched/custom text stays as authored. Unmodified built-in starter personas and the default scenario have authored translations; once an administrator edits a starter record, its free-form database text takes precedence. No content is sent to an implicit translation service.
+
 ## Playback and session controls
 
 The header playback popover uses Ant Design controls for:
@@ -199,7 +208,7 @@ For layout-only work, `?preview=session` and `?preview=recording` provide develo
 
 1. Inspect approximately 360 px, 767 px, 768 px, and a desktop width; confirm no horizontal overflow.
 2. Confirm the latest message and waveform do not hide behind the composer or mobile safe area.
-3. Switch theme on learner, admin, drawer, and active-session screens; confirm the current session remains connected.
+3. Switch theme and language on learner, admin, drawer, and active-session screens; reload after each language choice to confirm persistence, and confirm the current session remains connected.
 4. Hold and release normally with pointer input; verify one submitted turn.
 5. Hold, move upward beyond 72 px, and release; verify the captured turn is cleared and not sent.
 6. Release quickly during microphone startup; verify the UI returns to idle after the deterministic outcome.

@@ -16,6 +16,7 @@ interface InitialPersonaPreset {
   id: string;
   category: PersonaPresetCategory;
   value: string;
+  valueEn: string;
   position: number;
 }
 
@@ -27,6 +28,7 @@ interface InitialCatalogPersona {
 export interface CatalogInitializationResult {
   presetRowsInserted: number;
   presetRowsSkipped: number;
+  presetTranslationsUpdated: number;
   personaRowsInserted: number;
   personaRowsSkipped: number;
   scenarioLinksInserted: number;
@@ -70,12 +72,13 @@ export const DEFAULT_INITIAL_SCENARIO_ID = "scenario_sales_discovery";
 
 function presetGroup(
   category: PersonaPresetCategory,
-  entries: readonly (readonly [id: string, value: string])[],
+  entries: readonly (readonly [id: string, value: string, valueEn: string])[],
 ): InitialPersonaPreset[] {
-  return entries.map(([id, value], position) => ({
+  return entries.map(([id, value, valueEn], position) => ({
     id,
     category,
     value,
+    valueEn,
     position,
   }));
 }
@@ -86,125 +89,158 @@ function presetGroup(
  */
 export const INITIAL_PERSONA_PRESETS: readonly InitialPersonaPreset[] = [
   ...presetGroup("identity", [
-    ["preset_identity_business_decision_maker", "业务部门的最终决策者"],
+    [
+      "preset_identity_business_decision_maker",
+      "业务部门的最终决策者",
+      "Final decision-maker for a business unit",
+    ],
     [
       "preset_identity_management_recommender",
       "负责方案评估并向管理层提出建议的业务负责人",
+      "Business leader who evaluates solutions and makes recommendations to management",
     ],
     [
       "preset_identity_procurement_decision_maker",
       "负责供应商筛选、商务谈判与风险控制的采购决策者",
+      "Procurement decision-maker responsible for supplier selection, commercial negotiations, and risk control",
     ],
     [
       "preset_identity_small_business_owner",
       "直接负责经营、现金流与最终购买决策的小微企业主",
+      "Small-business owner directly responsible for operations, cash flow, and final purchasing decisions",
     ],
     [
       "preset_identity_technical_evaluator",
       "负责技术选型、系统集成与信息安全的技术评估者",
+      "Technical evaluator responsible for technology selection, systems integration, and information security",
     ],
-    ["preset_identity_daily_user_influencer", "产品的日常使用者和内部影响者"],
+    [
+      "preset_identity_daily_user_influencer",
+      "产品的日常使用者和内部影响者",
+      "Daily product user and internal influencer",
+    ],
     [
       "preset_identity_marketing_decision_maker",
       "负责增长与品牌建设的市场营销决策者",
+      "Marketing decision-maker responsible for growth and brand building",
     ],
-    ["preset_identity_people_manager", "关注团队效率与人才发展的管理者"],
+    [
+      "preset_identity_people_manager",
+      "关注团队效率与人才发展的管理者",
+      "Manager focused on team efficiency and talent development",
+    ],
   ]),
   ...presetGroup("occupation", [
-    ["preset_occupation_marketing_director", "市场营销总监"],
-    ["preset_occupation_procurement_manager", "采购经理"],
-    ["preset_occupation_small_business_owner", "小微企业主"],
-    ["preset_occupation_sales_director", "销售总监"],
-    ["preset_occupation_operations_director", "运营总监"],
-    ["preset_occupation_hr_manager", "人力资源经理"],
-    ["preset_occupation_finance_lead", "财务负责人"],
-    ["preset_occupation_it_lead", "IT 负责人"],
-    ["preset_occupation_store_manager", "门店店长"],
-    ["preset_occupation_customer_success_manager", "客户成功经理"],
-    ["preset_occupation_startup_founder", "创业公司创始人"],
-    ["preset_occupation_ecommerce_operator", "电商运营负责人"],
+    ["preset_occupation_marketing_director", "市场营销总监", "Marketing Director"],
+    ["preset_occupation_procurement_manager", "采购经理", "Procurement Manager"],
+    ["preset_occupation_small_business_owner", "小微企业主", "Small-business Owner"],
+    ["preset_occupation_sales_director", "销售总监", "Sales Director"],
+    ["preset_occupation_operations_director", "运营总监", "Operations Director"],
+    ["preset_occupation_hr_manager", "人力资源经理", "Human Resources Manager"],
+    ["preset_occupation_finance_lead", "财务负责人", "Finance Lead"],
+    ["preset_occupation_it_lead", "IT 负责人", "IT Lead"],
+    ["preset_occupation_store_manager", "门店店长", "Store Manager"],
+    [
+      "preset_occupation_customer_success_manager",
+      "客户成功经理",
+      "Customer Success Manager",
+    ],
+    ["preset_occupation_startup_founder", "创业公司创始人", "Startup Founder"],
+    [
+      "preset_occupation_ecommerce_operator",
+      "电商运营负责人",
+      "E-commerce Operations Lead",
+    ],
   ]),
   ...presetGroup("personality_trait", [
-    ["preset_trait_pragmatic", "务实"],
-    ["preset_trait_cautious", "谨慎"],
-    ["preset_trait_data_driven", "数据驱动"],
-    ["preset_trait_open_curious", "开放好奇"],
-    ["preset_trait_detail_oriented", "注重细节"],
-    ["preset_trait_cost_conscious", "成本敏感"],
-    ["preset_trait_results_oriented", "结果导向"],
-    ["preset_trait_patient", "耐心"],
-    ["preset_trait_assertive", "强势"],
-    ["preset_trait_skeptical", "怀疑精神"],
-    ["preset_trait_time_pressed", "时间紧迫"],
-    ["preset_trait_risk_averse", "风险规避"],
-    ["preset_trait_friendly_talkative", "友善健谈"],
-    ["preset_trait_decisive", "决断果断"],
-    ["preset_trait_conservative", "保守传统"],
-    ["preset_trait_early_adopter", "乐于尝试新事物"],
+    ["preset_trait_pragmatic", "务实", "Pragmatic"],
+    ["preset_trait_cautious", "谨慎", "Cautious"],
+    ["preset_trait_data_driven", "数据驱动", "Data-driven"],
+    ["preset_trait_open_curious", "开放好奇", "Open and curious"],
+    ["preset_trait_detail_oriented", "注重细节", "Detail-oriented"],
+    ["preset_trait_cost_conscious", "成本敏感", "Cost-conscious"],
+    ["preset_trait_results_oriented", "结果导向", "Results-oriented"],
+    ["preset_trait_patient", "耐心", "Patient"],
+    ["preset_trait_assertive", "强势", "Assertive"],
+    ["preset_trait_skeptical", "怀疑精神", "Skeptical"],
+    ["preset_trait_time_pressed", "时间紧迫", "Time-pressed"],
+    ["preset_trait_risk_averse", "风险规避", "Risk-averse"],
+    ["preset_trait_friendly_talkative", "友善健谈", "Friendly and talkative"],
+    ["preset_trait_decisive", "决断果断", "Decisive"],
+    ["preset_trait_conservative", "保守传统", "Conservative and traditional"],
+    ["preset_trait_early_adopter", "乐于尝试新事物", "Eager to try new things"],
   ]),
   ...presetGroup("communication_style", [
     [
       "preset_communication_data_driven",
       "表达清晰，会用业务数据追问方案价值与落地路径",
+      "Communicates clearly and uses business data to probe solution value and implementation",
     ],
     [
       "preset_communication_commercial_direct",
       "简洁直接，围绕价格、合同条款和风险连续追问",
+      "Concise and direct, with persistent questions about pricing, contract terms, and risk",
     ],
     [
       "preset_communication_fast_pragmatic",
       "节奏快且口语化，只关心能否马上解决问题",
+      "Fast-paced and conversational, focused only on whether the problem can be solved immediately",
     ],
     [
       "preset_communication_friendly_exploratory",
       "友好健谈，愿意分享背景并接受开放式提问",
+      "Friendly and talkative, willing to share context and engage with open-ended questions",
     ],
     [
       "preset_communication_evidence_first",
       "谨慎克制，需要看到具体证据后才会表态",
+      "Cautious and reserved, requiring concrete evidence before expressing a view",
     ],
     [
       "preset_communication_challenging",
       "强势且有挑战性，会打断空泛陈述并要求明确答案",
+      "Assertive and challenging, interrupting vague claims and demanding clear answers",
     ],
     [
       "preset_communication_structured",
       "条理细致，习惯逐项确认功能、流程和责任边界",
+      "Structured and detail-oriented, checking features, processes, and responsibilities one by one",
     ],
     [
       "preset_communication_plain_language",
       "不熟悉技术术语，需要使用简单语言和具体案例",
+      "Unfamiliar with technical jargon and needs plain language and concrete examples",
     ],
   ]),
   ...presetGroup("motivation", [
-    ["preset_motivation_lead_generation", "提升获客效率"],
-    ["preset_motivation_lower_procurement_cost", "降低采购总成本"],
-    ["preset_motivation_team_efficiency", "提高团队工作效率"],
-    ["preset_motivation_reduce_manual_work", "减少重复人工"],
-    ["preset_motivation_grow_revenue", "尽快提升营收"],
-    ["preset_motivation_quick_adoption", "缩短团队上手周期"],
-    ["preset_motivation_prove_roi", "证明投资回报"],
-    ["preset_motivation_customer_experience", "改善客户体验"],
-    ["preset_motivation_reduce_risk", "降低运营风险"],
-    ["preset_motivation_better_terms", "获得更有利的商务条款"],
-    ["preset_motivation_fast_low_cost_launch", "低成本快速上线"],
-    ["preset_motivation_scale_growth", "支持业务规模化增长"],
+    ["preset_motivation_lead_generation", "提升获客效率", "Improve lead generation efficiency"],
+    ["preset_motivation_lower_procurement_cost", "降低采购总成本", "Reduce total procurement cost"],
+    ["preset_motivation_team_efficiency", "提高团队工作效率", "Improve team productivity"],
+    ["preset_motivation_reduce_manual_work", "减少重复人工", "Reduce repetitive manual work"],
+    ["preset_motivation_grow_revenue", "尽快提升营收", "Grow revenue quickly"],
+    ["preset_motivation_quick_adoption", "缩短团队上手周期", "Shorten team onboarding time"],
+    ["preset_motivation_prove_roi", "证明投资回报", "Demonstrate return on investment"],
+    ["preset_motivation_customer_experience", "改善客户体验", "Improve customer experience"],
+    ["preset_motivation_reduce_risk", "降低运营风险", "Reduce operational risk"],
+    ["preset_motivation_better_terms", "获得更有利的商务条款", "Secure more favorable commercial terms"],
+    ["preset_motivation_fast_low_cost_launch", "低成本快速上线", "Launch quickly at low cost"],
+    ["preset_motivation_scale_growth", "支持业务规模化增长", "Support scalable business growth"],
   ]),
   ...presetGroup("concern", [
-    ["preset_concern_roi", "投入产出比"],
-    ["preset_concern_over_budget", "价格超出预算"],
-    ["preset_concern_integration_cost", "系统集成成本"],
-    ["preset_concern_team_adoption", "团队采纳难度"],
-    ["preset_concern_data_security", "数据安全与隐私"],
-    ["preset_concern_supplier_stability", "供应商稳定性"],
-    ["preset_concern_contract_support", "合同与售后保障"],
-    ["preset_concern_implementation_time", "实施周期过长"],
-    ["preset_concern_migration_learning", "迁移与学习成本"],
-    ["preset_concern_workflow_disruption", "对现有流程的干扰"],
-    ["preset_concern_product_fit", "功能与实际需求不匹配"],
-    ["preset_concern_cash_flow", "现金流压力"],
-    ["preset_concern_support_response", "售后响应速度"],
-    ["preset_concern_hidden_fees", "隐性费用"],
+    ["preset_concern_roi", "投入产出比", "Return on investment"],
+    ["preset_concern_over_budget", "价格超出预算", "Price exceeds budget"],
+    ["preset_concern_integration_cost", "系统集成成本", "Systems integration cost"],
+    ["preset_concern_team_adoption", "团队采纳难度", "Difficulty of team adoption"],
+    ["preset_concern_data_security", "数据安全与隐私", "Data security and privacy"],
+    ["preset_concern_supplier_stability", "供应商稳定性", "Supplier stability"],
+    ["preset_concern_contract_support", "合同与售后保障", "Contract terms and after-sales support"],
+    ["preset_concern_implementation_time", "实施周期过长", "Implementation takes too long"],
+    ["preset_concern_migration_learning", "迁移与学习成本", "Migration and learning costs"],
+    ["preset_concern_workflow_disruption", "对现有流程的干扰", "Disruption to existing workflows"],
+    ["preset_concern_product_fit", "功能与实际需求不匹配", "Feature fit with actual needs"],
+    ["preset_concern_cash_flow", "现金流压力", "Cash-flow pressure"],
+    ["preset_concern_support_response", "售后响应速度", "After-sales response time"],
+    ["preset_concern_hidden_fees", "隐性费用", "Hidden fees"],
   ]),
 ];
 
@@ -271,9 +307,10 @@ export const INITIAL_CATALOG_PERSONAS: readonly InitialCatalogPersona[] = [
 
 /**
  * Inserts deployment starter data in one transaction. Every insert is
- * conflict-tolerant and no UPDATE is issued, so reruns preserve administrator
- * edits. Missing links are appended after the scenario's current last
- * position instead of reordering existing compatibility entries.
+ * conflict-tolerant. The only update is a one-time English-value backfill for
+ * a stable seed ID whose translation is blank; non-empty administrator edits
+ * remain untouched. Missing links are appended after the scenario's current
+ * last position instead of reordering existing compatibility entries.
  */
 export function initializeCatalogData(
   database: ApplicationDatabase,
@@ -283,6 +320,7 @@ export function initializeCatalogData(
   const result: CatalogInitializationResult = {
     presetRowsInserted: 0,
     presetRowsSkipped: 0,
+    presetTranslationsUpdated: 0,
     personaRowsInserted: 0,
     personaRowsSkipped: 0,
     scenarioLinksInserted: 0,
@@ -313,12 +351,21 @@ function insertPersonaPresets(
   timestamp: string,
   result: CatalogInitializationResult,
 ): void {
-  const findExisting = connection.prepare(
+  const findExistingById = connection.prepare(
+    `SELECT category, value, value_en
+     FROM persona_presets
+     WHERE id = ?`,
+  );
+  const findExistingByValue = connection.prepare(
     `SELECT 1 AS present
      FROM persona_presets
-     WHERE id = ?
-        OR (category = ? AND value = ? COLLATE NOCASE)
+     WHERE category = ? AND value = ? COLLATE NOCASE
      LIMIT 1`,
+  );
+  const backfillEnglishValue = connection.prepare(
+    `UPDATE persona_presets
+     SET value_en = ?, updated_at = ?
+     WHERE id = ? AND length(trim(value_en)) = 0`,
   );
   const positionIsOccupied = connection.prepare(
     `SELECT 1 AS present
@@ -332,8 +379,8 @@ function insertPersonaPresets(
   );
   const insert = connection.prepare(
     `INSERT INTO persona_presets (
-      id, category, value, position, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?)`,
+      id, category, value, value_en, position, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
   );
 
   for (const definition of INITIAL_PERSONA_PRESETS) {
@@ -342,7 +389,25 @@ function insertPersonaPresets(
       createdAt: timestamp,
       updatedAt: timestamp,
     });
-    if (findExisting.get(preset.id, preset.category, preset.value)) {
+    const existingById = findExistingById.get(preset.id) as
+      | { category: string; value: string; value_en: string }
+      | undefined;
+    if (existingById) {
+      const stillMatchesSeed =
+        existingById.category === preset.category &&
+        existingById.value === preset.value;
+      if (stillMatchesSeed && existingById.value_en.trim().length === 0) {
+        const write = backfillEnglishValue.run(
+          preset.valueEn,
+          timestamp,
+          preset.id,
+        );
+        result.presetTranslationsUpdated += Number(write.changes);
+      }
+      result.presetRowsSkipped += 1;
+      continue;
+    }
+    if (findExistingByValue.get(preset.category, preset.value)) {
       result.presetRowsSkipped += 1;
       continue;
     }
@@ -358,6 +423,7 @@ function insertPersonaPresets(
       preset.id,
       preset.category,
       preset.value,
+      preset.valueEn,
       position,
       preset.createdAt,
       preset.updatedAt,

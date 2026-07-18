@@ -22,49 +22,70 @@ import {
   Tag,
   Typography,
 } from "antd";
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import type {
   Difficulty,
   Persona,
   RolePlayCatalog,
   Scenario,
 } from "../../shared/role-play-catalog";
+import { localizeCatalog } from "../catalog/catalog-localization";
+import {
+  LanguageToggleButton,
+  useI18n,
+  type LocalizedText,
+} from "../i18n";
 import styles from "./LearnerLaunchPanel.module.css";
 
 const { Paragraph, Text, Title } = Typography;
 
-const DIFFICULTY_OPTIONS: Array<{ label: string; value: Difficulty }> = [
-  { label: "Easy", value: "easy" },
-  { label: "Medium", value: "medium" },
-  { label: "Hard", value: "hard" },
-];
-
-const DIFFICULTY_DESCRIPTIONS: Record<Difficulty, string> = {
-  easy: "客户更愿意配合，适合熟悉流程和建立信心。",
-  medium: "客户会逐步提供信息，并提出符合真实业务的异议。",
-  hard: "客户更谨慎且要求更高，需要扎实的探索问题和推进能力。",
+const DIFFICULTY_LABELS: Record<Difficulty, LocalizedText> = {
+  easy: { en: "Easy", zh: "简单" },
+  medium: { en: "Medium", zh: "中等" },
+  hard: { en: "Hard", zh: "困难" },
 };
 
-const GENDER_LABELS: Record<Persona["gender"], string> = {
-  female: "女",
-  male: "男",
-  non_binary: "非二元",
-  unspecified: "未指定",
+const DIFFICULTY_DESCRIPTIONS: Record<Difficulty, LocalizedText> = {
+  easy: {
+    en: "The customer is more cooperative, making this ideal for learning the flow and building confidence.",
+    zh: "客户更愿意配合，适合熟悉流程和建立信心。",
+  },
+  medium: {
+    en: "The customer reveals information gradually and raises realistic business objections.",
+    zh: "客户会逐步提供信息，并提出符合真实业务的异议。",
+  },
+  hard: {
+    en: "The customer is cautious and demanding, requiring strong discovery and progression skills.",
+    zh: "客户更谨慎且要求更高，需要扎实的探索问题和推进能力。",
+  },
 };
 
-const PACE_LABELS: Record<Scenario["voiceBehavior"]["speakingPace"], string> = {
-  slow: "偏慢",
-  normal: "自然",
-  fast: "偏快",
+const GENDER_LABELS: Record<Persona["gender"], LocalizedText> = {
+  female: { en: "Female", zh: "女" },
+  male: { en: "Male", zh: "男" },
+  non_binary: { en: "Non-binary", zh: "非二元" },
+  unspecified: { en: "Not specified", zh: "未指定" },
+};
+
+const PACE_LABELS: Record<
+  Scenario["voiceBehavior"]["speakingPace"],
+  LocalizedText
+> = {
+  slow: { en: "Slower", zh: "偏慢" },
+  normal: { en: "Natural", zh: "自然" },
+  fast: { en: "Faster", zh: "偏快" },
 };
 
 const INTERRUPT_LABELS: Record<
   Scenario["voiceBehavior"]["interruptFrequency"],
-  string
+  LocalizedText
 > = {
-  low: "耐心，较少挑战",
-  medium: "偶尔简短插话",
-  high: "频繁、快速挑战（仅在角色回应时）",
+  low: { en: "Patient, with few challenges", zh: "耐心，较少挑战" },
+  medium: { en: "Occasional brief interjections", zh: "偶尔简短插话" },
+  high: {
+    en: "Frequent, rapid challenges (during the role's responses only)",
+    zh: "频繁、快速挑战（仅在角色回应时）",
+  },
 };
 
 export interface LearnerLaunchPanelProps {
@@ -121,6 +142,8 @@ interface ScenarioSummaryProps {
 }
 
 function ScenarioSummary({ scenario }: ScenarioSummaryProps) {
+  const { t } = useI18n();
+
   return (
     <Card
       className={styles.summaryCard}
@@ -128,7 +151,7 @@ function ScenarioSummary({ scenario }: ScenarioSummaryProps) {
       title={
         <Space size={8}>
           <AimOutlined />
-          <span>场景概览</span>
+          <span>{t({ en: "Scenario overview", zh: "场景概览" })}</span>
         </Space>
       }
     >
@@ -137,13 +160,13 @@ function ScenarioSummary({ scenario }: ScenarioSummaryProps) {
 
       <SummaryTags
         icon={<AimOutlined />}
-        label="本次目标"
+        label={t({ en: "Goals", zh: "本次目标" })}
         values={scenario.goals}
         color="green"
       />
       <SummaryTags
         icon={<BulbOutlined />}
-        label="建议练习重点"
+        label={t({ en: "Suggested focus", zh: "建议练习重点" })}
         values={scenario.suggestedSkillFocus}
         color="blue"
       />
@@ -155,19 +178,23 @@ function ScenarioSummary({ scenario }: ScenarioSummaryProps) {
         items={[
           {
             key: "tone",
-            label: "语气",
+            label: t({ en: "Tone", zh: "语气" }),
             children: scenario.voiceBehavior.toneStyle,
           },
           {
             key: "pace",
-            label: "语速",
-            children: PACE_LABELS[scenario.voiceBehavior.speakingPace],
+            label: t({ en: "Pace", zh: "语速" }),
+            children: t(PACE_LABELS[scenario.voiceBehavior.speakingPace]),
           },
           {
             key: "interruptions",
-            label: "插话 / 挑战倾向",
-            children:
+            label: t({
+              en: "Interjection / challenge tendency",
+              zh: "插话 / 挑战倾向",
+            }),
+            children: t(
               INTERRUPT_LABELS[scenario.voiceBehavior.interruptFrequency],
+            ),
           },
         ]}
       />
@@ -180,9 +207,12 @@ interface PersonaSummaryProps {
 }
 
 function PersonaSummary({ persona }: PersonaSummaryProps) {
+  const { t } = useI18n();
   const basicDetails = [
-    GENDER_LABELS[persona.gender],
-    persona.age === null ? null : `${persona.age} 岁`,
+    t(GENDER_LABELS[persona.gender]),
+    persona.age === null
+      ? null
+      : t({ en: "{age} years old", zh: "{age} 岁" }, { age: persona.age }),
     persona.occupation || null,
   ].filter((value): value is string => value !== null);
 
@@ -193,7 +223,7 @@ function PersonaSummary({ persona }: PersonaSummaryProps) {
       title={
         <Space size={8}>
           <UserOutlined />
-          <span>客户角色</span>
+          <span>{t({ en: "Customer role", zh: "客户角色" })}</span>
         </Space>
       }
     >
@@ -209,7 +239,7 @@ function PersonaSummary({ persona }: PersonaSummaryProps) {
 
       <SummaryTags
         icon={<UserOutlined />}
-        label="性格特点"
+        label={t({ en: "Personality traits", zh: "性格特点" })}
         values={persona.personalityTraits}
         color="purple"
       />
@@ -221,21 +251,21 @@ function PersonaSummary({ persona }: PersonaSummaryProps) {
         items={[
           {
             key: "communication",
-            label: "沟通方式",
+            label: t({ en: "Communication", zh: "沟通方式" }),
             children: persona.communicationStyle,
           },
           ...(persona.behaviorNotes
             ? [
                 {
                   key: "behavior",
-                  label: "行为设定",
+                  label: t({ en: "Behavior", zh: "行为设定" }),
                   children: persona.behaviorNotes,
                 },
               ]
             : []),
           {
             key: "voice",
-            label: "音色",
+            label: t({ en: "Voice", zh: "音色" }),
             children: (
               <Space size={6}>
                 <AudioOutlined />
@@ -265,30 +295,39 @@ export function LearnerLaunchPanel({
   themeButton,
   onOpenAdmin,
 }: LearnerLaunchPanelProps) {
-  const selectedScenario =
-    catalog?.scenarios.find(({ id }) => id === selectedScenarioId) ?? null;
-  const allowedPersonaIds = new Set(
-    selectedScenario?.allowedPersonaIds ?? [],
+  const { locale, t } = useI18n();
+  const localizedCatalog = useMemo(
+    () => (catalog ? localizeCatalog(catalog, locale) : null),
+    [catalog, locale],
   );
+  const selectedScenario =
+    localizedCatalog?.scenarios.find(({ id }) => id === selectedScenarioId) ??
+    null;
+  const allowedPersonaIds = new Set(selectedScenario?.allowedPersonaIds ?? []);
   const compatiblePersonas = selectedScenario
-    ? (catalog?.personas.filter(({ id }) => allowedPersonaIds.has(id)) ?? [])
+    ? (localizedCatalog?.personas.filter(({ id }) =>
+        allowedPersonaIds.has(id),
+      ) ?? [])
     : [];
   const selectedPersona =
     compatiblePersonas.find(({ id }) => id === selectedPersonaId) ?? null;
   const catalogIsEmpty =
-    !catalog || catalog.scenarios.length === 0 || catalog.personas.length === 0;
+    !localizedCatalog ||
+    localizedCatalog.scenarios.length === 0 ||
+    localizedCatalog.personas.length === 0;
   const canStart =
     !loading &&
     !startDisabled &&
     selectedScenario !== null &&
     selectedPersona !== null;
 
-  const scenarioOptions = (catalog?.scenarios ?? []).map((scenario) => ({
+  const lowerCaseLocale = locale === "zh" ? "zh-CN" : "en-US";
+  const scenarioOptions = (localizedCatalog?.scenarios ?? []).map((scenario) => ({
     label: scenario.name,
     value: scenario.id,
     searchText: [scenario.name, scenario.description, ...scenario.goals]
       .join(" ")
-      .toLocaleLowerCase(),
+      .toLocaleLowerCase(lowerCaseLocale),
   }));
   const personaOptions = compatiblePersonas.map((persona) => ({
     label: persona.name,
@@ -300,8 +339,11 @@ export function LearnerLaunchPanel({
       ...persona.personalityTraits,
     ]
       .join(" ")
-      .toLocaleLowerCase(),
+      .toLocaleLowerCase(lowerCaseLocale),
   }));
+  const difficultyOptions = (
+    Object.keys(DIFFICULTY_LABELS) as Difficulty[]
+  ).map((value) => ({ label: t(DIFFICULTY_LABELS[value]), value }));
 
   return (
     <section
@@ -315,18 +357,28 @@ export function LearnerLaunchPanel({
           <div>
             <Text strong>AI Role Player</Text>
             <Text className={styles.brandSubtitle} type="secondary">
-              销售实战训练
+              {t({ en: "Sales practice training", zh: "销售实战训练" })}
             </Text>
           </div>
         </Flex>
         <Space size={8}>
+          <span className={styles.languageToggle}>
+            <LanguageToggleButton />
+          </span>
           {themeButton}
           <Button
+            className={styles.adminButton}
+            aria-label={t({
+              en: "Open Admin Console",
+              zh: "打开管理控制台",
+            })}
             disabled={loading || isStarting}
             icon={<SettingOutlined />}
             onClick={onOpenAdmin}
           >
-            管理控制台
+            <span className={styles.buttonLabel}>
+              {t({ en: "Admin Console", zh: "管理控制台" })}
+            </span>
           </Button>
         </Space>
       </header>
@@ -334,9 +386,17 @@ export function LearnerLaunchPanel({
       <main className={styles.content}>
         <div className={styles.introduction}>
           <Tag color="green">VOICE ROLE PLAY</Tag>
-          <Title id="learner-launch-title">准备开始一次销售对练</Title>
+          <Title id="learner-launch-title">
+            {t({
+              en: "Get ready for a sales role-play",
+              zh: "准备开始一次销售对练",
+            })}
+          </Title>
           <Paragraph type="secondary">
-            选择训练场景、客户角色和难度，AI 客户会根据设定与你进行实时语音对话。
+            {t({
+              en: "Choose a scenario, customer role, and difficulty. Your AI customer will follow those settings in a realtime voice conversation.",
+              zh: "选择训练场景、客户角色和难度，AI 客户会根据设定与你进行实时语音对话。",
+            })}
           </Paragraph>
         </div>
 
@@ -346,35 +406,57 @@ export function LearnerLaunchPanel({
               className={styles.pageAlert}
               type="error"
               showIcon
-              title="当前无法开始训练"
+              title={t({
+                en: "Training can't start yet",
+                zh: "当前无法开始训练",
+              })}
               description={error}
             />
           )}
           {loading ? (
             <div className={styles.loadingState}>
               <Skeleton active paragraph={{ rows: 7 }} />
-              <Text type="secondary">正在加载训练配置…</Text>
+              <Text type="secondary">
+                {t({
+                  en: "Loading training configuration…",
+                  zh: "正在加载训练配置…",
+                })}
+              </Text>
             </div>
           ) : catalogIsEmpty ? (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="还没有可供训练的场景和角色"
+              description={t({
+                en: "No scenarios or roles are available for training yet",
+                zh: "还没有可供训练的场景和角色",
+              })}
             >
               <Button icon={<SettingOutlined />} onClick={onOpenAdmin}>
-                前往管理控制台创建
+                {t({
+                  en: "Create them in Admin Console",
+                  zh: "前往管理控制台创建",
+                })}
               </Button>
             </Empty>
           ) : (
             <>
               <div className={styles.selectionGrid}>
                 <label className={styles.field}>
-                  <Text strong>1. 选择训练场景</Text>
+                  <Text strong>
+                    {t({ en: "1. Choose a scenario", zh: "1. 选择训练场景" })}
+                  </Text>
                   <Select
-                    aria-label="选择训练场景"
+                    aria-label={t({
+                      en: "Choose a training scenario",
+                      zh: "选择训练场景",
+                    })}
                     className={styles.select}
                     showSearch
                     disabled={isStarting}
-                    placeholder="搜索并选择场景"
+                    placeholder={t({
+                      en: "Search and choose a scenario",
+                      zh: "搜索并选择场景",
+                    })}
                     value={selectedScenario?.id}
                     options={scenarioOptions}
                     optionFilterProp="searchText"
@@ -383,22 +465,39 @@ export function LearnerLaunchPanel({
                 </label>
 
                 <label className={styles.field}>
-                  <Text strong>2. 选择客户角色</Text>
+                  <Text strong>
+                    {t({
+                      en: "2. Choose a customer role",
+                      zh: "2. 选择客户角色",
+                    })}
+                  </Text>
                   <Select
-                    aria-label="选择客户角色"
+                    aria-label={t({
+                      en: "Choose a customer role",
+                      zh: "选择客户角色",
+                    })}
                     className={styles.select}
                     showSearch
                     disabled={isStarting || !selectedScenario}
                     placeholder={
                       selectedScenario
-                        ? "搜索并选择兼容角色"
-                        : "请先选择训练场景"
+                        ? t({
+                            en: "Search and choose a compatible role",
+                            zh: "搜索并选择兼容角色",
+                          })
+                        : t({
+                            en: "Choose a scenario first",
+                            zh: "请先选择训练场景",
+                          })
                     }
                     value={selectedPersona?.id}
                     options={personaOptions}
                     optionFilterProp="searchText"
                     onChange={onPersonaChange}
-                    notFoundContent="此场景没有匹配的角色"
+                    notFoundContent={t({
+                      en: "No matching roles for this scenario",
+                      zh: "此场景没有匹配的角色",
+                    })}
                   />
                 </label>
               </div>
@@ -408,11 +507,17 @@ export function LearnerLaunchPanel({
                   className={styles.compatibilityAlert}
                   type="warning"
                   showIcon
-                  title="当前场景没有可用角色"
-                  description="请在管理控制台中为该场景关联至少一个角色。"
+                  title={t({
+                    en: "This scenario has no available roles",
+                    zh: "当前场景没有可用角色",
+                  })}
+                  description={t({
+                    en: "Associate at least one role with this scenario in Admin Console.",
+                    zh: "请在管理控制台中为该场景关联至少一个角色。",
+                  })}
                   action={
                     <Button size="small" onClick={onOpenAdmin}>
-                      去关联
+                      {t({ en: "Associate roles", zh: "去关联" })}
                     </Button>
                   }
                 />
@@ -420,16 +525,24 @@ export function LearnerLaunchPanel({
 
               <section className={styles.difficultySection}>
                 <div>
-                  <Text strong>3. 选择训练难度</Text>
+                  <Text strong>
+                    {t({
+                      en: "3. Choose a difficulty",
+                      zh: "3. 选择训练难度",
+                    })}
+                  </Text>
                   <Paragraph type="secondary">
-                    {DIFFICULTY_DESCRIPTIONS[difficulty]}
+                    {t(DIFFICULTY_DESCRIPTIONS[difficulty])}
                   </Paragraph>
                 </div>
                 <Segmented
-                  aria-label="选择训练难度"
+                  aria-label={t({
+                    en: "Choose a training difficulty",
+                    zh: "选择训练难度",
+                  })}
                   block
                   disabled={isStarting}
-                  options={DIFFICULTY_OPTIONS}
+                  options={difficultyOptions}
                   value={difficulty}
                   onChange={(value) =>
                     onDifficultyChange(value as Difficulty)
@@ -444,7 +557,10 @@ export function LearnerLaunchPanel({
                 gap={16}
               >
                 <Text type="secondary">
-                  对练开始后，请按住底部按钮与客户说话。
+                  {t({
+                    en: "Once the role-play starts, hold the bottom button to speak with the customer.",
+                    zh: "对练开始后，请按住底部按钮与客户说话。",
+                  })}
                 </Text>
                 <Button
                   type="primary"
@@ -454,7 +570,7 @@ export function LearnerLaunchPanel({
                   loading={isStarting}
                   onClick={() => void onStart()}
                 >
-                  开始语音对练
+                  {t({ en: "Start voice role-play", zh: "开始语音对练" })}
                 </Button>
               </Flex>
 

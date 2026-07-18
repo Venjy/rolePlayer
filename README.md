@@ -20,6 +20,7 @@ This is one root package, not a monorepo. Client, server, tests, and shared prot
 │   │   ├── audio/                  # Microphone capture and streamed playback
 │   │   ├── catalog/                # Catalog API and selection state
 │   │   ├── components/             # Chat messages and VoiceWaveform
+│   │   ├── i18n/                   # Locale state, persistence, Ant Design locale
 │   │   ├── learner/                # Scenario/persona/difficulty launcher
 │   │   ├── realtime/               # Application-protocol WebSocket client
 │   │   └── voice/                  # Press-to-talk gesture state machine
@@ -80,7 +81,7 @@ Official setup references:
    pnpm catalog:init
    ```
 
-   This command opens the configured `DATABASE_PATH`, applies pending schema migrations, and inserts only missing catalog defaults in one transaction. It is safe to run repeatedly, preserves administrator edits, and does not require Qwen credentials.
+   This command opens the configured `DATABASE_PATH`, applies pending schema migrations, inserts missing catalog defaults, and backfills only blank English labels on unchanged built-in preset rows in one transaction. It is safe to run repeatedly, preserves administrator edits, and does not require Qwen credentials.
 
 5. Start the React and Node development servers:
 
@@ -88,9 +89,9 @@ Official setup references:
    pnpm dev
    ```
 
-6. Open [http://localhost:5173](http://localhost:5173), choose a training scenario, compatible persona, and difficulty, then select **开始语音对练** and allow microphone access. Use **管理控制台** to create or edit catalog records.
+6. Open [http://localhost:5173](http://localhost:5173), choose a training scenario, compatible persona, and difficulty, then select **Start voice practice** and allow microphone access. Use **Admin console** to create or edit catalog records. The interface starts in English; use the upper-right language control to switch to Chinese.
 
-7. Hold **按住说话** while speaking. Release to send, or slide upward at least 72 px before releasing to cancel. While the selected persona is speaking, the control changes to **按住打断并说话**; holding it stops the current playback, begins context reconciliation, and records the next turn.
+7. Hold **Hold to talk** while speaking. Release to send, or slide upward at least 72 px before releasing to cancel. While the selected persona is speaking, the control changes to **Hold to interrupt and talk**; holding it stops the current playback, begins context reconciliation, and records the next turn. The Chinese interface uses the equivalent **按住说话** and **按住打断并说话** labels.
 
 Do not paste a real API key into source code, commit it, or expose it through a `VITE_*` variable.
 
@@ -140,10 +141,12 @@ Use `--interrupt-during-generation` to exercise the cancellation path. With no t
 ## Current behavior
 
 - One responsive Ant Design SPA for learner launch, admin catalog, and voice chat on mobile and desktop; no separate mobile application or duplicated component tree
+- English and Chinese UI with English as the first-run default, an upper-right language control, Ant Design locale synchronization, and the saved `role-player:locale` preference in `localStorage`
 - Light and dark themes, initialized from the saved choice or OS preference and switchable from the upper-right control
 - Learner launcher with searchable scenario and persona selectors, compatibility filtering, easy/medium/hard difficulty, and summaries of goals, skill focus, voice behavior, and persona traits
 - Responsive admin console with searchable persona/scenario tabs, create/edit drawers, validation, deletion confirmation, compatibility editing, and live Instructions preview
-- Database-backed persona presets for identity, occupation, personality traits, communication style, motivations, and concerns; selected text is stored in the persona rather than linked by foreign key
+- Database-backed bilingual persona presets for identity, occupation, personality traits, communication style, motivations, and concerns; the stable Chinese value is stored in the persona while English UI summaries, prompt previews, and English-launched model Instructions project exact preset matches through `valueEn`
+- Authored English/Chinese display content for the unmodified built-in personas and default scenario; administrator-edited and user-created free text is always shown exactly as saved and is never machine-translated
 - Free-form persona name, age, background, and behavior notes, with existing non-preset values preserved when editing older/custom personas
 - Scenario fields for situation, goals, skill focus, hidden success/scoring criteria, compatible personas, and voice behavior
 - Deterministic `compileRolePlayInstructions` template; no extra LLM is called to turn structured catalog fields into the Qwen system prompt
@@ -163,7 +166,7 @@ Use `--interrupt-during-generation` to exercise the cancellation path. With no t
 
 ## Persistence status
 
-Migration 2 persists the role-play catalog in strict `personas`, `scenarios`, and `scenario_personas` tables and contains the immutable legacy Alex/sales-discovery seed. Migration 3 adds deterministic per-scenario persona ordering and upgrades already-created catalog files without requiring deletion. Migration 4 creates the strict `persona_presets` reference table; it intentionally contains no business seed data. The catalog REST API is:
+Migration 2 persists the role-play catalog in strict `personas`, `scenarios`, and `scenario_personas` tables and contains the immutable legacy Alex/sales-discovery seed. Migration 3 adds deterministic per-scenario persona ordering and upgrades already-created catalog files without requiring deletion. Migration 4 creates the strict `persona_presets` reference table; it intentionally contains no business seed data. Migration 5 adds the backward-compatible English display column for preset rows. The catalog REST API is:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -173,7 +176,7 @@ Migration 2 persists the role-play catalog in strict `personas`, `scenarios`, an
 
 Every successful admin mutation first updates local catalog state, then reloads the authoritative catalog. Learner selections therefore reflect saved changes immediately without a rebuild or restart, and remain accurate if the follow-up read temporarily fails. Persona deletion is rejected while a scenario references it; remove the compatibility link first. Scenario deletion cascades only its compatibility rows.
 
-Business defaults are installed explicitly with `pnpm catalog:init` during source development or `pnpm catalog:init:prod` after building. The initializer inserts 70 Chinese presets (8 identities, 12 occupations, 16 personality traits, 8 communication styles, 12 motivations, and 14 concerns) plus the starter personas 林悦, 王强, and 陈晨. If `scenario_sales_discovery` exists, it appends missing starter-persona links without replacing the current ordering, but only after each pair passes the shared easy/medium/hard 12,000-character Instructions check. An over-budget pair produces a clear error and rolls back the initializer's data writes. The whole operation is transactional and idempotent: existing records and administrator-edited text are never overwritten.
+Business defaults are installed explicitly with `pnpm catalog:init` during source development or `pnpm catalog:init:prod` after building. The initializer inserts 70 bilingual presets (8 identities, 12 occupations, 16 personality traits, 8 communication styles, 12 motivations, and 14 concerns) plus the starter personas 林悦, 王强, and 陈晨. For an existing seed preset whose category and Chinese value are still unchanged, a blank English value is backfilled without replacing a non-empty administrator translation; legacy/custom rows with no English label fall back to their canonical text in the UI. If `scenario_sales_discovery` exists, the initializer appends missing starter-persona links without replacing the current ordering, but only after each pair passes the shared easy/medium/hard 12,000-character Instructions check. An over-budget pair produces a clear error and rolls back the initializer's data writes. The whole operation is transactional and idempotent.
 
 Sessions, learner difficulty choices, transcripts, audio, users, and evaluations are not persisted. There is no catalog soft deletion, audit history, or built-in undo. See [Catalog and prompt compilation](docs/CATALOG_AND_PROMPTS.md) and [Database](docs/DATABASE.md) for the complete contracts.
 

@@ -3,6 +3,7 @@ import type {
   PersonaPreset,
   PersonaPresetCategory,
 } from "../../shared/role-play-catalog";
+import type { AppLocale } from "../i18n";
 
 export interface PersonaPresetSelectOption {
   label: string;
@@ -45,6 +46,7 @@ function existingValuesByCategory(
  */
 export function buildPersonaPresetOptions(
   presets: PersonaPreset[],
+  locale: AppLocale,
   persona?: Persona,
 ): PersonaPresetOptions {
   const existingValues = existingValuesByCategory(persona);
@@ -58,12 +60,21 @@ export function buildPersonaPresetOptions(
             left.position - right.position ||
             left.value.localeCompare(right.value, "zh-CN"),
         )
-        .map(({ value }) => ({ label: value, value }));
+        .map(({ value, valueEn }) => ({
+          label: locale === "en" ? valueEn || value : value,
+          value,
+        }));
       const knownValues = new Set(options.map(({ value }) => value));
 
       for (const value of existingValues[category]) {
         if (!value || knownValues.has(value)) continue;
-        options.push({ label: `${value}（现有值）`, value });
+        options.push({
+          label:
+            locale === "en"
+              ? `${value} (Existing value)`
+              : `${value}（现有值）`,
+          value,
+        });
         knownValues.add(value);
       }
 

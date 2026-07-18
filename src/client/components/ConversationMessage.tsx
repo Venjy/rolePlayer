@@ -3,6 +3,7 @@ import {
   UserOutlined,
 } from "@ant-design/icons";
 import { Avatar, Spin, Tag, Typography } from "antd";
+import { useI18n, type AppLocale } from "../i18n";
 
 export interface ConversationMessageProps {
   role: "user" | "assistant";
@@ -13,8 +14,11 @@ export interface ConversationMessageProps {
   personaName?: string;
 }
 
-function formatTime(date: Date): string {
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+function formatTime(date: Date, locale: AppLocale): string {
+  return date.toLocaleTimeString(locale === "zh" ? "zh-CN" : "en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 export function ConversationMessage({
@@ -25,6 +29,7 @@ export function ConversationMessage({
   interrupted = false,
   personaName = "Alex",
 }: ConversationMessageProps) {
+  const { locale, t } = useI18n();
   const isUser = role === "user";
   const avatar = (
     <Avatar
@@ -37,7 +42,17 @@ export function ConversationMessage({
   return (
     <article
       className={`message-row message-row-${role}${draft ? " is-draft" : ""}`}
-      aria-label={isUser ? "你的消息" : `AI 客户 ${personaName} 的消息`}
+      aria-label={
+        isUser
+          ? t({ en: "Your message", zh: "你的消息" })
+          : t(
+              {
+                en: "Message from AI customer {name}",
+                zh: "AI 客户 {name} 的消息",
+              },
+              { name: personaName },
+            )
+      }
     >
       {!isUser && avatar}
       <div className="message-content">
@@ -45,19 +60,27 @@ export function ConversationMessage({
           {draft && !text ? (
             <span className="typing-indicator">
               <Spin size="small" />
-              <Typography.Text type="secondary">正在组织回复</Typography.Text>
+              <Typography.Text type="secondary">
+                {t({ en: "Composing a reply", zh: "正在组织回复" })}
+              </Typography.Text>
             </span>
           ) : (
             <Typography.Paragraph>{text}</Typography.Paragraph>
           )}
         </div>
         <div className="message-meta">
-          <span>{isUser ? "你" : personaName}</span>
-          {timestamp && <time>{formatTime(timestamp)}</time>}
-          {draft && <span>{isUser ? "识别中" : "生成中"}</span>}
+          <span>{isUser ? t({ en: "You", zh: "你" }) : personaName}</span>
+          {timestamp && <time>{formatTime(timestamp, locale)}</time>}
+          {draft && (
+            <span>
+              {isUser
+                ? t({ en: "Transcribing", zh: "识别中" })
+                : t({ en: "Generating", zh: "生成中" })}
+            </span>
+          )}
           {interrupted && (
             <Tag variant="filled" color="default">
-              已打断
+              {t({ en: "Interrupted", zh: "已打断" })}
             </Tag>
           )}
         </div>

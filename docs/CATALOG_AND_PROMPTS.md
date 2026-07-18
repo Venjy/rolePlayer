@@ -12,7 +12,7 @@ Catalog configuration is global to the current deployment. Authentication, per-t
 
 ### Persona presets
 
-`persona_presets` is database-backed reference data for the persona editor. Each returned `PersonaPreset` contains `id`, `category`, `value`, non-negative `position`, and ISO `createdAt`/`updatedAt` timestamps. The six categories are:
+`persona_presets` is database-backed reference data for the persona editor. Each returned `PersonaPreset` contains `id`, `category`, stable Chinese `value`, English display `valueEn`, non-negative `position`, and ISO `createdAt`/`updatedAt` timestamps. `valueEn` may be empty on a legacy/custom row, in which case the English UI displays `value`. The six categories are:
 
 | Category | Persona field |
 | --- | --- |
@@ -23,11 +23,11 @@ Catalog configuration is global to the current deployment. Authentication, per-t
 | `motivation` | entries in `motivations` |
 | `concern` | entries in `concerns` |
 
-Presets are choices, not normalized persona ownership. On save, the form sends the selected **text**, and that text is stored in the persona columns/JSON arrays. No persona field has a foreign key to `persona_presets`. Changing, removing, or reordering a preset affects future choices only and never rewrites an existing persona.
+Presets are choices, not normalized persona ownership. The option value remains the canonical Chinese `value` in both UI languages. `valueEn` supplies English option/summary labels plus the projection used by English prompt previews and newly launched sessions, but is never persisted into the persona. On save, the form sends the selected canonical **text**, and that text is stored in the persona columns/JSON arrays. No persona field has a foreign key to `persona_presets`. Changing language, removing, or reordering a preset never rewrites an existing persona.
 
 The editor filters options by category and orders them by `position`. Occupation, identity, and communication style are searchable single selects; occupation can be cleared. Personality traits, motivations, and concerns are searchable multiple selects with the existing 12/10/10 item limits. They do not accept arbitrary new tags for a new persona.
 
-Backward compatibility is deliberate: when an existing persona contains text no longer present in the preset table, the editor adds that text as an `existing value` option so it remains visible and savable. Name, age, background, and behavior notes remain free-form; gender and voice retain their fixed selectors. Creating a persona requires available identity, personality-trait, and communication-style presets, so the UI disables save and directs the operator to run catalog initialization when those required categories are empty.
+Backward compatibility is deliberate: when an existing persona contains text no longer present in the preset table, the editor adds that text as an `existing value` option so it remains visible and savable. Name, age, background, and behavior notes remain free-form; gender and voice retain their fixed selectors. User-authored free text is never machine-translated. Creating a persona requires available identity, personality-trait, and communication-style presets, so the UI disables save and directs the operator to run catalog initialization when those required categories are empty.
 
 ### Persona
 
@@ -103,7 +103,7 @@ Migration 2 contains an immutable legacy starter configuration on a fresh or ver
 - scenario `scenario_sales_discovery`: Sales discovery call, with goals, skill focus, hidden success/scoring criteria, and a low interjection/challenge tendency;
 - one compatibility link from the sales discovery scenario to Alex.
 
-That legacy seed runs only as part of migration 2. Migration 3 adds compatibility ordering. Migration 4 creates `persona_presets` but inserts no business/reference rows. This is the current rule: migrations build/upgrade schema; explicit initialization owns editable defaults.
+That legacy seed runs only as part of migration 2. Migration 3 adds compatibility ordering. Migration 4 creates `persona_presets` but inserts no business/reference rows. Migration 5 adds `value_en` with an empty legacy default; it does not embed translations in migration SQL. This is the current rule: migrations build/upgrade schema; explicit initialization owns editable defaults.
 
 Run initialization after configuring `DATABASE_PATH` and before the first development server start:
 
@@ -117,13 +117,13 @@ For a built deployment, run this before starting the server:
 pnpm catalog:init:prod
 ```
 
-The source and production commands perform the same operation and require no Qwen credentials. The initializer applies pending migrations, then transactionally inserts only missing stable records:
+The source and production commands perform the same operation and require no Qwen credentials. The initializer applies pending migrations, then transactionally inserts missing stable records/links and backfills eligible blank English labels:
 
-- 70 Chinese presets: 8 identities, 12 occupations, 16 personality traits, 8 communication styles, 12 motivations, and 14 concerns;
+- 70 bilingual presets: 8 identities, 12 occupations, 16 personality traits, 8 communication styles, 12 motivations, and 14 concerns;
 - three sales-training personas: 林悦 (`persona_lin_yue`), 王强 (`persona_wang_qiang`), and 陈晨 (`persona_chen_chen`);
 - compatibility links appended to `scenario_sales_discovery` when that scenario exists.
 
-Repeated runs are safe. A preset is considered present when either its stable `preset_*` ID or the same case-insensitive category/value exists, and is skipped without update. If a missing preset's preferred position is occupied, it is appended at that category's current maximum position plus one instead of moving the existing row. Starter personas use conflict-tolerant inserts and are never updated. Existing scenario compatibility and ordering are retained; missing starter links are appended after the current maximum position. Before each missing link is inserted, the initializer enforces the shared 100-persona scenario capacity and uses the shared compiler check for easy, medium, and hard. A capacity or over-budget failure raises a descriptive initializer error and rolls back every data write from that initializer call. If the default scenario has been deleted, initialization does not recreate it and simply skips those links.
+Repeated runs are safe. A preset is considered present when either its stable `preset_*` ID or the same case-insensitive category/value exists. An empty `valueEn` is backfilled only when the stable seed ID, category, and canonical value still match; the write also advances `updatedAt`. A non-empty administrator translation and a row whose canonical content was edited are never overwritten. If a missing preset's preferred position is occupied, it is appended at that category's current maximum position plus one instead of moving the existing row. Starter personas use conflict-tolerant inserts and are never updated. Existing scenario compatibility and ordering are retained; missing starter links are appended after the current maximum position. Before each missing link is inserted, the initializer enforces the shared 100-persona scenario capacity and uses the shared compiler check for easy, medium, and hard. A capacity or over-budget failure raises a descriptive initializer error and rolls back every data write from that initializer call. If the default scenario has been deleted, initialization does not recreate it and simply skips those links.
 
 All initializer data writes commit or roll back together. This is intentionally separate from normal server startup: source setup runs `catalog:init` before `pnpm dev`, while a container runs `catalog:init:prod` against its mounted persistent database before starting the service.
 
@@ -135,9 +135,9 @@ Before starting audio, the learner chooses:
 2. a searchable persona filtered by that scenario's `allowedPersonaIds`;
 3. `easy`, `medium`, or `hard` difficulty.
 
-The launch screen summarizes scenario goals, skill focus, voice behavior, persona identity, traits, communication style, behavior notes, and voice. A session cannot start without a valid compatible pair or without configured Qwen credentials.
+The launch screen summarizes scenario goals, skill focus, voice behavior, persona identity, traits, communication style, behavior notes, and voice. Authored display translations cover the unmodified built-in personas and default scenario; an administrator edit disables that starter overlay so the saved content always wins. Custom records remain exactly as authored. A session cannot start without a valid compatible pair or without configured Qwen credentials.
 
-`App.tsx` snapshots the selected persona, scenario, and difficulty when startup begins. Later catalog edits do not mutate an already active session. The snapshot supplies:
+`App.tsx` snapshots the selected persona, scenario, and difficulty when startup begins. For an English launch, exact preset-backed persona values are first projected through the catalog's `valueEn`; unmatched free text remains untouched. Authored starter translations cover other built-in content. Later locale/catalog changes do not mutate an already active session. The snapshot supplies:
 
 - `persona.voice` as the Qwen `session.configure.voice` value;
 - `compileRolePlayInstructions({ persona, scenario, difficulty })` as `session.configure.instructions`;
@@ -184,7 +184,7 @@ Presets, personas, scenarios, and compatibility links persist until explicitly u
 When extending the catalog:
 
 1. update the shared Zod contract first;
-2. add a new immutable schema migration rather than editing migrations 2, 3, or 4;
+2. add a new immutable schema migration rather than editing migrations 2, 3, 4, or 5;
 3. put editable reference/business defaults in the idempotent initializer rather than migration SQL;
 4. update the repository mapping and REST/initializer tests;
 5. update both admin forms and learner summaries where relevant;

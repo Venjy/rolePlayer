@@ -38,7 +38,8 @@ persona_presets
 ├── id          TEXT PRIMARY KEY
 ├── category    identity | occupation | personality_trait |
 │               communication_style | motivation | concern
-├── value       TEXT NOT NULL
+├── value       TEXT NOT NULL       # stable Chinese snapshot value
+├── value_en    TEXT NOT NULL       # English display value
 ├── position    INTEGER NOT NULL
 └── created_at, updated_at
 ```
@@ -47,7 +48,9 @@ persona_presets
 
 Migration 4 creates `persona_presets` and its ordering/uniqueness constraints, but intentionally inserts no preset or persona business data. Persona fields store selected preset text directly; there are no foreign keys from `personas` to `persona_presets`. Editing or removing a preset therefore changes future form choices without mutating existing personas.
 
-`persona_presets` restricts category to the six shared enum values, requires non-empty text up to 500 characters and a non-negative position, and enforces case-insensitive `(category, value)` uniqueness plus `(category, position)` uniqueness. Preset ordering is scoped to its category.
+Migration 5 adds `value_en` with an empty default so already-created migration-4 databases upgrade without deletion. The explicit catalog initializer fills deployment-owned English labels only when the stable seed ID, category, and canonical value are unchanged. A non-empty administrator translation or edited canonical row is preserved; other legacy/custom blank labels remain valid and fall back to `value` in the UI.
+
+`persona_presets` restricts category to the six shared enum values, requires a non-empty canonical value up to 500 characters, permits an empty English value for backward compatibility, and requires a non-negative position. It enforces case-insensitive `(category, value)` uniqueness plus `(category, position)` uniqueness. Preset ordering is scoped to its category.
 
 Migration 2 contains the immutable legacy `persona_alex`, `scenario_sales_discovery`, and compatibility seed. New migrations must not repeat that historical coupling of schema and business defaults. All new presets and starter personas are owned by the explicit initializer described below.
 
@@ -65,11 +68,11 @@ Relevant files:
 | `src/server/database/register-database.ts` | Attaches one database owner to Fastify lifecycle hooks |
 | `src/server/catalog/catalog-repository.ts` | Maps validated catalog records and owns short transactional CRUD operations |
 | `src/server/catalog/catalog-routes.ts` | Exposes the validated catalog REST boundary |
-| `src/server/catalog/catalog-initializer.ts` | Defines stable preset/persona defaults and transactional missing-row insertion |
+| `src/server/catalog/catalog-initializer.ts` | Defines stable defaults, transactional missing-row insertion, and guarded blank-English backfill |
 | `scripts/initialize-catalog.ts` | Opens the configured database and runs the initializer for source/built commands |
-| `test/server/database.test.ts` | Verifies filesystem creation, PRAGMAs, migrations 2/3/4, upgrade paths, seed/reopen behavior, and lifecycle closure |
+| `test/server/database.test.ts` | Verifies filesystem creation, PRAGMAs, migrations 2/3/4/5, upgrade paths, seed/reopen behavior, and lifecycle closure |
 | `test/server/catalog-routes.test.ts` | Verifies validation, CRUD, compatibility, conflicts, and deletion semantics |
-| `test/server/catalog-initializer.test.ts` | Verifies initializer content, ordering, idempotency, and edit preservation with a temporary database |
+| `test/server/catalog-initializer.test.ts` | Verifies bilingual content, guarded backfill, ordering, idempotency, and edit preservation with a temporary database |
 
 `registerDatabase` decorates the Fastify instance with one `ApplicationDatabase`. It opens during `onReady` and closes during `onClose`. `CatalogRepository` uses that process-owned connection; routes and future repositories must not open a connection per request.
 
@@ -137,14 +140,14 @@ Example next addition:
 export const DATABASE_MIGRATIONS = [
   // Existing entries remain byte-for-byte stable.
   {
-    version: 5,
+    version: 6,
     name: "create_example_table",
     up: `CREATE TABLE example (... ) STRICT;`,
   },
 ] as const;
 ```
 
-The example is illustrative only; do not create an `example` table in the real database. Migration 2 is `create_role_play_catalog`, migration 3 is `add_scenario_persona_position`, and migration 4 creates persona presets; all are immutable.
+The example is illustrative only; do not create an `example` table in the real database. Migration 2 is `create_role_play_catalog`, migration 3 is `add_scenario_persona_position`, migration 4 creates persona presets, and migration 5 adds their English display values; all are immutable.
 
 ## Schema migrations versus catalog initialization
 
@@ -164,11 +167,11 @@ Both commands use the configured `DATABASE_PATH`, open/configure SQLite, and app
 
 The initializer owns:
 
-- 70 Chinese choices: identity 8, occupation 12, personality trait 16, communication style 8, motivation 12, and concern 14;
+- 70 bilingual choices: identity 8, occupation 12, personality trait 16, communication style 8, motivation 12, and concern 14;
 - the starter personas 林悦 (`persona_lin_yue`), 王强 (`persona_wang_qiang`), and 陈晨 (`persona_chen_chen`);
 - missing compatibility links that append those personas to `scenario_sales_discovery` when that scenario exists.
 
-Initialization data writes use one `BEGIN IMMEDIATE` transaction. Any failure rolls back all preset/persona/link writes from that initializer call; migrations applied while opening the database are separate committed migration transactions. Stable IDs and conflict-tolerant inserts make initialization idempotent: each run attempts only missing presets, personas, and links and never updates an existing row. A preset is skipped when its stable ID or the same case-insensitive category/value already exists. When its preferred category position is occupied, the missing preset is appended at that category's current maximum plus one instead of moving or overwriting the existing row. Administrator edits are therefore preserved.
+Initialization data writes use one `BEGIN IMMEDIATE` transaction. Any failure rolls back all preset/persona/link writes from that initializer call; migrations applied while opening the database are separate committed migration transactions. Stable IDs and conflict-tolerant inserts make initialization idempotent: each run attempts missing presets, personas, and links. The sole permitted update fills an empty English value—and advances `updated_at`—when stable seed ID, category, and canonical value all still match; non-empty translations and edited canonical rows are preserved. A preset is otherwise skipped when its stable ID or the same case-insensitive category/value already exists. When its preferred category position is occupied, the missing preset is appended at that category's current maximum plus one instead of moving or overwriting the existing row.
 
 The initializer does not recreate `scenario_sales_discovery` when it is absent. When it exists, each missing link is checked against both the shared 100-persona scenario capacity and the 12,000-character Instructions limit for easy, medium, and hard before insertion, then receives a position after the current maximum. A capacity or over-budget failure throws a descriptive error and rolls back all initializer data writes, preserving the association invariants and existing database state.
 
@@ -230,11 +233,11 @@ Database tests create isolated files beneath the operating system temporary dire
 
 - nested parent-directory creation;
 - WAL, foreign-key, and busy-timeout settings;
-- creation of migration metadata, the migration-2 strict catalog schema, the migration-3 compatibility-order upgrade, and the migration-4 preset schema;
+- creation of migration metadata, the migration-2 strict catalog schema, the migration-3 compatibility-order upgrade, the migration-4 preset schema, and the migration-5 English-label upgrade from an existing version-4 row;
 - the Alex/sales-discovery seed and compatibility link;
 - upgrade from a version-1 database, upgrade of an existing version-2 catalog without `position`, and migration idempotency after close/reopen;
 - catalog input validation, case-insensitive duplicate names, CRUD, compatibility writes, missing references, not-found responses, and deletion conflicts;
-- rich preset/starter-persona insertion, occupied-position append behavior, compatibility append order, over-budget link rejection with full rollback, repeat-run idempotency, and preservation of administrator-edited rows;
+- bilingual preset/starter-persona insertion, guarded blank-English backfill, occupied-position append behavior, compatibility append order, over-budget link rejection with full rollback, repeat-run idempotency, and preservation of administrator-edited rows;
 - Fastify `onReady` open and `onClose` close.
 
 Future migration tests should begin from both a fresh database and the immediately previous schema version. Initializer tests must set `DATABASE_PATH` to a temporary file and must cover at least two runs; changes to failure handling or absent-scenario behavior also require explicit rollback/skip cases. Never use `data/role-player.sqlite` or any developer-configured database in an automated test.

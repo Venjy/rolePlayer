@@ -195,6 +195,24 @@ input {
   flex: none;
 }
 
+.header-language-toggle {
+  display: inline-flex;
+}
+
+.header-language-toggle .ant-btn {
+  width: 32px;
+  padding-inline: 0;
+  border-color: transparent;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: none;
+  font-size: 0;
+}
+
+.header-language-toggle .anticon {
+  font-size: 14px;
+}
+
 .speaking-equalizer {
   display: inline-flex;
   align-items: end;

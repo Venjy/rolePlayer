@@ -12,11 +12,13 @@ function preset(
   category: PersonaPreset["category"],
   value: string,
   position: number,
+  valueEn = value,
 ): PersonaPreset {
   return {
     id,
     category,
     value,
+    valueEn,
     position,
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -43,11 +45,14 @@ const legacyPersona: Persona = {
 
 describe("persona preset options", () => {
   it("sorts database choices by position within each category", () => {
-    const result = buildPersonaPresetOptions([
-      preset("trait-2", "personality_trait", "Direct", 2),
-      preset("occupation-1", "occupation", "Founder", 1),
-      preset("trait-1", "personality_trait", "Thoughtful", 1),
-    ]);
+    const result = buildPersonaPresetOptions(
+      [
+        preset("trait-2", "personality_trait", "Direct", 2),
+        preset("occupation-1", "occupation", "Founder", 1),
+        preset("trait-1", "personality_trait", "Thoughtful", 1),
+      ],
+      "zh",
+    );
 
     expect(result.personality_trait).toEqual([
       { label: "Thoughtful", value: "Thoughtful" },
@@ -64,6 +69,7 @@ describe("persona preset options", () => {
         preset("trait-1", "personality_trait", "Thoughtful", 0),
         preset("identity-1", "identity", "Buyer", 0),
       ],
+      "zh",
       legacyPersona,
     );
 
@@ -81,5 +87,22 @@ describe("persona preset options", () => {
         value: "Legacy occupation",
       },
     ]);
+  });
+
+  it("uses English display labels while keeping Chinese snapshot values", () => {
+    const result = buildPersonaPresetOptions(
+      [preset("trait-1", "personality_trait", "理性", 0, "Rational")],
+      "en",
+      legacyPersona,
+    );
+
+    expect(result.personality_trait).toContainEqual({
+      label: "Rational",
+      value: "理性",
+    });
+    expect(result.personality_trait).toContainEqual({
+      label: "Thoughtful (Existing value)",
+      value: "Thoughtful",
+    });
   });
 });

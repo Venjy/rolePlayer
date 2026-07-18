@@ -34,6 +34,14 @@ function createDatabase(): ApplicationDatabase {
 }
 
 describe("initializeCatalogData", () => {
+  it("provides a non-empty English value for every built-in preset", () => {
+    expect(INITIAL_PERSONA_PRESETS).toHaveLength(70);
+    for (const preset of INITIAL_PERSONA_PRESETS) {
+      expect(preset.valueEn.trim(), preset.id).not.toBe("");
+      expect(preset.valueEn.length, preset.id).toBeLessThanOrEqual(500);
+    }
+  });
+
   it("keeps every starter persona value backed by a matching preset", () => {
     const presetValues = new Map(
       [
@@ -79,6 +87,7 @@ describe("initializeCatalogData", () => {
       expect(first).toEqual({
         presetRowsInserted: INITIAL_PERSONA_PRESETS.length,
         presetRowsSkipped: 0,
+        presetTranslationsUpdated: 0,
         personaRowsInserted: INITIAL_CATALOG_PERSONAS.length,
         personaRowsSkipped: 0,
         scenarioLinksInserted: INITIAL_CATALOG_PERSONAS.length,
@@ -113,11 +122,12 @@ describe("initializeCatalogData", () => {
       database.raw
         .prepare(
           `UPDATE persona_presets
-           SET value = ?, updated_at = ?
+           SET value = ?, value_en = ?, updated_at = ?
            WHERE id = ?`,
         )
         .run(
           "管理员修改后的身份",
+          "Administrator-edited identity",
           editedAt,
           "preset_identity_business_decision_maker",
         );
@@ -134,6 +144,7 @@ describe("initializeCatalogData", () => {
       expect(second).toEqual({
         presetRowsInserted: 0,
         presetRowsSkipped: INITIAL_PERSONA_PRESETS.length,
+        presetTranslationsUpdated: 0,
         personaRowsInserted: 0,
         personaRowsSkipped: INITIAL_CATALOG_PERSONAS.length,
         scenarioLinksInserted: 0,
@@ -143,13 +154,14 @@ describe("initializeCatalogData", () => {
       expect(
         database.raw
           .prepare(
-            `SELECT value, updated_at
+            `SELECT value, value_en, updated_at
              FROM persona_presets
              WHERE id = ?`,
           )
           .get("preset_identity_business_decision_maker"),
       ).toEqual({
         value: "管理员修改后的身份",
+        value_en: "Administrator-edited identity",
         updated_at: editedAt,
       });
       expect(
@@ -181,6 +193,119 @@ describe("initializeCatalogData", () => {
           )
           .get(DEFAULT_INITIAL_SCENARIO_ID),
       ).toEqual({ count: INITIAL_CATALOG_PERSONAS.length + 1 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("backfills only blank translations for stable seed IDs and remains idempotent", () => {
+    const database = createDatabase();
+    try {
+      initializeCatalogData(database);
+      const preservedUpdatedAt = "2099-02-01T00:00:00.000Z";
+      database.raw
+        .prepare(
+          `UPDATE persona_presets
+           SET value_en = '', updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(
+          preservedUpdatedAt,
+          "preset_identity_business_decision_maker",
+        );
+      database.raw
+        .prepare(
+          `UPDATE persona_presets
+           SET value_en = ?
+           WHERE id = ?`,
+        )
+        .run(
+          "Custom management recommendation",
+          "preset_identity_management_recommender",
+        );
+
+      const repaired = initializeCatalogData(database);
+      expect(repaired).toMatchObject({
+        presetRowsInserted: 0,
+        presetRowsSkipped: INITIAL_PERSONA_PRESETS.length,
+        presetTranslationsUpdated: 1,
+      });
+      expect(
+        database.raw
+          .prepare(
+            `SELECT id, value_en, updated_at
+             FROM persona_presets
+             WHERE id IN (?, ?)
+             ORDER BY id`,
+          )
+          .all(
+            "preset_identity_business_decision_maker",
+            "preset_identity_management_recommender",
+          ),
+      ).toEqual([
+        {
+          id: "preset_identity_business_decision_maker",
+          value_en: "Final decision-maker for a business unit",
+          updated_at: expect.any(String),
+        },
+        {
+          id: "preset_identity_management_recommender",
+          value_en: "Custom management recommendation",
+          updated_at: expect.any(String),
+        },
+      ]);
+      expect(
+        database.raw
+          .prepare(
+            `SELECT updated_at
+             FROM persona_presets
+             WHERE id = ?`,
+          )
+          .get("preset_identity_business_decision_maker"),
+      ).not.toEqual({ updated_at: preservedUpdatedAt });
+
+      const repeated = initializeCatalogData(database);
+      expect(repeated.presetTranslationsUpdated).toBe(0);
+      expect(
+        database.raw
+          .prepare(
+            `SELECT value_en
+             FROM persona_presets
+             WHERE id = ?`,
+          )
+          .get("preset_identity_management_recommender"),
+      ).toEqual({ value_en: "Custom management recommendation" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("does not attach a seed translation to administrator-edited canonical text", () => {
+    const database = createDatabase();
+    try {
+      initializeCatalogData(database);
+      database.raw
+        .prepare(
+          `UPDATE persona_presets
+           SET value = ?, value_en = ''
+           WHERE id = ?`,
+        )
+        .run(
+          "管理员自定义身份",
+          "preset_identity_business_decision_maker",
+        );
+
+      const result = initializeCatalogData(database);
+      expect(result.presetTranslationsUpdated).toBe(0);
+      expect(
+        database.raw
+          .prepare(
+            `SELECT value, value_en
+             FROM persona_presets
+             WHERE id = ?`,
+          )
+          .get("preset_identity_business_decision_maker"),
+      ).toEqual({ value: "管理员自定义身份", value_en: "" });
     } finally {
       database.close();
     }
@@ -285,6 +410,7 @@ describe("initializeCatalogData", () => {
       expect(result).toEqual({
         presetRowsInserted: INITIAL_PERSONA_PRESETS.length,
         presetRowsSkipped: 0,
+        presetTranslationsUpdated: 0,
         personaRowsInserted: INITIAL_CATALOG_PERSONAS.length,
         personaRowsSkipped: 0,
         scenarioLinksInserted: 0,

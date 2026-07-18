@@ -246,6 +246,15 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 5,
+    name: "add_persona_preset_english_value",
+    up: `
+      ALTER TABLE persona_presets
+        ADD COLUMN value_en TEXT NOT NULL DEFAULT ''
+        CHECK (length(value_en) <= 500);
+    `,
+  },
 ];
 
 interface AppliedMigration {

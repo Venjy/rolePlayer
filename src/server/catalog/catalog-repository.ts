@@ -57,6 +57,7 @@ interface PersonaPresetRow {
   id: string;
   category: string;
   value: string;
+  value_en: string;
   position: number;
   created_at: string;
   updated_at: string;
@@ -115,7 +116,7 @@ export class CatalogRepository {
   public listCatalog(): RolePlayCatalog {
     const personaPresetRows = this.connection
       .prepare(
-        `SELECT id, category, value, position, created_at, updated_at
+        `SELECT id, category, value, value_en, position, created_at, updated_at
          FROM persona_presets
          ORDER BY category, position, id`,
       )
@@ -459,6 +460,7 @@ function mapPersonaPresetRow(row: PersonaPresetRow): PersonaPreset {
     id: row.id,
     category: row.category,
     value: row.value,
+    valueEn: row.value_en,
     position: row.position,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

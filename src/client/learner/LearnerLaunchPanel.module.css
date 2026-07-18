@@ -33,6 +33,10 @@
   font-size: 12px;
 }
 
+.languageToggle {
+  display: inline-flex;
+}
+
 .content {
   width: min(980px, 100%);
   margin: clamp(42px, 8vh, 84px) auto 0;
@@ -257,6 +261,24 @@
 
   .header :global(.ant-btn) {
     padding-inline: 10px;
+  }
+
+  .languageToggle :global(.ant-btn),
+  .adminButton {
+    width: 32px;
+    padding-inline: 0 !important;
+  }
+
+  .languageToggle :global(.ant-btn) {
+    font-size: 0;
+  }
+
+  .languageToggle :global(.anticon) {
+    font-size: 14px;
+  }
+
+  .buttonLabel {
+    display: none;
   }
 
   .content {

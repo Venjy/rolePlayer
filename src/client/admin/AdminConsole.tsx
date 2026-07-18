@@ -28,6 +28,11 @@ import type {
   Scenario,
   ScenarioInput,
 } from "../../shared/role-play-catalog";
+import {
+  localizePersona,
+  localizeScenario,
+} from "../catalog/catalog-localization";
+import { LanguageToggleButton, useI18n } from "../i18n";
 import { includesSearchText } from "./admin-options";
 import { PersonaEditorDrawer } from "./PersonaEditorDrawer";
 import { ScenarioEditorDrawer } from "./ScenarioEditorDrawer";
@@ -54,22 +59,6 @@ type ScenarioDrawerState =
 
 const PAGE_SIZE = 9;
 
-const GENDER_LABELS: Record<Persona["gender"], string> = {
-  female: "女",
-  male: "男",
-  non_binary: "非二元",
-  unspecified: "未指定",
-};
-
-const INTERRUPT_LABELS: Record<
-  Scenario["voiceBehavior"]["interruptFrequency"],
-  string
-> = {
-  low: "较少挑战",
-  medium: "偶尔插话",
-  high: "频繁挑战",
-};
-
 function PersonaCard({
   persona,
   busy,
@@ -83,6 +72,26 @@ function PersonaCard({
   onEdit: () => void;
   onDelete: () => Promise<void>;
 }) {
+  const { locale, t } = useI18n();
+  const genderLabel = {
+    female: t({ en: "Female", zh: "女" }),
+    male: t({ en: "Male", zh: "男" }),
+    non_binary: t({ en: "Non-binary", zh: "非二元" }),
+    unspecified: t({ en: "Not specified", zh: "未指定" }),
+  } satisfies Record<Persona["gender"], string>;
+  const associationSeparator = locale === "zh" ? "、" : ", ";
+  const details = [
+    persona.occupation,
+    persona.age
+      ? t(
+          { en: "{age} years old", zh: "{age} 岁" },
+          { age: persona.age },
+        )
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
     <Card className={styles.entityCard} size="small">
       <div className={styles.cardHeader}>
@@ -95,16 +104,21 @@ function PersonaCard({
               {persona.name}
             </Typography.Title>
             <Typography.Text type="secondary">
-              {[persona.occupation, persona.age ? `${persona.age} 岁` : undefined]
-                .filter(Boolean)
-                .join(" · ") || "尚未填写职业和年龄"}
+              {details ||
+                t({
+                  en: "Occupation and age not provided",
+                  zh: "尚未填写职业和年龄",
+                })}
             </Typography.Text>
           </div>
         </Space>
-        <Tag>{GENDER_LABELS[persona.gender]}</Tag>
+        <Tag>{genderLabel[persona.gender]}</Tag>
       </div>
 
-      <Typography.Paragraph className={styles.cardDescription} ellipsis={{ rows: 2 }}>
+      <Typography.Paragraph
+        className={styles.cardDescription}
+        ellipsis={{ rows: 2 }}
+      >
         {persona.identity}
       </Typography.Paragraph>
       <Space className={styles.tagCloud} size={[4, 6]} wrap>
@@ -118,25 +132,51 @@ function PersonaCard({
 
       <div className={styles.cardFooter}>
         <Typography.Text type="secondary">
-          可用于 {scenarioNames.length} 个场景
+          {t(
+            scenarioNames.length === 1
+              ? {
+                  en: "Available in 1 scenario",
+                  zh: "可用于 1 个场景",
+                }
+              : {
+                  en: "Available in {count} scenarios",
+                  zh: "可用于 {count} 个场景",
+                },
+            { count: scenarioNames.length },
+          )}
         </Typography.Text>
         <Space size="small">
           <Button
-            aria-label={`编辑角色 ${persona.name}`}
+            aria-label={t(
+              { en: "Edit persona {name}", zh: "编辑角色 {name}" },
+              { name: persona.name },
+            )}
             disabled={busy}
             icon={<EditOutlined />}
             onClick={onEdit}
             size="small"
           >
-            编辑
+            {t({ en: "Edit", zh: "编辑" })}
           </Button>
           {scenarioNames.length > 0 ? (
             <Tooltip
-              title={`请先在这些场景中移除该角色：${scenarioNames.join("、")}`}
+              title={t(
+                {
+                  en: "Remove this persona from these scenarios first: {scenarios}",
+                  zh: "请先在这些场景中移除该角色：{scenarios}",
+                },
+                { scenarios: scenarioNames.join(associationSeparator) },
+              )}
             >
               <span>
                 <Button
-                  aria-label={`无法删除角色 ${persona.name}，仍有关联场景`}
+                  aria-label={t(
+                    {
+                      en: "Cannot delete persona {name}; it is still linked to scenarios",
+                      zh: "无法删除角色 {name}，仍有关联场景",
+                    },
+                    { name: persona.name },
+                  )}
                   danger
                   disabled
                   icon={<DeleteOutlined />}
@@ -147,15 +187,27 @@ function PersonaCard({
             </Tooltip>
           ) : (
             <Popconfirm
-              cancelText="取消"
-              description="删除后无法恢复。"
+              cancelText={t({ en: "Cancel", zh: "取消" })}
+              description={t({
+                en: "This cannot be undone.",
+                zh: "删除后无法恢复。",
+              })}
               okButtonProps={{ danger: true }}
-              okText="删除"
+              okText={t({ en: "Delete", zh: "删除" })}
               onConfirm={onDelete}
-              title={`删除角色“${persona.name}”？`}
+              title={t(
+                {
+                  en: "Delete persona “{name}”?",
+                  zh: "删除角色“{name}”？",
+                },
+                { name: persona.name },
+              )}
             >
               <Button
-                aria-label={`删除角色 ${persona.name}`}
+                aria-label={t(
+                  { en: "Delete persona {name}", zh: "删除角色 {name}" },
+                  { name: persona.name },
+                )}
                 danger
                 disabled={busy}
                 icon={<DeleteOutlined />}
@@ -183,6 +235,17 @@ function ScenarioCard({
   onEdit: () => void;
   onDelete: () => Promise<void>;
 }) {
+  const { locale, t } = useI18n();
+  const interruptLabel = {
+    low: t({ en: "Rarely challenges", zh: "较少挑战" }),
+    medium: t({ en: "Occasional interjections", zh: "偶尔插话" }),
+    high: t({ en: "Frequent challenges", zh: "频繁挑战" }),
+  } satisfies Record<
+    Scenario["voiceBehavior"]["interruptFrequency"],
+    string
+  >;
+  const nameSeparator = locale === "zh" ? "、" : ", ";
+
   return (
     <Card className={styles.entityCard} size="small">
       <div className={styles.cardHeader}>
@@ -191,19 +254,26 @@ function ScenarioCard({
             {scenario.name}
           </Typography.Title>
           <Typography.Text type="secondary">
-            {INTERRUPT_LABELS[scenario.voiceBehavior.interruptFrequency]} ·
-            {" "}
-            {scenario.voiceBehavior.toneStyle}
+            {interruptLabel[scenario.voiceBehavior.interruptFrequency]} ·
+            {" "}{scenario.voiceBehavior.toneStyle}
           </Typography.Text>
         </div>
         <Badge
-          count={`${scenario.allowedPersonaIds.length} 角色`}
+          count={t(
+            scenario.allowedPersonaIds.length === 1
+              ? { en: "1 persona", zh: "1 个角色" }
+              : { en: "{count} personas", zh: "{count} 个角色" },
+            { count: scenario.allowedPersonaIds.length },
+          )}
           showZero
           color="blue"
         />
       </div>
 
-      <Typography.Paragraph className={styles.cardDescription} ellipsis={{ rows: 2 }}>
+      <Typography.Paragraph
+        className={styles.cardDescription}
+        ellipsis={{ rows: 2 }}
+      >
         {scenario.description}
       </Typography.Paragraph>
       <Space className={styles.tagCloud} size={[4, 6]} wrap>
@@ -219,34 +289,59 @@ function ScenarioCard({
 
       <div className={styles.cardFooter}>
         <Tooltip
-          title={personaNames.length > 0 ? personaNames.join("、") : "没有可用角色"}
+          title={
+            personaNames.length > 0
+              ? personaNames.join(nameSeparator)
+              : t({ en: "No available personas", zh: "没有可用角色" })
+          }
         >
           <Typography.Text className={styles.personaSummary} type="secondary">
             {personaNames.length > 0
-              ? `角色：${personaNames.slice(0, 2).join("、")}${personaNames.length > 2 ? "…" : ""}`
-              : "没有可用角色"}
+              ? t(
+                  { en: "Personas: {names}{more}", zh: "角色：{names}{more}" },
+                  {
+                    names: personaNames.slice(0, 2).join(nameSeparator),
+                    more: personaNames.length > 2 ? "…" : "",
+                  },
+                )
+              : t({ en: "No available personas", zh: "没有可用角色" })}
           </Typography.Text>
         </Tooltip>
         <Space size="small">
           <Button
-            aria-label={`编辑场景 ${scenario.name}`}
+            aria-label={t(
+              { en: "Edit scenario {name}", zh: "编辑场景 {name}" },
+              { name: scenario.name },
+            )}
             disabled={busy}
             icon={<EditOutlined />}
             onClick={onEdit}
             size="small"
           >
-            编辑
+            {t({ en: "Edit", zh: "编辑" })}
           </Button>
           <Popconfirm
-            cancelText="取消"
-            description="删除后无法恢复。"
+            cancelText={t({ en: "Cancel", zh: "取消" })}
+            description={t({
+              en: "This cannot be undone.",
+              zh: "删除后无法恢复。",
+            })}
             okButtonProps={{ danger: true }}
-            okText="删除"
+            okText={t({ en: "Delete", zh: "删除" })}
             onConfirm={onDelete}
-            title={`删除场景“${scenario.name}”？`}
+            title={t(
+              {
+                en: "Delete scenario “{name}”?",
+                zh: "删除场景“{name}”？",
+              },
+              { name: scenario.name },
+            )}
           >
             <Button
-              aria-label={`删除场景 ${scenario.name}`}
+              aria-label={t(
+                { en: "Delete scenario {name}", zh: "删除场景 {name}" },
+                { name: scenario.name },
+              )}
               danger
               disabled={busy}
               icon={<DeleteOutlined />}
@@ -273,6 +368,7 @@ export function AdminConsole({
   onUpdateScenario,
   onDeleteScenario,
 }: AdminConsoleProps) {
+  const { locale, t } = useI18n();
   const [personaQuery, setPersonaQuery] = useState("");
   const [scenarioQuery, setScenarioQuery] = useState("");
   const [personaPage, setPersonaPage] = useState(1);
@@ -282,29 +378,51 @@ export function AdminConsole({
 
   const personas = useMemo(
     () =>
-      catalog.personas.filter((persona) =>
-        includesSearchText(
-          personaQuery,
-          persona.name,
-          persona.occupation,
-          persona.identity,
-          persona.personalityTraits,
+      catalog.personas
+        .map((persona) => ({
+          canonical: persona,
+          display: localizePersona(
+            persona,
+            locale,
+            catalog.personaPresets,
+          ),
+        }))
+        .filter(({ canonical, display }) =>
+          includesSearchText(
+            personaQuery,
+            display.name,
+            display.occupation,
+            display.identity,
+            display.personalityTraits,
+            canonical.name,
+            canonical.occupation,
+            canonical.identity,
+            canonical.personalityTraits,
+          ),
         ),
-      ),
-    [catalog.personas, personaQuery],
+    [catalog.personaPresets, catalog.personas, locale, personaQuery],
   );
   const scenarios = useMemo(
     () =>
-      catalog.scenarios.filter((scenario) =>
-        includesSearchText(
-          scenarioQuery,
-          scenario.name,
-          scenario.description,
-          scenario.goals,
-          scenario.suggestedSkillFocus,
+      catalog.scenarios
+        .map((scenario) => ({
+          canonical: scenario,
+          display: localizeScenario(scenario, locale),
+        }))
+        .filter(({ canonical, display }) =>
+          includesSearchText(
+            scenarioQuery,
+            display.name,
+            display.description,
+            display.goals,
+            display.suggestedSkillFocus,
+            canonical.name,
+            canonical.description,
+            canonical.goals,
+            canonical.suggestedSkillFocus,
+          ),
         ),
-      ),
-    [catalog.scenarios, scenarioQuery],
+    [catalog.scenarios, locale, scenarioQuery],
   );
   const visiblePersonaPage = Math.min(
     personaPage,
@@ -324,16 +442,22 @@ export function AdminConsole({
   );
 
   const personaPanel = (
-    <section aria-label="角色管理" className={styles.panel}>
+    <section
+      aria-label={t({ en: "Persona management", zh: "角色管理" })}
+      className={styles.panel}
+    >
       <div className={styles.toolbar}>
         <Input
           allowClear
-          aria-label="搜索角色"
+          aria-label={t({ en: "Search personas", zh: "搜索角色" })}
           onChange={(event) => {
             setPersonaQuery(event.target.value);
             setPersonaPage(1);
           }}
-          placeholder="按名字、职业、身份或性格搜索"
+          placeholder={t({
+            en: "Search by name, occupation, identity, or personality",
+            zh: "按名字、职业、身份或性格搜索",
+          })}
           prefix={<SearchOutlined />}
           value={personaQuery}
         />
@@ -343,12 +467,16 @@ export function AdminConsole({
           onClick={() => setPersonaDrawer({ mode: "create" })}
           type="primary"
         >
-          新建角色
+          {t({ en: "New persona", zh: "新建角色" })}
         </Button>
       </div>
       {personas.length === 0 ? (
         <Empty
-          description={personaQuery ? "没有匹配的角色" : "还没有角色"}
+          description={
+            personaQuery
+              ? t({ en: "No matching personas", zh: "没有匹配的角色" })
+              : t({ en: "No personas yet", zh: "还没有角色" })
+          }
           image={Empty.PRESENTED_IMAGE_SIMPLE}
         >
           {!personaQuery ? (
@@ -357,26 +485,28 @@ export function AdminConsole({
               onClick={() => setPersonaDrawer({ mode: "create" })}
               type="primary"
             >
-              新建第一个角色
+              {t({ en: "Create the first persona", zh: "新建第一个角色" })}
             </Button>
           ) : null}
         </Empty>
       ) : (
         <>
           <div className={styles.entityGrid}>
-            {pagePersonas.map((persona) => (
-            <PersonaCard
-              key={persona.id}
-              busy={busy}
-              onDelete={() => onDeletePersona(persona.id)}
-              onEdit={() => setPersonaDrawer({ mode: "edit", persona })}
-              persona={persona}
-              scenarioNames={catalog.scenarios
-                .filter((scenario) =>
-                  scenario.allowedPersonaIds.includes(persona.id),
-                )
-                .map((scenario) => scenario.name)}
-            />
+            {pagePersonas.map(({ canonical, display }) => (
+              <PersonaCard
+                key={canonical.id}
+                busy={busy}
+                onDelete={() => onDeletePersona(canonical.id)}
+                onEdit={() =>
+                  setPersonaDrawer({ mode: "edit", persona: canonical })
+                }
+                persona={display}
+                scenarioNames={catalog.scenarios
+                  .filter((scenario) =>
+                    scenario.allowedPersonaIds.includes(canonical.id),
+                  )
+                  .map((scenario) => localizeScenario(scenario, locale).name)}
+              />
             ))}
           </div>
           {personas.length > PAGE_SIZE ? (
@@ -395,21 +525,31 @@ export function AdminConsole({
   );
 
   const scenarioPanel = (
-    <section aria-label="场景管理" className={styles.panel}>
+    <section
+      aria-label={t({ en: "Scenario management", zh: "场景管理" })}
+      className={styles.panel}
+    >
       <div className={styles.toolbar}>
         <Input
           allowClear
-          aria-label="搜索场景"
+          aria-label={t({ en: "Search scenarios", zh: "搜索场景" })}
           onChange={(event) => {
             setScenarioQuery(event.target.value);
             setScenarioPage(1);
           }}
-          placeholder="按名称、描述、目标或重点技能搜索"
+          placeholder={t({
+            en: "Search by name, description, goal, or focus skill",
+            zh: "按名称、描述、目标或重点技能搜索",
+          })}
           prefix={<SearchOutlined />}
           value={scenarioQuery}
         />
         <Tooltip
-          title={catalog.personas.length === 0 ? "请先创建一个角色" : undefined}
+          title={
+            catalog.personas.length === 0
+              ? t({ en: "Create a persona first", zh: "请先创建一个角色" })
+              : undefined
+          }
         >
           <Button
             disabled={busy || catalog.personas.length === 0}
@@ -417,13 +557,17 @@ export function AdminConsole({
             onClick={() => setScenarioDrawer({ mode: "create" })}
             type="primary"
           >
-            新建场景
+            {t({ en: "New scenario", zh: "新建场景" })}
           </Button>
         </Tooltip>
       </div>
       {scenarios.length === 0 ? (
         <Empty
-          description={scenarioQuery ? "没有匹配的场景" : "还没有场景"}
+          description={
+            scenarioQuery
+              ? t({ en: "No matching scenarios", zh: "没有匹配的场景" })
+              : t({ en: "No scenarios yet", zh: "还没有场景" })
+          }
           image={Empty.PRESENTED_IMAGE_SIMPLE}
         >
           {!scenarioQuery && catalog.personas.length > 0 ? (
@@ -432,24 +576,33 @@ export function AdminConsole({
               onClick={() => setScenarioDrawer({ mode: "create" })}
               type="primary"
             >
-              新建第一个场景
+              {t({ en: "Create the first scenario", zh: "新建第一个场景" })}
             </Button>
           ) : null}
         </Empty>
       ) : (
         <>
           <div className={styles.entityGrid}>
-            {pageScenarios.map((scenario) => (
-            <ScenarioCard
-              key={scenario.id}
-              busy={busy}
-              onDelete={() => onDeleteScenario(scenario.id)}
-              onEdit={() => setScenarioDrawer({ mode: "edit", scenario })}
-              personaNames={scenario.allowedPersonaIds
-                .map((id) => catalog.personas.find((persona) => persona.id === id)?.name)
-                .filter((name): name is string => Boolean(name))}
-              scenario={scenario}
-            />
+            {pageScenarios.map(({ canonical, display }) => (
+              <ScenarioCard
+                key={canonical.id}
+                busy={busy}
+                onDelete={() => onDeleteScenario(canonical.id)}
+                onEdit={() =>
+                  setScenarioDrawer({ mode: "edit", scenario: canonical })
+                }
+                personaNames={canonical.allowedPersonaIds
+                  .map((id) => {
+                    const persona = catalog.personas.find(
+                      (candidate) => candidate.id === id,
+                    );
+                    return persona
+                      ? localizePersona(persona, locale).name
+                      : undefined;
+                  })
+                  .filter((name): name is string => Boolean(name))}
+                scenario={display}
+              />
             ))}
           </div>
           {scenarios.length > PAGE_SIZE ? (
@@ -472,16 +625,20 @@ export function AdminConsole({
       <header className={styles.header}>
         <div>
           <Typography.Title className={styles.title} level={2}>
-            角色对练控制台
+            {t({ en: "Role-play admin console", zh: "角色对练控制台" })}
           </Typography.Title>
           <Typography.Text type="secondary">
-            配置客户角色和销售训练场景，并在保存前检查模型 Instructions。
+            {t({
+              en: "Configure customer personas and sales training scenarios, and review model Instructions before saving.",
+              zh: "配置客户角色和销售训练场景，并在保存前检查模型 Instructions。",
+            })}
           </Typography.Text>
         </div>
         <Space className={styles.headerActions} wrap>
+          <LanguageToggleButton />
           {themeButton}
           <Button disabled={busy} onClick={onExit}>
-            返回对练
+            {t({ en: "Back to practice", zh: "返回对练" })}
           </Button>
         </Space>
       </header>
@@ -489,7 +646,10 @@ export function AdminConsole({
       {error ? (
         <Alert
           className={styles.globalAlert}
-          title="控制台操作失败"
+          title={t({
+            en: "Admin console operation failed",
+            zh: "控制台操作失败",
+          })}
           description={error}
           showIcon
           type="error"
@@ -503,7 +663,7 @@ export function AdminConsole({
               key: "personas",
               label: (
                 <Space size="small">
-                  角色
+                  {t({ en: "Personas", zh: "角色" })}
                   <Badge count={catalog.personas.length} showZero />
                 </Space>
               ),
@@ -513,7 +673,7 @@ export function AdminConsole({
               key: "scenarios",
               label: (
                 <Space size="small">
-                  场景
+                  {t({ en: "Scenarios", zh: "场景" })}
                   <Badge count={catalog.scenarios.length} showZero />
                 </Space>
               ),
@@ -566,6 +726,7 @@ export function AdminConsole({
             setScenarioDrawer(undefined);
           }}
           personas={catalog.personas}
+          personaPresets={catalog.personaPresets}
           scenario={
             scenarioDrawer.mode === "edit" ? scenarioDrawer.scenario : undefined
           }

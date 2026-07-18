@@ -67,6 +67,11 @@ describe("ApplicationDatabase", () => {
         name: "create_persona_presets",
         applied_at: expect.any(String),
       }),
+      expect.objectContaining({
+        version: 5,
+        name: "add_persona_preset_english_value",
+        applied_at: expect.any(String),
+      }),
     ]);
     expect(
       database.raw
@@ -122,7 +127,7 @@ describe("ApplicationDatabase", () => {
       second.raw
         .prepare("SELECT COUNT(*) AS count FROM schema_migrations")
         .get(),
-    ).toMatchObject({ count: 4 });
+    ).toMatchObject({ count: 5 });
     expect(
       second.raw
         .prepare("SELECT applied_at FROM schema_migrations WHERE version = 1")
@@ -167,6 +172,7 @@ describe("ApplicationDatabase", () => {
       { version: 2, name: "create_role_play_catalog" },
       { version: 3, name: "add_scenario_persona_position" },
       { version: 4, name: "create_persona_presets" },
+      { version: 5, name: "add_persona_preset_english_value" },
     ]);
     expect(
       first.raw.prepare("SELECT COUNT(*) AS count FROM personas").get(),
@@ -309,6 +315,56 @@ describe("ApplicationDatabase", () => {
         timestamp,
       ),
     ).toThrow();
+    upgraded.close();
+  });
+
+  it("adds an empty English value when upgrading an existing version 4 preset", () => {
+    const path = createDatabasePath();
+    mkdirSync(dirname(path), { recursive: true });
+    const legacyConnection = new DatabaseSync(path);
+    legacyConnection.exec("PRAGMA foreign_keys = ON");
+    runMigrations(legacyConnection, DATABASE_MIGRATIONS.slice(0, 4));
+    const timestamp = new Date().toISOString();
+    legacyConnection
+      .prepare(
+        `INSERT INTO persona_presets (
+          id, category, value, position, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "preset_identity_business_decision_maker",
+        "identity",
+        "业务部门的最终决策者",
+        0,
+        timestamp,
+        timestamp,
+      );
+    expect(
+      legacyConnection
+        .prepare("SELECT name FROM pragma_table_info('persona_presets')")
+        .all(),
+    ).not.toContainEqual({ name: "value_en" });
+    legacyConnection.close();
+
+    const upgraded = new ApplicationDatabase({ path });
+    upgraded.open();
+    expect(
+      upgraded.raw
+        .prepare("SELECT name FROM schema_migrations WHERE version = 5")
+        .get(),
+    ).toEqual({ name: "add_persona_preset_english_value" });
+    expect(
+      upgraded.raw
+        .prepare(
+          `SELECT value, value_en
+           FROM persona_presets
+           WHERE id = ?`,
+        )
+        .get("preset_identity_business_decision_maker"),
+    ).toEqual({
+      value: "业务部门的最终决策者",
+      value_en: "",
+    });
     upgraded.close();
   });
 });

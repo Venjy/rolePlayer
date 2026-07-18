@@ -40,7 +40,10 @@ export type PersonaPresetCategory = z.infer<
 export const personaPresetSchema = z.object({
   id: requiredText(100),
   category: personaPresetCategorySchema,
+  /** Stable Chinese snapshot value stored on personas. */
   value: requiredText(500),
+  /** English display value; legacy/custom rows may leave it empty for UI fallback. */
+  valueEn: optionalText(500),
   position: z.number().int().min(0),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
