@@ -13,16 +13,13 @@ export const qwenVoiceSchema = z.enum([
 export type QwenVoice = z.infer<typeof qwenVoiceSchema>;
 
 export const clientControlMessageSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("session.configure"),
-    instructions: z
-      .string()
-      .trim()
-      .min(1)
-      .max(MAX_REALTIME_INSTRUCTIONS_LENGTH),
-    voice: qwenVoiceSchema.default("longanqian"),
-    maxHistoryTurns: z.number().int().min(1).max(50).default(20),
-  }),
+  z
+    .object({
+      type: z.literal("session.configure"),
+      conversationId: z.string().trim().min(1).max(100),
+      maxHistoryTurns: z.number().int().min(1).max(50).default(20),
+    })
+    .strict(),
   z.object({ type: z.literal("input.start") }),
   z.object({ type: z.literal("input.commit") }),
   z.object({ type: z.literal("input.clear") }),
@@ -52,7 +49,11 @@ export const sessionStateSchema = z.enum([
 export type SessionState = z.infer<typeof sessionStateSchema>;
 
 export const serverMessageSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("session.ready"), sessionId: z.string() }),
+  z.object({
+    type: z.literal("session.ready"),
+    sessionId: z.string(),
+    conversationId: z.string().trim().min(1).max(100),
+  }),
   z.object({ type: z.literal("session.state"), state: sessionStateSchema }),
   z.object({
     type: z.literal("transcript.user.delta"),
@@ -78,6 +79,10 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
     transcript: z.string(),
   }),
   z.object({ type: z.literal("response.started"), responseId: z.string() }),
+  z.object({
+    type: z.literal("response.persisted"),
+    responseId: z.string(),
+  }),
   z.object({
     type: z.literal("response.done"),
     responseId: z.string().optional(),

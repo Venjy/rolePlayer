@@ -74,6 +74,30 @@ input {
   transition: background-color 180ms ease;
 }
 
+.learner-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+  height: 100dvh;
+  min-height: 100dvh;
+  overflow: hidden;
+}
+
+.learner-workspace-main {
+  min-width: 0;
+  height: 100dvh;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.learner-workspace-main.has-active-session {
+  overflow: hidden;
+}
+
+.mobile-history-trigger {
+  flex: none;
+}
+
 .welcome-screen {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -265,11 +289,6 @@ input {
   width: min(100%, 780px);
   min-height: 100%;
   margin: 0 auto;
-}
-
-.session-alert {
-  align-self: stretch;
-  margin-bottom: 4px;
 }
 
 .empty-conversation {
@@ -485,6 +504,16 @@ input {
 
   .voice-composer {
     padding-inline: 12px;
+  }
+}
+
+@media (min-width: 1200px) {
+  .learner-workspace {
+    grid-template-columns: 288px minmax(0, 1fr);
+  }
+
+  .mobile-history-trigger {
+    display: none !important;
   }
 }
 

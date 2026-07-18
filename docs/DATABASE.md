@@ -8,7 +8,7 @@ SQLite removes a service dependency, not the need for persistent storage. In pro
 
 ## Current scope
 
-The database persists the editable role-play catalog and persona-editor reference choices. All five current tables are declared `STRICT`:
+The database persists the editable role-play catalog, persona-editor reference choices, and durable conversation history. All seven current tables are declared `STRICT`:
 
 ```text
 schema_migrations
@@ -42,6 +42,20 @@ persona_presets
 ├── value_en    TEXT NOT NULL       # English display value
 ├── position    INTEGER NOT NULL
 └── created_at, updated_at
+
+conversation_sessions
+├── id          TEXT PRIMARY KEY
+├── persona_json, scenario_json     # immutable launch snapshots
+├── difficulty, locale
+├── instructions, voice             # exact restored runtime configuration
+└── created_at, updated_at
+
+conversation_messages
+├── id          TEXT PRIMARY KEY
+├── conversation_id → conversation_sessions.id ON DELETE CASCADE
+├── position, role, text, interrupted
+├── source_item_id, response_id      # optional idempotency identities
+└── created_at
 ```
 
 `scenario_personas` is the ordered many-to-many compatibility relation. Its `(scenario_id, persona_id)` primary key prevents duplicate links, `(scenario_id, position)` keeps one stable order, and `scenario_personas_persona_id_idx` supports reverse reference checks. Migration 2 created the relation and seed; migration 3 adds/backfills `position` and creates the unique ordering index so databases opened during earlier development upgrade without being deleted.
@@ -50,11 +64,15 @@ Migration 4 creates `persona_presets` and its ordering/uniqueness constraints, b
 
 Migration 5 adds `value_en` with an empty default so already-created migration-4 databases upgrade without deletion. The explicit catalog initializer fills deployment-owned English labels only when the stable seed ID, category, and canonical value are unchanged. A non-empty administrator translation or edited canonical row is preserved; other legacy/custom blank labels remain valid and fall back to `value` in the UI.
 
+Migration 6 adds durable `conversation_sessions` and `conversation_messages`. A session owns launch-time persona/scenario JSON snapshots, difficulty, locale, compiled Instructions, and voice; it never re-reads those runtime values from the editable catalog. Messages are ordered by `(conversation_id, position)`. Partial unique indexes on `(conversation_id, source_item_id)` and `(conversation_id, response_id)` make retries idempotent when an upstream identity is available, while the session activity index supports history ordering by `updated_at DESC`.
+
 `persona_presets` restricts category to the six shared enum values, requires a non-empty canonical value up to 500 characters, permits an empty English value for backward compatibility, and requires a non-negative position. It enforces case-insensitive `(category, value)` uniqueness plus `(category, position)` uniqueness. Preset ordering is scoped to its category.
 
 Migration 2 contains the immutable legacy `persona_alex`, `scenario_sales_discovery`, and compatibility seed. New migrations must not repeat that historical coupling of schema and business defaults. All new presets and starter personas are owned by the explicit initializer described below.
 
-Catalog rows persist across process restarts. There are still no user, learner-selection, session, transcript, audio, interruption-sample, or evaluation tables. Realtime state and conversation context remain process/browser memory, so the demo does not provide session history or recovery.
+Catalog and conversation rows persist across process restarts. The current ownership model is deliberately narrow: in the current single-user private deployment, conversation history is one global application history with no per-user or tenant partition. It must not be exposed as a multi-user service until authentication, authorization, and record ownership are added.
+
+Conversation persistence stores only launch snapshots, compiled runtime configuration, and finalized text messages. It does not store microphone/model audio, PCM frames, transient transcript deltas, or interruption timing samples. Records are retained indefinitely with the SQLite database; there is currently no retention job, deletion UI, or conversation deletion API. “Resume” creates a new Qwen connection, restores the snapshotted Instructions/voice, and injects a bounded recent sequence of persisted messages into the new upstream context instead of attempting to revive an expired Qwen socket. The realtime repository query finds the oldest user position inside that bounded window in SQL, so opening Qwen does not first parse the complete transcript; the detail REST endpoint intentionally still returns the complete transcript for the chat UI and will need pagination before very large histories are supported.
 
 ## Runtime ownership
 
@@ -69,12 +87,15 @@ Relevant files:
 | `src/server/catalog/catalog-repository.ts` | Maps validated catalog records and owns short transactional CRUD operations |
 | `src/server/catalog/catalog-routes.ts` | Exposes the validated catalog REST boundary |
 | `src/server/catalog/catalog-initializer.ts` | Defines stable defaults, transactional missing-row insertion, and guarded blank-English backfill |
+| `src/server/conversations/conversation-repository.ts` | Persists launch snapshots and ordered finalized text; supplies runtime restore state and idempotent message append |
+| `src/server/conversations/conversation-routes.ts` | Exposes conversation creation, history listing, and detail retrieval |
 | `scripts/initialize-catalog.ts` | Opens the configured database and runs the initializer for source/built commands |
-| `test/server/database.test.ts` | Verifies filesystem creation, PRAGMAs, migrations 2/3/4/5, upgrade paths, seed/reopen behavior, and lifecycle closure |
+| `test/server/database.test.ts` | Verifies filesystem creation, PRAGMAs, migrations 2–6, upgrade paths, constraints, cascade behavior, seed/reopen behavior, and lifecycle closure |
 | `test/server/catalog-routes.test.ts` | Verifies validation, CRUD, compatibility, conflicts, and deletion semantics |
 | `test/server/catalog-initializer.test.ts` | Verifies bilingual content, guarded backfill, ordering, idempotency, and edit preservation with a temporary database |
+| `test/server/conversation-routes.test.ts` | Verifies snapshot creation, history reads, runtime restore data, ordering, append idempotency, and validation |
 
-`registerDatabase` decorates the Fastify instance with one `ApplicationDatabase`. It opens during `onReady` and closes during `onClose`. `CatalogRepository` uses that process-owned connection; routes and future repositories must not open a connection per request.
+`registerDatabase` decorates the Fastify instance with one `ApplicationDatabase`. It opens during `onReady` and closes during `onClose`. Catalog and conversation repositories use that process-owned connection; routes and future repositories must not open a connection per request.
 
 If opening or migrating fails, Fastify startup fails. A successful `/api/health` response reports `database: "ok"` because readiness has already completed; it is not currently a query-latency or disk-capacity probe.
 
@@ -140,14 +161,14 @@ Example next addition:
 export const DATABASE_MIGRATIONS = [
   // Existing entries remain byte-for-byte stable.
   {
-    version: 6,
+    version: 7,
     name: "create_example_table",
     up: `CREATE TABLE example (... ) STRICT;`,
   },
 ] as const;
 ```
 
-The example is illustrative only; do not create an `example` table in the real database. Migration 2 is `create_role_play_catalog`, migration 3 is `add_scenario_persona_position`, migration 4 creates persona presets, and migration 5 adds their English display values; all are immutable.
+The example is illustrative only; do not create an `example` table in the real database. Migration 2 is `create_role_play_catalog`, migration 3 is `add_scenario_persona_position`, migration 4 creates persona presets, migration 5 adds their English display values, and migration 6 creates conversation history; all are immutable.
 
 ## Schema migrations versus catalog initialization
 
@@ -205,7 +226,7 @@ After a successful mutation, the browser applies the returned result locally and
 
 ## Adding further product persistence
 
-The catalog is the first persisted product domain. Before introducing another domain table, settle at least:
+The catalog and text-only conversation history are the currently persisted product domains. The conversation-history decisions are explicit: one global owner in a private single-user deployment, indefinite database retention, no audio, no delete endpoint yet, finalized/interrupted text messages only, and recovery through a fresh Qwen connection with bounded recent context. Before introducing another domain table—or broadening conversation history for multiple users—settle at least:
 
 - who owns and may read each record;
 - whether audio is stored or only transcript/metadata;
@@ -225,7 +246,7 @@ Then make the change as one coherent slice:
 5. update this document and `docs/ARCHITECTURE.md` with the new durability contract;
 6. run `pnpm check`.
 
-Avoid speculative empty tables and generic key/value storage. In particular, do not add session, transcript, audio, user, or evaluation tables until their authorization, retention, deletion, and recovery contracts are explicit.
+Avoid speculative empty tables and generic key/value storage. Do not add audio, user, evaluation, or additional transcript/session tables until their authorization, retention, deletion, and recovery contracts are explicit. Evolve the two conversation tables through new migrations rather than creating parallel storage for the same history.
 
 ## Testing
 
@@ -233,11 +254,12 @@ Database tests create isolated files beneath the operating system temporary dire
 
 - nested parent-directory creation;
 - WAL, foreign-key, and busy-timeout settings;
-- creation of migration metadata, the migration-2 strict catalog schema, the migration-3 compatibility-order upgrade, the migration-4 preset schema, and the migration-5 English-label upgrade from an existing version-4 row;
+- creation of migration metadata, the migration-2 strict catalog schema, the migration-3 compatibility-order upgrade, the migration-4 preset schema, the migration-5 English-label upgrade from an existing version-4 row, and the migration-6 strict conversation schema from an existing version-5 database;
 - the Alex/sales-discovery seed and compatibility link;
 - upgrade from a version-1 database, upgrade of an existing version-2 catalog without `position`, and migration idempotency after close/reopen;
 - catalog input validation, case-insensitive duplicate names, CRUD, compatibility writes, missing references, not-found responses, and deletion conflicts;
 - bilingual preset/starter-persona insertion, guarded blank-English backfill, occupied-position append behavior, compatibility append order, over-budget link rejection with full rollback, repeat-run idempotency, and preservation of administrator-edited rows;
+- conversation snapshot immutability, server-side Instructions compilation, list activity ordering, ordered detail retrieval, close/reopen durability, bounded runtime-window loading, runtime restore configuration, append idempotency, interruption flags, validation/not-found responses, and message cascade deletion at the schema boundary;
 - Fastify `onReady` open and `onClose` close.
 
 Future migration tests should begin from both a fresh database and the immediately previous schema version. Initializer tests must set `DATABASE_PATH` to a temporary file and must cover at least two runs; changes to failure handling or absent-scenario behavior also require explicit rollback/skip cases. Never use `data/role-player.sqlite` or any developer-configured database in an automated test.
@@ -261,9 +283,9 @@ Copying only the main `.sqlite` file while the service is actively writing in WA
 - Keep the database path and all database access server-side.
 - The current SQLite file is not application-level encrypted.
 - Persona and scenario configuration can contain customer-like details. Do not put real personal data in catalog records without an explicit data policy.
-- Do not log transcripts or personal data by default when further persistence is added.
-- The current CRUD API has no authentication or authorization and is suitable only for the current controlled demo environment. Protect admin writes before exposing the service publicly or to multiple tenants.
-- Define file permissions, secret management, catalog ownership, retention, export, and deletion before production user data is stored.
+- Persisted conversation text can contain personal or commercially sensitive information. Do not duplicate it into application logs.
+- The current catalog and conversation APIs have no authentication or authorization and are suitable only for the current private single-user deployment. Protect both reads and writes before exposing the service publicly or to multiple tenants.
+- Define file permissions, secret management, per-user ownership, export, retention, and deletion before production or multi-user data is stored.
 
 ## Troubleshooting
 

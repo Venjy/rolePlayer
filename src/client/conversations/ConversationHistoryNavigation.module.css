@@ -1,0 +1,160 @@
+.desktopNavigation {
+  display: none;
+  min-width: 0;
+  height: 100dvh;
+  overflow: hidden;
+  border-right: 1px solid var(--header-border);
+  background: var(--chat-surface);
+}
+
+.content {
+  display: flex;
+  min-width: 0;
+  height: 100%;
+  padding: 20px 14px max(20px, env(safe-area-inset-bottom));
+  flex-direction: column;
+  gap: 16px;
+}
+
+.heading {
+  display: grid;
+  gap: 3px;
+  padding-inline: 4px;
+}
+
+.heading h4:global(.ant-typography) {
+  margin: 0;
+  font-size: 17px;
+}
+
+.heading > :global(.ant-typography) {
+  font-size: 12px;
+}
+
+.content > :global(.ant-alert) {
+  flex: none;
+}
+
+.listViewport {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  flex: 1;
+  overscroll-behavior: contain;
+}
+
+.loadingList {
+  display: grid;
+  gap: 8px;
+  padding: 8px 4px;
+}
+
+.loadingList :global(.ant-skeleton) {
+  padding: 8px;
+}
+
+.empty {
+  margin-top: 32px;
+}
+
+.listItem:global(.ant-list-item) {
+  padding: 3px 0;
+  border: 0;
+}
+
+.conversationButton:global(.ant-btn) {
+  width: 100%;
+  height: auto;
+  min-height: 94px;
+  padding: 11px 12px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  text-align: left;
+  white-space: normal;
+}
+
+.conversationButton:global(.ant-btn) > span {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 6px;
+}
+
+.conversationButton[data-active="true"]:global(.ant-btn) {
+  border-color: color-mix(in srgb, #18a779 34%, transparent);
+  background: color-mix(in srgb, #18a779 12%, var(--chat-surface));
+}
+
+.itemTopline,
+.scenarioLine,
+.personaName {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.itemTopline,
+.scenarioLine {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.personaName {
+  gap: 7px;
+  font-weight: 650;
+}
+
+.personaName > span,
+.scenarioLine > span:first-child,
+.preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.date,
+.scenarioLine,
+.preview {
+  color: var(--message-meta);
+  font-size: 11px;
+}
+
+.date,
+.scenarioLine :global(.ant-tag) {
+  flex: none;
+}
+
+.scenarioLine :global(.ant-tag) {
+  margin: 0;
+  font-size: 10px;
+  line-height: 18px;
+}
+
+.preview {
+  display: block;
+}
+
+.mobileDrawer :global(.ant-drawer-body) {
+  padding: 0;
+}
+
+.mobileDrawer .content {
+  padding-top: 14px;
+}
+
+@media (min-width: 1200px) {
+  .desktopNavigation {
+    display: block;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .content *,
+  .content *::before,
+  .content *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

@@ -2,7 +2,7 @@
 
 ## Purpose and ownership
 
-The current UI has three responsive surfaces—learner launch, admin catalog, and active voice chat—shared by mobile and desktop. It is intentionally one React application, not separate pages or duplicated mobile/desktop implementations that can drift apart.
+The current UI has three responsive surfaces—learner launch, admin catalog, and active voice chat—plus shared conversation-history navigation around the learner surfaces. Mobile and desktop use one React application and one semantic component tree.
 
 Primary files:
 
@@ -15,6 +15,7 @@ Primary files:
 | `src/client/admin/PersonaEditorDrawer.tsx` | Database-backed persona choices, legacy-value preservation, validation, and Instructions preview |
 | `src/client/admin/ScenarioEditorDrawer.tsx` | Scenario/compatibility/scoring form, validation, and Instructions preview |
 | `src/client/catalog/use-role-play-catalog.ts` | Catalog loading, mutations, errors, and immediate post-mutation refresh |
+| `src/client/conversations/` | History REST client/lifecycle and the shared desktop rail/mobile Drawer list |
 | `src/client/styles.css` | Responsive shell, chat bubbles, theme variables, safe-area handling, reduced motion |
 | `src/client/components/ConversationMessage.tsx` | User/assistant message presentation and metadata |
 | `src/client/components/VoiceWaveform.tsx` | Recording timer, level-reactive bars, cancellation instruction |
@@ -25,9 +26,17 @@ Standard controls should use Ant Design when a suitable component exists. The cu
 
 ## Screens and responsive layout
 
+### Conversation history navigation
+
+The learner launcher and active chat sit inside `.learner-workspace`. At 1200 px and above, a 288 px left rail is always visible and independently scrolls its conversation list. Below 1200 px, that rail is hidden and the same `ConversationHistoryNavigation` content opens in an Ant Design `Drawer` from the history button in the learner/chat header. The Drawer supplies focus trapping, Escape handling, overlay behavior, and focus restoration; do not fork a second mobile list implementation.
+
+The list is ordered by latest persisted activity and shows snapshotted persona, scenario, difficulty, last-message preview, and localized activity time. The active conversation uses `aria-current="page"`. **New role-play** returns to the launcher and leaves history intact. Selecting any other item loads the durable detail, renders all finalized messages, opens a new Qwen connection, and enables input only after recent text context has been acknowledged upstream. Either action first force-cancels an active push-to-talk gesture/input. It then settles the current assistant (`response.reconciled` after interruption or response-specific `response.persisted` after natural drain), waits for any already-submitted user transcript to reach persisted `transcript.user.done`, and checks once more for an assistant created during that wait. Only then may it close the old runtime, so uncertain user audio is never committed into the wrong session and audible assistant text is not silently lost during navigation. A settlement timeout or connection failure cancels the navigation and shows an error instead of pretending persistence succeeded.
+
+History contains finalized transcript text only. A current user/assistant draft never appears in the navigation preview. Switching UI language localizes navigation chrome, date formatting, and difficulty labels, but never translates stored transcript or snapshotted authored text.
+
 ### Learner launch
 
-The default surface contains the brand header, upper-right language/theme controls and admin entry, startup/catalog errors, three launch choices, configuration summaries, and one primary start action:
+The default surface contains the brand header, compact-history entry below the desktop breakpoint, upper-right language/theme controls and admin entry, startup/catalog errors, three launch choices, configuration summaries, and one primary start action:
 
 1. a searchable scenario selector;
 2. a searchable persona selector containing only the selected scenario's compatible personas;
@@ -55,7 +64,7 @@ A persona referenced by one or more scenarios cannot be deleted. The admin disab
 
 ### Active session
 
-The active session uses a three-row CSS grid:
+Inside the learner workspace, the active session uses a three-row CSS grid:
 
 1. Header — selected persona identity, realtime state, playback controls, end-session confirmation, language control, and theme toggle.
 2. Conversation — the only vertically scrolling region.
@@ -64,6 +73,8 @@ The active session uses a three-row CSS grid:
 There is one JSX structure at every width. Current responsive rules are:
 
 - Above 767 px: centered shell, at most 1000 px wide and 940 px high, with outer margin, border, radius, and shadow.
+- At 1200 px and above: the persistent history rail consumes 288 px; the chat remains centered in the remaining workspace.
+- Below 1200 px: the history rail becomes a Drawer and a history button appears in the header.
 - At 767 px and below: shell fills the viewport using `100dvh`, without desktop border, radius, margin, or shadow.
 - At 390 px and below: identity and header actions tighten further.
 - The root has a 320 px minimum width.
@@ -86,6 +97,8 @@ Auto-follow is conditional. When new transcript text or state arrives, the UI sc
 
 The conversation container uses `role="log"`, `aria-live="polite"`, and an accessible label. Avoid introducing rapidly changing assertive announcements for streaming deltas.
 
+Persistence follows audible conversation truth: the final user transcript is durable before it becomes a completed UI turn; a normal assistant turn is durable only after generation and browser playback both complete; an interrupted assistant turn stores only the reconciled retained prefix. Reloading or selecting history reconstructs `turns` from those records. Older messages remain visible in the UI even when only the most recent bounded window is restored into Qwen context.
+
 ## Session states
 
 The header maps application session states to user-visible status:
@@ -100,6 +113,30 @@ The header maps application session states to user-visible status:
 | `ended` | `Ended` / `已结束` | Realtime session is closed |
 
 The small equalizer beside the selected persona is shown only in `speaking`. It is decorative and hidden from assistive technology.
+
+## Error presentation and runtime recovery
+
+Error placement follows the conversation lifecycle. If a visible conversation
+has never reached `session.ready`, its error is an initialization failure: the
+partial runtime is discarded, the learner remains or returns to the launcher,
+and the launch error is shown there. Once that conversation has been established
+at least once, even a replacement transport's pre-ready error must not replace
+the chat surface. Recoverable turn errors such as a too-short recording use a
+top Ant Design message, disappear after five seconds, and leave the socket
+active.
+
+A non-recoverable runtime error, including an empty/failed finalized user
+transcription, uses the same five-second message but cannot safely reuse the old
+Qwen context.
+The app keeps the current transcript and conversation ID visible, disables input
+while reconnecting, reloads finalized text from SQLite, and opens a fresh Qwen
+connection. The failed draft turn is intentionally absent because it was never
+authoritative. If this replacement connection cannot initialize, the chat still
+stays visible and the hold-to-talk control becomes **Retry voice connection**.
+The normal confirmed end-session control remains in the header. Only a first
+connection that never became ready falls back to the launcher. Recovery is
+guarded by both the runtime epoch and component lifetime, so a stale load cannot
+open a socket after navigation or unmount.
 
 ## Hold-to-talk contract
 
@@ -198,7 +235,14 @@ The header playback popover uses Ant Design controls for:
 - volume from 0 to 100 percent;
 - stopping the current AI response.
 
-Stopping AI uses the same interruption/reconciliation path as barge-in but does not start a user recording. Ending the session has a confirmation step; confirmation cancels any active gesture/input, closes browser and Qwen connections through the client/server lifecycle, disposes audio, and returns to the learner launcher with the catalog selection available for another session.
+Stopping AI uses the same interruption/reconciliation path as barge-in but does not start a user recording. Ending the session has a confirmation step; confirmation cancels any active gesture/input, waits for a submitted user transcript, reconciles and persists an assistant response that is still audible (or waits for its response-specific normal-playback persistence acknowledgement), closes browser and Qwen connections through the client/server lifecycle, disposes audio, refreshes the persisted history list, and returns to the learner launcher with the catalog selection available for another session. The bounded settlement wait exists only to avoid holding a broken connection forever; timeout/failure leaves the current session in place when possible and reports the problem rather than silently discarding pending history.
+
+Push-to-talk is temporarily disabled while the preceding committed user turn is
+waiting for its finalized transcript to be saved. Abnormal cancellation and
+session transitions wait for the entire gesture lifecycle, including a
+microphone start that is still pending or a submit/cancel handler that is
+already finishing. Async continuations from a superseded runtime may clean up
+only their captured audio/realtime objects and must not mutate the next session.
 
 ## Manual UI verification
 
@@ -206,7 +250,7 @@ After `pnpm check`, exercise the following in a real browser when changing this 
 
 For layout-only work, `?preview=session` and `?preview=recording` provide development-only static fixtures that reuse the production component tree without requesting microphone access or connecting to Qwen. They are ignored by production builds and do not replace real gesture/audio verification.
 
-1. Inspect approximately 360 px, 767 px, 768 px, and a desktop width; confirm no horizontal overflow.
+1. Inspect approximately 360 px, 767 px, 768 px, 1199 px, 1200 px, and a wide desktop; confirm no horizontal overflow and the rail/Drawer switch occurs once.
 2. Confirm the latest message and waveform do not hide behind the composer or mobile safe area.
 3. Switch theme and language on learner, admin, drawer, and active-session screens; reload after each language choice to confirm persistence, and confirm the current session remains connected.
 4. Hold and release normally with pointer input; verify one submitted turn.
@@ -220,4 +264,9 @@ For layout-only work, `?preview=session` and `?preview=recording` provide develo
 12. Verify all six preset categories are ordered and searchable; confirm preset-backed multi-select limits, clearable occupation, and the disabled-save warning when required preset categories are empty.
 13. Edit a persona containing values absent from `personaPresets`; confirm each is shown as an existing option and can be retained without creating a new preset.
 14. Attempt to delete a referenced persona and verify the conflict is shown without removing it; unlink it, retry, and verify deletion succeeds.
-15. Check focus names, status text, reduced motion, mute, volume, stop, and end-session confirmation.
+15. Finish at least two conversations, confirm newest activity sorts first, resume each from the rail/Drawer, and verify its full transcript and snapshotted persona/scenario/difficulty return before another voice turn.
+16. Edit a catalog persona after creating a conversation, then resume the old conversation and confirm it still uses the old snapshot.
+17. Check history-item/current-page semantics, Drawer Escape/focus behavior, focus names, status text, reduced motion, mute, volume, stop, and end-session confirmation.
+18. Release immediately after pressing or submit silence; confirm the active chat remains visible, an Ant Design error message appears at the top and disappears after five seconds, and input becomes available again—directly for a recoverable short-input error or after the same-conversation rebuild for failed transcription.
+19. Force a pre-`session.ready` configuration failure and confirm the partial chat never opens: the app returns to the launcher and shows the startup error there.
+20. After a session has become ready, force both its runtime connection and the automatic replacement connection to fail; confirm the chat remains visible, the top error message disappears after five seconds, and the composer becomes **Retry voice connection** and can restore the same conversation. Confirm the header's end-session action still requires confirmation.

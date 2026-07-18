@@ -2,6 +2,7 @@ import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { registerCatalogRoutes } from "./catalog/catalog-routes";
 import { getServerConfig, hasQwenConfig } from "./config";
+import { registerConversationRoutes } from "./conversations/conversation-routes";
 import { registerDatabase } from "./database/register-database";
 import { registerRealtimeGateway } from "./realtime/realtime-gateway";
 
@@ -22,6 +23,7 @@ export async function buildApp() {
   }));
 
   registerCatalogRoutes(app);
+  registerConversationRoutes(app);
 
   await registerRealtimeGateway(app, { clientOrigin: config.CLIENT_ORIGIN });
 

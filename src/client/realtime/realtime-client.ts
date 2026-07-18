@@ -1,11 +1,11 @@
 import {
   serverMessageSchema,
   type ClientControlMessage,
-  type QwenVoice,
   type ServerMessage,
 } from "../../shared/realtime-protocol";
 
-const CONNECTION_TIMEOUT_MS = 20_000;
+const INITIAL_CONNECTION_TIMEOUT_MS = 20_000;
+const HISTORY_ITEM_TIMEOUT_BUDGET_MS = 15_000;
 const MAX_BUFFERED_AUDIO_BYTES = 256 * 1024;
 
 export interface RealtimeClientHandlers {
@@ -16,13 +16,24 @@ export interface RealtimeClientHandlers {
 }
 
 export interface RealtimeSessionConfiguration {
-  instructions: string;
-  voice: QwenVoice;
+  conversationId: string;
   maxHistoryTurns: number;
+}
+
+export class RealtimeServerError extends Error {
+  public constructor(
+    public readonly code: string,
+    message: string,
+    public readonly recoverable: boolean,
+  ) {
+    super(message);
+    this.name = "RealtimeServerError";
+  }
 }
 
 export class RealtimeClient {
   private socket?: WebSocket;
+  private abortPendingConnection?: (error: Error) => void;
   private activeAudioResponseId?: string;
   private readonly ignoredAudioResponseIds = new Set<string>();
 
@@ -40,12 +51,36 @@ export class RealtimeClient {
       this.socket = socket;
       socket.binaryType = "arraybuffer";
 
+      // Node restores at most one user and one assistant item per requested
+      // turn and gives each acknowledgement its own 15-second timeout. Mirror
+      // that legal upper bound instead of aborting a still-valid restoration.
+      const connectionTimeoutMs =
+        INITIAL_CONNECTION_TIMEOUT_MS +
+        configuration.maxHistoryTurns * 2 * HISTORY_ITEM_TIMEOUT_BUDGET_MS;
       const timeout = window.setTimeout(() => {
         if (settled) return;
-        settled = true;
+        const error = new Error("Timed out while starting the realtime session.");
+        abortThisConnection(error);
         socket.close();
-        reject(new Error("Timed out while starting the realtime session."));
-      }, CONNECTION_TIMEOUT_MS);
+      }, connectionTimeoutMs);
+
+      const clearPendingConnection = () => {
+        if (
+          abortThisConnection &&
+          this.abortPendingConnection === abortThisConnection
+        ) {
+          this.abortPendingConnection = undefined;
+        }
+      };
+
+      const abortThisConnection = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        clearPendingConnection();
+        reject(error);
+      };
+      this.abortPendingConnection = abortThisConnection;
 
       socket.onopen = () => {
         this.send({
@@ -100,21 +135,29 @@ export class RealtimeClient {
           this.activeAudioResponseId = undefined;
           this.ignoredAudioResponseIds.delete(message.responseId);
         }
+        // Settle a startup failure before forwarding it. The handler may tear
+        // down the socket synchronously; rejecting first preserves the server's
+        // structured error instead of replacing it with a generic close error.
+        if (message.type === "error" && !settled) {
+          settled = true;
+          window.clearTimeout(timeout);
+          clearPendingConnection();
+          reject(
+            new RealtimeServerError(
+              message.code,
+              message.message,
+              message.recoverable,
+            ),
+          );
+        }
+
         this.handlers.onMessage(message);
 
         if (message.type === "session.ready" && !settled) {
           settled = true;
           window.clearTimeout(timeout);
+          clearPendingConnection();
           resolve();
-        }
-
-        // Before session.ready there is no usable session to recover. Reject
-        // immediately even when the gateway classifies the individual error as
-        // recoverable for an already-established connection.
-        if (message.type === "error" && !settled) {
-          settled = true;
-          window.clearTimeout(timeout);
-          reject(new Error(message.message));
         }
       };
 
@@ -122,6 +165,7 @@ export class RealtimeClient {
         if (settled) return;
         settled = true;
         window.clearTimeout(timeout);
+        clearPendingConnection();
         reject(new Error("Could not connect to the local realtime gateway."));
       };
 
@@ -129,6 +173,7 @@ export class RealtimeClient {
         window.clearTimeout(timeout);
         if (!settled) {
           settled = true;
+          clearPendingConnection();
           reject(
             new Error(
               `Realtime connection closed before it was ready (${event.code}).`,
@@ -186,6 +231,10 @@ export class RealtimeClient {
   }
 
   public disconnect(): void {
+    this.abortPendingConnection?.(
+      new Error("Realtime connection closed before it was ready."),
+    );
+    this.abortPendingConnection = undefined;
     if (!this.socket) return;
     this.socket.onclose = null;
     this.socket.close(1000, "User ended session");

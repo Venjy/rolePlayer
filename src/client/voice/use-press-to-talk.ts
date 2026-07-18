@@ -65,10 +65,9 @@ export function usePressToTalk(options: UsePressToTalkOptions): {
   }, [controller, options.cancel, options.start, options.submit]);
 
   const cancelActiveGesture = useCallback(() => {
-    if (!controller.isActivePress) return Promise.resolve();
     activePointerIdRef.current = undefined;
     keyboardActiveRef.current = false;
-    return controller.release(true);
+    return controller.cancelAndWait();
   }, [controller]);
 
   useEffect(() => {

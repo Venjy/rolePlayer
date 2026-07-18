@@ -1,5 +1,7 @@
 import { readFile } from "node:fs/promises";
 import WebSocket, { type RawData } from "ws";
+import { conversationDetailSchema } from "../src/shared/conversation-history";
+import { rolePlayCatalogSchema } from "../src/shared/role-play-catalog";
 import {
   INPUT_CHUNK_BYTES,
   INPUT_SAMPLE_RATE,
@@ -25,6 +27,56 @@ function rawDataToBuffer(data: RawData): Buffer {
 
 function sendJson(socket: WebSocket, message: object): void {
   socket.send(JSON.stringify(message));
+}
+
+function apiBaseFromGateway(gatewayUrl: string): URL {
+  const base = new URL(gatewayUrl);
+  base.protocol = base.protocol === "wss:" ? "https:" : "http:";
+  base.pathname = "/";
+  base.search = "";
+  base.hash = "";
+  return base;
+}
+
+async function createSmokeConversation(gatewayUrl: string): Promise<string> {
+  const apiBase = process.env.SMOKE_API_URL
+    ? new URL(process.env.SMOKE_API_URL)
+    : apiBaseFromGateway(gatewayUrl);
+  const catalogResponse = await fetch(new URL("/api/catalog", apiBase));
+  if (!catalogResponse.ok) {
+    throw new Error(
+      `Could not load the local catalog (HTTP ${catalogResponse.status}).`,
+    );
+  }
+  const catalog = rolePlayCatalogSchema.parse(await catalogResponse.json());
+  const scenario = catalog.scenarios[0];
+  const persona = scenario
+    ? catalog.personas.find(({ id }) =>
+        scenario.allowedPersonaIds.includes(id),
+      )
+    : undefined;
+  if (!scenario || !persona) {
+    throw new Error(
+      "The local catalog needs at least one scenario with a compatible persona.",
+    );
+  }
+
+  const createResponse = await fetch(new URL("/api/conversations", apiBase), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      persona,
+      scenario,
+      difficulty: "easy",
+      locale: "en",
+    }),
+  });
+  if (!createResponse.ok) {
+    throw new Error(
+      `Could not create the smoke-test conversation (HTTP ${createResponse.status}).`,
+    );
+  }
+  return conversationDetailSchema.parse(await createResponse.json()).id;
 }
 
 async function streamPcm(socket: WebSocket, pcm: Buffer): Promise<void> {
@@ -76,6 +128,7 @@ async function runSmokeTest(
     );
   }
 
+  const conversationId = await createSmokeConversation(gatewayUrl);
   const socket = new WebSocket(gatewayUrl);
   let settled = false;
   let audioUploadStarted = false;
@@ -112,9 +165,7 @@ async function runSmokeTest(
     socket.on("open", () => {
       sendJson(socket, {
         type: "session.configure",
-        instructions:
-          "You are a friendly role-play partner. Reply naturally in one English sentence containing at least twelve words.",
-        voice: "longanqian",
+        conversationId,
         maxHistoryTurns: 5,
       });
     });
@@ -220,19 +271,35 @@ async function runSmokeTest(
             break;
           }
 
-          if (message.responseId) {
-            sendJson(socket, {
-              type: "playback.completed",
-              responseId: message.responseId,
-            });
+          if (!message.responseId) {
+            fail(new Error("completed response did not include a response ID"));
+            return;
+          }
+          sendJson(socket, {
+            type: "playback.completed",
+            responseId: message.responseId,
+          });
+          break;
+        }
+
+        case "response.persisted": {
+          if (
+            interruptionMode !== "none" ||
+            message.responseId !== activeResponseId
+          ) {
+            fail(new Error("received an unexpected response.persisted event"));
+            return;
           }
 
           console.log(
             JSON.stringify(
               {
-                status: message.status,
-                userTranscript,
-                assistantTranscript,
+                status: "persisted",
+                userTranscript:
+                  finalUserTranscript.trim() || liveUserTranscript.trim(),
+                assistantTranscript:
+                  finalAssistantTranscript.trim() ||
+                  assistantTranscriptDeltas.trim(),
                 outputAudioBytes,
               },
               null,

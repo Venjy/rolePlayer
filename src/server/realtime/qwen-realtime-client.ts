@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import WebSocket, { type RawData } from "ws";
 import type { QwenConfig } from "../config";
 import type {
+  QwenConversationHistoryItem,
   QwenServerEvent,
   QwenSessionConfiguration,
 } from "./qwen-types";
@@ -29,7 +31,10 @@ export class QwenRealtimeClient {
       new WebSocket(url, options),
   ) {}
 
-  public connect(session: QwenSessionConfiguration): Promise<string> {
+  public connect(
+    session: QwenSessionConfiguration,
+    history: readonly QwenConversationHistoryItem[] = [],
+  ): Promise<string> {
     if (this.socket) {
       throw new Error("The upstream Qwen connection has already been created.");
     }
@@ -40,20 +45,85 @@ export class QwenRealtimeClient {
     return new Promise((resolve, reject) => {
       let settled = false;
       let sessionId = "unknown";
+      let sessionUpdateSent = false;
+      let sessionUpdated = false;
+      let historyIndex = 0;
+      let pendingHistoryItemId: string | undefined;
+      let timeout: NodeJS.Timeout | undefined;
+
+      const clearConnectionTimeout = () => {
+        if (timeout) clearTimeout(timeout);
+        timeout = undefined;
+      };
 
       const settleWithError = (error: Error) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timeout);
+        this.configured = false;
+        clearConnectionTimeout();
         reject(error);
+        if (
+          this.socket &&
+          this.socket.readyState !== WebSocket.CLOSED &&
+          this.socket.readyState !== WebSocket.CLOSING
+        ) {
+          this.socket.terminate();
+        }
       };
 
-      const timeout = setTimeout(() => {
-        this.socket?.terminate();
-        settleWithError(
-          new Error("Timed out while connecting to Qwen Realtime API."),
+      const armConnectionTimeout = (message: string) => {
+        clearConnectionTimeout();
+        timeout = setTimeout(() => {
+          settleWithError(new Error(message));
+        }, CONNECTION_TIMEOUT_MS);
+      };
+
+      const settleSuccessfully = () => {
+        if (settled) return;
+        settled = true;
+        this.configured = true;
+        clearConnectionTimeout();
+        resolve(sessionId);
+      };
+
+      const sendNextHistoryItem = () => {
+        if (historyIndex >= history.length) {
+          settleSuccessfully();
+          return;
+        }
+
+        const historyItem = history[historyIndex];
+        if (!historyItem?.text.trim()) {
+          settleWithError(
+            new Error(
+              `Conversation history item ${historyIndex + 1} has no text.`,
+            ),
+          );
+          return;
+        }
+
+        const itemId = `item_history_${randomUUID().replaceAll("-", "")}`;
+        pendingHistoryItemId = itemId;
+        try {
+          this.sendConversationTextItem({
+            itemId,
+            role: historyItem.role,
+            text: historyItem.text,
+          });
+        } catch (error) {
+          settleWithError(
+            error instanceof Error
+              ? error
+              : new Error("Could not restore Qwen conversation history."),
+          );
+          return;
+        }
+        armConnectionTimeout(
+          `Timed out while restoring Qwen conversation history item ${historyIndex + 1}/${history.length}.`,
         );
-      }, CONNECTION_TIMEOUT_MS);
+      };
+
+      armConnectionTimeout("Timed out while connecting to Qwen Realtime API.");
 
       this.socket = this.createSocket(url, {
         headers: {
@@ -78,6 +148,11 @@ export class QwenRealtimeClient {
 
         if (event.type === "session.created") {
           sessionId = event.session?.id ?? "unknown";
+          if (sessionUpdateSent) {
+            this.handlers.onEvent(event);
+            return;
+          }
+          sessionUpdateSent = true;
           this.send({
             type: "session.update",
             session: {
@@ -93,10 +168,22 @@ export class QwenRealtimeClient {
         }
 
         if (event.type === "session.updated" && !settled) {
-          settled = true;
-          this.configured = true;
-          clearTimeout(timeout);
-          resolve(sessionId);
+          if (!sessionUpdated) {
+            sessionUpdated = true;
+            if (history.length === 0) settleSuccessfully();
+            else sendNextHistoryItem();
+          }
+        }
+
+        if (
+          event.type === "conversation.item.created" &&
+          !settled &&
+          pendingHistoryItemId &&
+          event.item?.id === pendingHistoryItemId
+        ) {
+          pendingHistoryItemId = undefined;
+          historyIndex += 1;
+          sendNextHistoryItem();
         }
 
         if (event.type === "error" && !settled) {
@@ -122,7 +209,7 @@ export class QwenRealtimeClient {
 
       this.socket.on("close", (code, reason) => {
         this.configured = false;
-        clearTimeout(timeout);
+        clearConnectionTimeout();
         if (!settled) {
           settleWithError(
             new Error(
@@ -172,7 +259,25 @@ export class QwenRealtimeClient {
     previousItemId?: string;
     text: string;
   }): void {
+    this.createConversationTextItem({ ...input, role: "assistant" });
+  }
+
+  public createConversationTextItem(input: {
+    itemId: string;
+    previousItemId?: string;
+    role: "user" | "assistant";
+    text: string;
+  }): void {
     this.assertReady();
+    this.sendConversationTextItem(input);
+  }
+
+  private sendConversationTextItem(input: {
+    itemId: string;
+    previousItemId?: string;
+    role: "user" | "assistant";
+    text: string;
+  }): void {
     this.send({
       type: "conversation.item.create",
       ...(input.previousItemId
@@ -181,8 +286,13 @@ export class QwenRealtimeClient {
       item: {
         id: input.itemId,
         type: "message",
-        role: "assistant",
-        content: [{ type: "output_text", text: input.text }],
+        role: input.role,
+        content: [
+          {
+            type: input.role === "user" ? "input_text" : "output_text",
+            text: input.text,
+          },
+        ],
       },
     });
   }

@@ -6,8 +6,10 @@ import {
   type ServerMessage,
 } from "../../shared/realtime-protocol";
 import { getQwenConfig } from "../config";
+import { ConversationRepository } from "../conversations/conversation-repository";
 import { QwenRealtimeClient } from "./qwen-realtime-client";
 import { RealtimeSessionController } from "./realtime-session-controller";
+import type { QwenConversationHistoryItem } from "./qwen-types";
 
 const MAX_INPUT_FRAME_BYTES = 64 * 1024;
 const MAX_BROWSER_BUFFERED_BYTES = 1024 * 1024;
@@ -18,11 +20,40 @@ function rawDataToBuffer(data: RawData): Buffer {
   return Buffer.from(data);
 }
 
+export function selectRealtimeHistory(
+  messages: readonly QwenConversationHistoryItem[],
+  maximumTurns: number,
+): QwenConversationHistoryItem[] {
+  const turns: Array<{
+    user: QwenConversationHistoryItem;
+    assistant?: QwenConversationHistoryItem;
+  }> = [];
+
+  for (const message of messages) {
+    const normalized = { role: message.role, text: message.text };
+    if (message.role === "user") {
+      turns.push({ user: normalized });
+      continue;
+    }
+
+    // The runtime produces at most one assistant response for a user turn.
+    // If an externally modified database violates that invariant, retain only
+    // the latest assistant item rather than making browser startup unbounded.
+    const currentTurn = turns.at(-1);
+    if (currentTurn) currentTurn.assistant = normalized;
+  }
+
+  return turns.slice(-maximumTurns).flatMap(({ user, assistant }) =>
+    assistant ? [user, assistant] : [user],
+  );
+}
+
 export async function registerRealtimeGateway(
   app: FastifyInstance,
   options: { clientOrigin: string },
 ): Promise<void> {
   await app.register(websocket);
+  const conversations = new ConversationRepository(app.database);
 
   app.get("/ws/realtime", { websocket: true }, (browser, request) => {
     const origin = request.headers.origin;
@@ -65,6 +96,21 @@ export async function registerRealtimeGateway(
       send({ type: "session.state", state: "connecting" });
 
       try {
+        const conversation = conversations.getRuntimeConversation(
+          message.conversationId,
+          message.maxHistoryTurns,
+        );
+        if (!conversation) {
+          sendError(
+            "CONVERSATION_NOT_FOUND",
+            `No conversation exists with ID "${message.conversationId}".`,
+            false,
+          );
+          send({ type: "session.state", state: "ended" });
+          browser.close(1008, "Conversation not found");
+          return;
+        }
+
         qwen = new QwenRealtimeClient(getQwenConfig(), {
           onEvent: (event) => controller?.handleQwenEvent(event),
           onMalformedEvent: (raw) => {
@@ -85,11 +131,17 @@ export async function registerRealtimeGateway(
           },
         });
 
-        const sessionId = await qwen.connect({
-          instructions: message.instructions,
-          voice: message.voice,
-          maxHistoryTurns: message.maxHistoryTurns,
-        });
+        const sessionId = await qwen.connect(
+          {
+            instructions: conversation.instructions,
+            voice: conversation.voice,
+            maxHistoryTurns: message.maxHistoryTurns,
+          },
+          selectRealtimeHistory(
+            conversation.messages,
+            message.maxHistoryTurns,
+          ),
+        );
 
         if (browserClosed) {
           qwen.close();
@@ -108,6 +160,12 @@ export async function registerRealtimeGateway(
             browser.send(audio, { binary: true });
             return true;
           },
+          persistMessage: (persisted) => {
+            conversations.appendMessage({
+              conversationId: conversation.id,
+              ...persisted,
+            });
+          },
           closeWithError: () => {
             qwen?.close();
             if (browser.readyState === WebSocket.OPEN) {
@@ -122,7 +180,11 @@ export async function registerRealtimeGateway(
           },
         });
 
-        send({ type: "session.ready", sessionId });
+        send({
+          type: "session.ready",
+          sessionId,
+          conversationId: conversation.id,
+        });
         send({ type: "session.state", state: "ready" });
       } catch (error) {
         const errorMessage =
@@ -130,6 +192,11 @@ export async function registerRealtimeGateway(
         request.log.error({ error }, "Failed to configure realtime session");
         sendError("SESSION_CONFIGURATION_FAILED", errorMessage, false);
         send({ type: "session.state", state: "ended" });
+        browserClosed = true;
+        qwen?.close();
+        if (browser.readyState === WebSocket.OPEN) {
+          browser.close(1011, "Session configuration failed");
+        }
       }
     };
 

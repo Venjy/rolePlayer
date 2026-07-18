@@ -101,6 +101,7 @@ export interface LearnerLaunchPanelProps {
   onStart: () => void | Promise<void>;
   isStarting: boolean;
   startDisabled?: boolean;
+  historyButton: ReactNode;
   themeButton: ReactNode;
   onOpenAdmin: () => void;
 }
@@ -292,6 +293,7 @@ export function LearnerLaunchPanel({
   onStart,
   isStarting,
   startDisabled = false,
+  historyButton,
   themeButton,
   onOpenAdmin,
 }: LearnerLaunchPanelProps) {
@@ -362,6 +364,7 @@ export function LearnerLaunchPanel({
           </div>
         </Flex>
         <Space size={8}>
+          {historyButton}
           <span className={styles.languageToggle}>
             <LanguageToggleButton />
           </span>

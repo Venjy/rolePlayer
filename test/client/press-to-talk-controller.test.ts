@@ -9,9 +9,15 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function createHarness(start: () => Promise<boolean> = async () => true) {
-  const submit = vi.fn(async () => undefined);
-  const cancel = vi.fn(async () => undefined);
+function createHarness(
+  start: () => Promise<boolean> = async () => true,
+  handlers?: {
+    submit?: () => Promise<void>;
+    cancel?: () => Promise<void>;
+  },
+) {
+  const submit = vi.fn(handlers?.submit ?? (async () => undefined));
+  const cancel = vi.fn(handlers?.cancel ?? (async () => undefined));
   const states: Array<{ pressed: boolean; cancelling: boolean }> = [];
   const controller = new PressToTalkController({
     start,
@@ -63,5 +69,44 @@ describe("PressToTalkController", () => {
 
     expect(harness.cancel).toHaveBeenCalledTimes(1);
     expect(harness.submit).not.toHaveBeenCalled();
+  });
+
+  it("can force-cancel after release while microphone startup is still pending", async () => {
+    const start = deferred<boolean>();
+    const harness = createHarness(() => start.promise);
+    const starting = harness.controller.press(300);
+    const releasing = harness.controller.release(false);
+    const cancelling = harness.controller.cancelAndWait();
+
+    expect(harness.controller.isLifecycleActive).toBe(true);
+    start.resolve(true);
+    await Promise.all([starting, releasing, cancelling]);
+
+    expect(harness.cancel).toHaveBeenCalledTimes(1);
+    expect(harness.submit).not.toHaveBeenCalled();
+    expect(harness.controller.isLifecycleActive).toBe(false);
+  });
+
+  it("waits for an already-finishing submission without invoking cancel", async () => {
+    const submission = deferred<void>();
+    const harness = createHarness(undefined, {
+      submit: () => submission.promise,
+    });
+    await harness.controller.press(300);
+    const releasing = harness.controller.release(false);
+    const waiting = harness.controller.cancelAndWait();
+    let settled = false;
+    void waiting.then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+    expect(harness.cancel).not.toHaveBeenCalled();
+
+    submission.resolve();
+    await Promise.all([releasing, waiting]);
+    expect(harness.controller.isLifecycleActive).toBe(false);
   });
 });

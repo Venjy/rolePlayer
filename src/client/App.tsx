@@ -2,14 +2,15 @@ import {
   AudioFilled,
   AudioMutedOutlined,
   CustomerServiceOutlined,
+  HistoryOutlined,
   MoonOutlined,
   PoweroffOutlined,
+  ReloadOutlined,
   SoundOutlined,
   StopOutlined,
   SunOutlined,
 } from "@ant-design/icons";
 import {
-  Alert,
   App as AntApp,
   Avatar,
   Badge,
@@ -17,6 +18,7 @@ import {
   ConfigProvider,
   Empty,
   Flex,
+  message as antMessage,
   Popconfirm,
   Popover,
   Slider,
@@ -36,6 +38,7 @@ import type {
   RolePlayCatalog,
   Scenario,
 } from "../shared/role-play-catalog";
+import type { ConversationDetail } from "../shared/conversation-history";
 import { compileRolePlayInstructions } from "../shared/role-play-instructions";
 import { AdminConsole } from "./admin";
 import { BrowserAudioEngine } from "./audio/browser-audio-engine";
@@ -52,12 +55,20 @@ import { useRolePlayCatalog } from "./catalog/use-role-play-catalog";
 import { ConversationMessage } from "./components/ConversationMessage";
 import { VoiceWaveform } from "./components/VoiceWaveform";
 import {
+  ConversationHistoryNavigation,
+  useConversationHistory,
+} from "./conversations";
+import {
   LanguageToggleButton,
   useI18n,
   type LocalizedText,
 } from "./i18n";
 import { LearnerLaunchPanel } from "./learner";
-import { RealtimeClient } from "./realtime/realtime-client";
+import { selectRealtimeErrorAction } from "./realtime/realtime-error-policy";
+import {
+  RealtimeClient,
+  RealtimeServerError,
+} from "./realtime/realtime-client";
 import { usePressToTalk } from "./voice/use-press-to-talk";
 
 const THEME_STORAGE_KEY = "role-player:color-mode";
@@ -103,6 +114,46 @@ interface AssistantRuntime {
   finalized: boolean;
   interrupted: boolean;
   startedAt: Date;
+  interruptionSafePlayedMs?: number;
+  interruptionReceiptSent?: boolean;
+}
+
+type SettlementResult =
+  | { ok: true }
+  | { ok: false; error: Error };
+
+interface SettlementWaiter {
+  promise: Promise<SettlementResult>;
+  complete: (result: SettlementResult) => void;
+  timeoutId: number;
+}
+
+interface AssistantSettlementWaiter extends SettlementWaiter {
+  responseId: string;
+}
+
+interface RuntimeMessageContext {
+  conversationId: string;
+  runtimeEpoch: number;
+}
+
+interface RuntimeRecoveryRequest extends RuntimeMessageContext {
+  error: UiError;
+  notify?: boolean;
+}
+
+// A repair can legally spend up to 10 seconds in each of its terminal,
+// delete, and recreate acknowledgement stages. Navigation waits for that
+// server-side persistence barrier before closing the realtime connection.
+const ASSISTANT_SETTLEMENT_TIMEOUT_MS = 32_000;
+const USER_COMMIT_SETTLEMENT_TIMEOUT_MS = 32_000;
+const RUNTIME_RECOVERY_STABILITY_MS = 5_000;
+const SESSION_ERROR_MESSAGE_KEY = "session-error";
+
+const SETTLEMENT_SUCCEEDED = { ok: true } as const satisfies SettlementResult;
+
+function requireSuccessfulSettlement(result: SettlementResult): void {
+  if (!result.ok) throw result.error;
 }
 
 const STATE_LABELS: Record<
@@ -125,9 +176,29 @@ const KNOWN_CLIENT_ERRORS: Readonly<Record<string, LocalizedText>> = {
     en: "Timed out while starting the realtime session.",
     zh: "启动实时会话超时。",
   },
+  "Timed out while saving the assistant response.": {
+    en: "Timed out while saving the AI response. The session was kept open to avoid silently losing history.",
+    zh: "保存 AI 回复超时。为避免静默丢失历史，当前会话仍保持打开。",
+  },
+  "Timed out while saving the user transcript.": {
+    en: "Timed out while saving your transcript. The session was kept open to avoid silently losing history.",
+    zh: "保存你的转写超时。为避免静默丢失历史，当前会话仍保持打开。",
+  },
+  "The realtime connection closed before pending conversation data was saved.": {
+    en: "The realtime connection closed before pending conversation data was saved.",
+    zh: "实时连接在待处理的对话数据保存前已关闭。",
+  },
+  "Could not send the assistant playback receipt.": {
+    en: "Could not confirm how much of the AI response was played.",
+    zh: "无法确认 AI 回复已播放到哪个位置。",
+  },
   "Could not connect to the local realtime gateway.": {
     en: "Could not connect to the local realtime gateway.",
     zh: "无法连接本地实时网关。",
+  },
+  "Realtime connection closed before it was ready.": {
+    en: "The realtime connection closed before it was ready.",
+    zh: "实时连接在就绪前已关闭。",
   },
   "Realtime WebSocket is not open.": {
     en: "The realtime connection is not open.",
@@ -176,6 +247,10 @@ const SERVER_ERROR_LABELS: Readonly<Record<string, LocalizedText>> = {
     en: "A user turn is already active.",
     zh: "当前已有一轮用户输入正在进行。",
   },
+  USER_TURN_PENDING: {
+    en: "Wait for your previous transcript to be saved before speaking again.",
+    zh: "请等待上一轮语音转写保存完成后再说话。",
+  },
   NO_ACTIVE_INPUT: {
     en: "No recording is active.",
     zh: "当前没有正在进行的录音。",
@@ -200,6 +275,14 @@ const SERVER_ERROR_LABELS: Readonly<Record<string, LocalizedText>> = {
     en: "Conversation context repair failed.",
     zh: "对话上下文修复失败。",
   },
+  HISTORY_PERSISTENCE_FAILED: {
+    en: "The conversation history could not be saved.",
+    zh: "无法保存对话历史。",
+  },
+  CONVERSATION_NOT_FOUND: {
+    en: "The selected conversation no longer exists.",
+    zh: "所选历史会话已不存在。",
+  },
   UPSTREAM_CLOSED: {
     en: "The Qwen connection closed unexpectedly.",
     zh: "Qwen 连接意外关闭。",
@@ -219,6 +302,10 @@ const SERVER_ERROR_LABELS: Readonly<Record<string, LocalizedText>> = {
   INVALID_AUDIO_FRAME: {
     en: "An invalid microphone audio frame was received.",
     zh: "收到了无效的麦克风音频帧。",
+  },
+  INVALID_JSON: {
+    en: "An invalid realtime control message was received.",
+    zh: "收到了无效的实时控制消息。",
   },
 };
 
@@ -247,6 +334,9 @@ function getInitialColorMode(): ColorMode {
 }
 
 function readableError(error: unknown): UiError {
+  if (error instanceof RealtimeServerError) {
+    return readableServerError(error.code, error.message);
+  }
   if (error instanceof DOMException && error.name === "NotAllowedError") {
     return {
       en: "Microphone permission was denied. Allow microphone access in your browser's site settings, then start the session again.",
@@ -258,6 +348,17 @@ function readableError(error: unknown): UiError {
       en: "No microphone was found. Connect an input device and try again.",
       zh: "没有找到可用的麦克风，请连接输入设备后重试。",
     };
+  }
+  if (error instanceof Error) {
+    const closeMatch = /^Realtime connection closed before it was ready \((\d+)\)\.$/.exec(
+      error.message,
+    );
+    if (closeMatch) {
+      return {
+        en: error.message,
+        zh: `实时连接在就绪前已关闭（${closeMatch[1]}）。`,
+      };
+    }
   }
   return error instanceof Error
     ? (KNOWN_CLIENT_ERRORS[error.message] ?? error.message)
@@ -323,6 +424,7 @@ const UI_PREVIEW_FIXTURE = import.meta.env.DEV
 
 export function App() {
   const { locale, antdLocale, t } = useI18n();
+  const [messageApi, messageContextHolder] = antMessage.useMessage();
   const uiPreviewMode = UI_PREVIEW_FIXTURE?.mode ?? null;
   const sessionUiPreview = uiPreviewMode !== null;
   const recordingUiPreview = uiPreviewMode === "recording";
@@ -339,6 +441,10 @@ export function App() {
     [],
   );
   const rolePlayCatalog = useRolePlayCatalog(reconcileSelection);
+  const conversationHistory = useConversationHistory();
+  const loadConversation = conversationHistory.load;
+  const refreshConversationHistorySilently =
+    conversationHistory.refreshSilently;
   const [colorMode, setColorMode] = useState<ColorMode>(getInitialColorMode);
   const [appMode, setAppMode] = useState<AppMode>("learner");
   const [difficulty, setDifficulty] = useState<Difficulty>("medium");
@@ -358,6 +464,7 @@ export function App() {
   const [volume, setVolume] = useState(0.85);
   const [muted, setMuted] = useState(false);
   const [errorMessage, setErrorMessage] = useState<UiError | null>(null);
+  const [runtimeRecoveryFailed, setRuntimeRecoveryFailed] = useState(false);
   const [turns, setTurns] = useState<TranscriptTurn[]>(
     UI_PREVIEW_FIXTURE?.turns ?? [],
   );
@@ -366,15 +473,42 @@ export function App() {
     UI_PREVIEW_FIXTURE?.assistantDraft ?? null,
   );
   const [isReconciling, setIsReconciling] = useState(false);
+  const [isUserCommitPending, setIsUserCommitPending] = useState(false);
+  const [activeConversationId, setActiveConversationId] = useState<
+    string | null
+  >(null);
+  const [historyMobileOpen, setHistoryMobileOpen] = useState(false);
 
   const realtimeRef = useRef<RealtimeClient | undefined>(undefined);
   const audioRef = useRef<BrowserAudioEngine | undefined>(undefined);
   const recordingStartedAtRef = useRef(0);
   const recordingRef = useRef(false);
   const submissionRef = useRef(false);
+  const submissionCompletionRef = useRef<Promise<void>>(Promise.resolve());
   const playbackActiveRef = useRef(false);
   const activeResponseIdRef = useRef<string | undefined>(undefined);
   const assistantResponsesRef = useRef(new Map<string, AssistantRuntime>());
+  const assistantSettlementWaiterRef = useRef<
+    AssistantSettlementWaiter | undefined
+  >(undefined);
+  const pendingAssistantResponseIdRef = useRef<string | undefined>(undefined);
+  const userCommitSettlementWaiterRef = useRef<SettlementWaiter | undefined>(
+    undefined,
+  );
+  const userCommitPendingRef = useRef(false);
+  const transitionInProgressRef = useRef(false);
+  const runtimeEpochRef = useRef(0);
+  const componentMountedRef = useRef(true);
+  const conversationStartedRef = useRef(sessionUiPreview);
+  const sessionEstablishedRef = useRef(sessionUiPreview);
+  const pendingRuntimeRecoveryRef = useRef<
+    RuntimeRecoveryRequest | undefined
+  >(undefined);
+  const runtimeRecoveryConsumedRef = useRef(false);
+  const runtimeRecoveryStabilityTimerRef = useRef<number | undefined>(
+    undefined,
+  );
+  const runPendingRuntimeRecoveryRef = useRef<() => void>(() => undefined);
   const cleanupPromiseRef = useRef<Promise<void>>(Promise.resolve());
   const conversationViewportRef = useRef<HTMLDivElement | null>(null);
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
@@ -401,6 +535,164 @@ export function App() {
     },
     [t],
   );
+  const showSessionError = useCallback(
+    (error: UiError) => {
+      void messageApi.open({
+        key: SESSION_ERROR_MESSAGE_KEY,
+        type: "error",
+        content: typeof error === "string" ? error : t(error),
+        duration: 5,
+      });
+    },
+    [messageApi, t],
+  );
+  const reportContextualError = useCallback(
+    (error: UiError) => {
+      if (conversationStartedRef.current) {
+        if (!pendingRuntimeRecoveryRef.current) showSessionError(error);
+      } else {
+        setErrorMessage(error);
+      }
+    },
+    [showSessionError],
+  );
+
+  const queueRuntimeRecovery = useCallback(
+    (request: RuntimeRecoveryRequest): boolean => {
+      const existing = pendingRuntimeRecoveryRef.current;
+      if (existing?.runtimeEpoch === request.runtimeEpoch) return true;
+      if (runtimeRecoveryConsumedRef.current) return false;
+
+      runtimeRecoveryConsumedRef.current = true;
+      pendingRuntimeRecoveryRef.current = request;
+      setRuntimeRecoveryFailed(false);
+      if (request.notify !== false) showSessionError(request.error);
+      setSessionState("connecting");
+      runPendingRuntimeRecoveryRef.current();
+      return true;
+    },
+    [showSessionError],
+  );
+
+  const completeAssistantSettlement = useCallback(
+    (
+      result: SettlementResult,
+      responseId?: string,
+      clearPendingResponse = result.ok,
+    ) => {
+      const waiter = assistantSettlementWaiterRef.current;
+      if (
+        waiter &&
+        (responseId === undefined || waiter.responseId === responseId)
+      ) {
+        window.clearTimeout(waiter.timeoutId);
+        assistantSettlementWaiterRef.current = undefined;
+        waiter.complete(result);
+      }
+      if (
+        clearPendingResponse &&
+        (responseId === undefined ||
+          pendingAssistantResponseIdRef.current === responseId)
+      ) {
+        pendingAssistantResponseIdRef.current = undefined;
+      }
+    },
+    [],
+  );
+
+  const waitForAssistantSettlement = useCallback(
+    (responseId: string): Promise<SettlementResult> => {
+      const existing = assistantSettlementWaiterRef.current;
+      if (existing?.responseId === responseId) return existing.promise;
+
+      if (existing) {
+        window.clearTimeout(existing.timeoutId);
+        existing.complete({
+          ok: false,
+          error: new Error(
+            "A newer assistant response replaced an unsettled response.",
+          ),
+        });
+      }
+
+      pendingAssistantResponseIdRef.current = responseId;
+      let completePromise: (result: SettlementResult) => void = () => undefined;
+      const promise = new Promise<SettlementResult>((resolve) => {
+        completePromise = resolve;
+      });
+      const timeoutId = window.setTimeout(() => {
+        const current = assistantSettlementWaiterRef.current;
+        if (current?.promise !== promise) return;
+        assistantSettlementWaiterRef.current = undefined;
+        completePromise({
+          ok: false,
+          error: new Error("Timed out while saving the assistant response."),
+        });
+      }, ASSISTANT_SETTLEMENT_TIMEOUT_MS);
+
+      assistantSettlementWaiterRef.current = {
+        responseId,
+        promise,
+        complete: completePromise,
+        timeoutId,
+      };
+      return promise;
+    },
+    [],
+  );
+
+  const createUserCommitSettlement = useCallback(
+    (): Promise<SettlementResult> => {
+      const existing = userCommitSettlementWaiterRef.current;
+      if (existing) return existing.promise;
+
+      userCommitPendingRef.current = true;
+      setIsUserCommitPending(true);
+      let completePromise: (result: SettlementResult) => void = () => undefined;
+      const promise = new Promise<SettlementResult>((resolve) => {
+        completePromise = resolve;
+      });
+      const timeoutId = window.setTimeout(() => {
+        const current = userCommitSettlementWaiterRef.current;
+        if (current?.promise !== promise) return;
+        userCommitSettlementWaiterRef.current = undefined;
+        completePromise({
+          ok: false,
+          error: new Error("Timed out while saving the user transcript."),
+        });
+      }, USER_COMMIT_SETTLEMENT_TIMEOUT_MS);
+      userCommitSettlementWaiterRef.current = {
+        promise,
+        complete: completePromise,
+        timeoutId,
+      };
+      return promise;
+    },
+    [],
+  );
+
+  const completeUserCommitSettlement = useCallback(
+    (result: SettlementResult, clearPending = true) => {
+      const waiter = userCommitSettlementWaiterRef.current;
+      if (waiter) {
+        window.clearTimeout(waiter.timeoutId);
+        userCommitSettlementWaiterRef.current = undefined;
+        waiter.complete(result);
+      }
+      if (clearPending) {
+        userCommitPendingRef.current = false;
+        setIsUserCommitPending(false);
+      }
+    },
+    [],
+  );
+
+  const waitForUserCommitSettlement = useCallback(() => {
+    if (!userCommitPendingRef.current) {
+      return Promise.resolve<SettlementResult>(SETTLEMENT_SUCCEEDED);
+    }
+    return createUserCommitSettlement();
+  }, [createUserCommitSettlement]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = colorMode;
@@ -472,54 +764,109 @@ export function App() {
     return () => window.cancelAnimationFrame(frame);
   }, [assistantDraft?.text, sessionActive, sessionState, turns, userDraft]);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    componentMountedRef.current = true;
+    return () => {
+      componentMountedRef.current = false;
+      const error = new Error(
+        "The realtime connection closed before pending conversation data was saved.",
+      );
+      completeAssistantSettlement({ ok: false, error }, undefined, true);
+      completeUserCommitSettlement({ ok: false, error });
+      conversationStartedRef.current = false;
+      sessionEstablishedRef.current = false;
+      pendingRuntimeRecoveryRef.current = undefined;
+      if (runtimeRecoveryStabilityTimerRef.current !== undefined) {
+        window.clearTimeout(runtimeRecoveryStabilityTimerRef.current);
+      }
+      runtimeEpochRef.current += 1;
       realtimeRef.current?.disconnect();
       void audioRef.current?.dispose();
+    };
+  }, [completeAssistantSettlement, completeUserCommitSettlement]);
+
+  const tryFinalizeAssistant = useCallback(
+    (responseId: string) => {
+      const runtime = assistantResponsesRef.current.get(responseId);
+      if (
+        !runtime ||
+        runtime.finalized ||
+        runtime.interrupted ||
+        runtime.generationStatus !== "completed" ||
+        !runtime.playbackComplete
+      ) {
+        return;
+      }
+
+      runtime.finalized = true;
+      void waitForAssistantSettlement(responseId);
+      const realtime = realtimeRef.current;
+      if (realtime) {
+        try {
+          realtime.completePlayback(responseId);
+        } catch (error) {
+          completeAssistantSettlement(
+            {
+              ok: false,
+              error:
+                error instanceof Error
+                  ? error
+                  : new Error("Could not send the assistant playback receipt."),
+            },
+            responseId,
+            false,
+          );
+          reportContextualError(readableError(error));
+        }
+      } else {
+        completeAssistantSettlement(
+          {
+            ok: false,
+            error: new Error("Could not send the assistant playback receipt."),
+          },
+          responseId,
+          false,
+        );
+      }
+      audioRef.current?.finalizePlayback(responseId);
+      if (activeResponseIdRef.current === responseId) {
+        activeResponseIdRef.current = undefined;
+      }
+      setIsReconciling(true);
+      setSessionState("processing");
     },
-    [],
+    [
+      completeAssistantSettlement,
+      reportContextualError,
+      waitForAssistantSettlement,
+    ],
   );
 
-  const tryFinalizeAssistant = useCallback((responseId: string) => {
-    const runtime = assistantResponsesRef.current.get(responseId);
-    if (
-      !runtime ||
-      runtime.finalized ||
-      runtime.interrupted ||
-      runtime.generationStatus !== "completed" ||
-      !runtime.playbackComplete
-    ) {
-      return;
-    }
-
-    runtime.finalized = true;
-    const transcript = (runtime.finalTranscript ?? runtime.streamedText).trim();
-    if (transcript) {
-      setTurns((current) => [
-        ...current,
-        {
-          id: runtime.itemId ?? `${responseId}:completed`,
-          responseId,
-          role: "assistant",
-          text: transcript,
-          timestamp: runtime.startedAt,
-        },
-      ]);
-    }
-
-    setAssistantDraft((current) =>
-      current?.responseId === responseId ? null : current,
-    );
-    realtimeRef.current?.completePlayback(responseId);
-    audioRef.current?.finalizePlayback(responseId);
-    assistantResponsesRef.current.delete(responseId);
-    if (activeResponseIdRef.current === responseId) {
-      activeResponseIdRef.current = undefined;
-    }
-  }, []);
-
   const teardownSessionRuntime = useCallback(
-    (disconnectRealtime = true): Promise<void> => {
+    (
+      disconnectRealtime = true,
+      preserveSessionView = false,
+    ): Promise<void> => {
+      const unsettledError = new Error(
+        "The realtime connection closed before pending conversation data was saved.",
+      );
+      completeAssistantSettlement(
+        { ok: false, error: unsettledError },
+        undefined,
+        true,
+      );
+      completeUserCommitSettlement({ ok: false, error: unsettledError });
+      sessionEstablishedRef.current = false;
+      if (runtimeRecoveryStabilityTimerRef.current !== undefined) {
+        window.clearTimeout(runtimeRecoveryStabilityTimerRef.current);
+        runtimeRecoveryStabilityTimerRef.current = undefined;
+      }
+      if (!preserveSessionView) {
+        pendingRuntimeRecoveryRef.current = undefined;
+        runtimeRecoveryConsumedRef.current = false;
+        conversationStartedRef.current = false;
+      }
+      runtimeEpochRef.current += 1;
       const realtime = realtimeRef.current;
       const audio = audioRef.current;
       realtimeRef.current = undefined;
@@ -541,9 +888,16 @@ export function App() {
       setUserDraft("");
       setAssistantDraft(null);
       setIsReconciling(false);
-      setSessionActive(false);
-      setActiveSessionConfig(null);
-      setSessionState("ended");
+      if (preserveSessionView) {
+        setSessionState("connecting");
+      } else {
+        setRuntimeRecoveryFailed(false);
+        messageApi.destroy(SESSION_ERROR_MESSAGE_KEY);
+        setSessionActive(false);
+        setActiveSessionConfig(null);
+        setActiveConversationId(null);
+        setSessionState("ended");
+      }
 
       const disposeAudio = audio?.dispose().catch(() => {
         // State and media tracks are cleared synchronously before AudioContext
@@ -556,15 +910,18 @@ export function App() {
       cleanupPromiseRef.current = cleanup;
       return cleanup;
     },
-    [],
+    [completeAssistantSettlement, completeUserCommitSettlement, messageApi],
   );
 
   const handleServerMessage = useCallback(
-    (message: ServerMessage) => {
+    (message: ServerMessage, context?: RuntimeMessageContext) => {
       switch (message.type) {
         case "session.state":
           if (message.state === "ready" && playbackActiveRef.current) return;
           setSessionState(message.state);
+          if (message.state === "ready") {
+            void refreshConversationHistorySilently();
+          }
           break;
 
         case "transcript.user.delta":
@@ -584,6 +941,8 @@ export function App() {
             ]);
           }
           setUserDraft("");
+          completeUserCommitSettlement(SETTLEMENT_SUCCEEDED);
+          void refreshConversationHistorySilently();
           break;
 
         case "response.started": {
@@ -647,6 +1006,37 @@ export function App() {
           break;
         }
 
+        case "response.persisted": {
+          const runtime = assistantResponsesRef.current.get(message.responseId);
+          const transcript = (
+            runtime?.finalTranscript ?? runtime?.streamedText ?? ""
+          ).trim();
+          if (runtime && transcript) {
+            setTurns((current) => [
+              ...current,
+              {
+                id: runtime.itemId ?? `${message.responseId}:completed`,
+                responseId: message.responseId,
+                role: "assistant",
+                text: transcript,
+                timestamp: runtime.startedAt,
+              },
+            ]);
+          }
+          assistantResponsesRef.current.delete(message.responseId);
+          setAssistantDraft((current) =>
+            current?.responseId === message.responseId ? null : current,
+          );
+          setIsReconciling(false);
+          completeAssistantSettlement(
+            SETTLEMENT_SUCCEEDED,
+            message.responseId,
+            true,
+          );
+          void refreshConversationHistorySilently();
+          break;
+        }
+
         case "response.reconciled": {
           const runtime = assistantResponsesRef.current.get(message.responseId);
           const transcript = message.transcript.trim();
@@ -688,34 +1078,490 @@ export function App() {
             current?.responseId === message.responseId ? null : current,
           );
           setIsReconciling(false);
+          completeAssistantSettlement(
+            SETTLEMENT_SUCCEEDED,
+            message.responseId,
+            true,
+          );
+          void refreshConversationHistorySilently();
           break;
         }
 
-        case "error":
+        case "error": {
           if (message.code === "PLAYBACK_BACKPRESSURE") {
             const responseId = activeResponseIdRef.current;
             if (responseId) {
+              void waitForAssistantSettlement(responseId);
               const runtime = assistantResponsesRef.current.get(responseId);
-              if (runtime) runtime.interrupted = true;
+              if (runtime) {
+                runtime.interrupted = true;
+                runtime.interruptionSafePlayedMs = 0;
+                runtime.interruptionReceiptSent = true;
+              }
               audioRef.current?.interruptPlayback(responseId);
               playbackActiveRef.current = false;
               setAssistantDraft(null);
               setIsReconciling(true);
             }
           }
-          setErrorMessage(readableServerError(message.code, message.message));
+          if (message.code === "UNKNOWN_RESPONSE") {
+            completeAssistantSettlement(
+              { ok: false, error: new Error(message.message) },
+              undefined,
+              true,
+            );
+          }
+          if (message.code === "RECORDING_TOO_SHORT") {
+            completeUserCommitSettlement(SETTLEMENT_SUCCEEDED);
+          } else if (message.code === "TRANSCRIPTION_FAILED") {
+            completeUserCommitSettlement({
+              ok: false,
+              error: new Error(message.message),
+            });
+          }
+          const displayError = readableServerError(
+            message.code,
+            message.message,
+          );
+          const action = selectRealtimeErrorAction({
+            conversationStarted: conversationStartedRef.current,
+            recoverable: message.recoverable,
+          });
+          if (action === "show_launch_error") {
+            setErrorMessage(displayError);
+          } else {
+            showSessionError(displayError);
+          }
           if (!message.recoverable) {
-            void teardownSessionRuntime();
+            const settlementError = new Error(message.message);
+            completeAssistantSettlement(
+              { ok: false, error: settlementError },
+              undefined,
+              true,
+            );
+            completeUserCommitSettlement({
+              ok: false,
+              error: settlementError,
+            });
+            if (action === "reconnect_session") {
+              const queued = context
+                ? queueRuntimeRecovery({
+                    ...context,
+                    error: displayError,
+                    notify: false,
+                  })
+                : false;
+              if (!queued) {
+                // This conversation has already been usable, so even a failed
+                // automatic rebuild must not eject the learner to the launcher.
+                // Keep the durable transcript visible and offer manual retry.
+                void teardownSessionRuntime(true, true);
+                setRuntimeRecoveryFailed(true);
+                setSessionState("ended");
+              }
+            } else {
+              void teardownSessionRuntime();
+            }
           }
           break;
+        }
 
         case "session.ready":
+          conversationStartedRef.current = true;
+          sessionEstablishedRef.current = true;
+          setRuntimeRecoveryFailed(false);
           setSessionState("ready");
           break;
       }
     },
-    [teardownSessionRuntime, tryFinalizeAssistant],
+    [
+      refreshConversationHistorySilently,
+      completeAssistantSettlement,
+      completeUserCommitSettlement,
+      queueRuntimeRecovery,
+      showSessionError,
+      teardownSessionRuntime,
+      tryFinalizeAssistant,
+      waitForAssistantSettlement,
+    ],
   );
+
+  const interruptActivePlaybackAndWait = useCallback(
+    (): Promise<SettlementResult> => {
+    const responseId =
+      activeResponseIdRef.current ?? pendingAssistantResponseIdRef.current;
+    const existing = assistantSettlementWaiterRef.current;
+    if (!responseId) {
+      return existing?.promise ?? Promise.resolve(SETTLEMENT_SUCCEEDED);
+    }
+    if (existing?.responseId === responseId) return existing.promise;
+
+    const completion = waitForAssistantSettlement(responseId);
+    const runtime = assistantResponsesRef.current.get(responseId);
+    if (runtime?.finalized || runtime?.interruptionReceiptSent) {
+      return completion;
+    }
+
+    if (runtime) runtime.interrupted = true;
+    const safePlayedMs =
+      runtime?.interruptionSafePlayedMs ??
+      audioRef.current?.interruptPlayback(responseId).safePlayedMs ??
+      0;
+    if (runtime) runtime.interruptionSafePlayedMs = safePlayedMs;
+    playbackActiveRef.current = false;
+    setAssistantDraft(null);
+    setIsReconciling(true);
+    setSessionState("processing");
+
+    const realtime = realtimeRef.current;
+    if (!realtime) {
+      completeAssistantSettlement(
+        {
+          ok: false,
+          error: new Error("Could not send the assistant playback receipt."),
+        },
+        responseId,
+        true,
+      );
+      return completion;
+    }
+    try {
+      realtime.interruptPlayback(responseId, safePlayedMs);
+      if (runtime) runtime.interruptionReceiptSent = true;
+    } catch (error) {
+      completeAssistantSettlement(
+        {
+          ok: false,
+          error:
+            error instanceof Error
+              ? error
+              : new Error("Could not send the assistant playback receipt."),
+        },
+        responseId,
+        false,
+      );
+      reportContextualError(readableError(error));
+    }
+    return completion;
+    },
+    [
+      completeAssistantSettlement,
+      reportContextualError,
+      waitForAssistantSettlement,
+    ],
+  );
+
+  const settleSessionBeforeTransition = useCallback(async (): Promise<void> => {
+    requireSuccessfulSettlement(await interruptActivePlaybackAndWait());
+    requireSuccessfulSettlement(await waitForUserCommitSettlement());
+    // The committed user turn can create a response while its transcript is
+    // being persisted. Re-check after that user-side acknowledgement.
+    requireSuccessfulSettlement(await interruptActivePlaybackAndWait());
+  }, [interruptActivePlaybackAndWait, waitForUserCommitSettlement]);
+
+  const activateConversation = useCallback(async (
+    conversation: ConversationDetail,
+  ): Promise<void> => {
+    if (!componentMountedRef.current) {
+      throw new Error("Session activation was superseded.");
+    }
+    const preserveSessionViewOnFailure = conversationStartedRef.current;
+    const runtimeEpoch = runtimeEpochRef.current + 1;
+    runtimeEpochRef.current = runtimeEpoch;
+    sessionEstablishedRef.current = false;
+    const isCurrentRuntime = () =>
+      componentMountedRef.current && runtimeEpochRef.current === runtimeEpoch;
+    let realtime: RealtimeClient | undefined;
+    const sessionConfig: ActiveSessionConfig = {
+      persona: conversation.persona,
+      scenario: conversation.scenario,
+      difficulty: conversation.difficulty,
+    };
+
+    setActiveSessionConfig(sessionConfig);
+    setActiveConversationId(conversation.id);
+    setErrorMessage(null);
+    setTurns(
+      conversation.messages.map((message) => ({
+        id: message.id,
+        role: message.role,
+        text: message.text,
+        timestamp: new Date(message.createdAt),
+        interrupted: message.interrupted,
+      })),
+    );
+    setUserDraft("");
+    setAssistantDraft(null);
+    setIsReconciling(false);
+    assistantResponsesRef.current.clear();
+    activeResponseIdRef.current = undefined;
+    playbackActiveRef.current = false;
+    followLatestRef.current = true;
+
+    await cleanupPromiseRef.current;
+    if (!isCurrentRuntime()) {
+      throw new Error("Session activation was superseded.");
+    }
+
+    const audio = new BrowserAudioEngine({
+      onInputPcm: (buffer) => {
+        if (
+          !isCurrentRuntime() ||
+          !realtime ||
+          realtimeRef.current !== realtime
+        ) {
+          return;
+        }
+        try {
+          realtime.sendAudio(buffer);
+        } catch (error) {
+          reportContextualError(readableError(error));
+          void audio.cancelCapture();
+          recordingRef.current = false;
+          setIsRecording(false);
+        }
+      },
+      onInputLevel: (level) => {
+        if (isCurrentRuntime()) setInputLevel(level);
+      },
+      onPlaybackStarted: (responseId) => {
+        if (!isCurrentRuntime()) return;
+        activeResponseIdRef.current = responseId;
+        playbackActiveRef.current = true;
+        setSessionState("speaking");
+      },
+      onPlaybackDrained: (responseId) => {
+        if (!isCurrentRuntime()) return;
+        playbackActiveRef.current = false;
+        const runtime = assistantResponsesRef.current.get(responseId);
+        if (runtime) runtime.playbackComplete = true;
+        tryFinalizeAssistant(responseId);
+      },
+      onError: (error) => {
+        if (isCurrentRuntime()) reportContextualError(readableError(error));
+      },
+    });
+    audioRef.current = audio;
+
+    try {
+      await audio.prepare();
+      if (!isCurrentRuntime()) {
+        throw new Error("Session activation was superseded.");
+      }
+      audio.setVolume(muted ? 0 : volume);
+
+      realtime = new RealtimeClient({
+        onMessage: (message) => {
+          if (isCurrentRuntime() && realtimeRef.current === realtime) {
+            handleServerMessage(message, {
+              conversationId: conversation.id,
+              runtimeEpoch,
+            });
+          }
+        },
+        onAudio: (responseId, buffer) => {
+          if (!isCurrentRuntime() || realtimeRef.current !== realtime) return;
+          void audio.enqueuePcm24(responseId, buffer).catch((error: unknown) => {
+            if (isCurrentRuntime()) {
+              reportContextualError(readableError(error));
+            }
+          });
+        },
+        onMalformedMessage: () => {
+          if (!isCurrentRuntime() || realtimeRef.current !== realtime) return;
+          reportContextualError({
+            en: "The server returned an unrecognized realtime message.",
+            zh: "服务端返回了无法识别的实时消息。",
+          });
+        },
+        onClose: (event) => {
+          if (!isCurrentRuntime() || realtimeRef.current !== realtime) return;
+          void refreshConversationHistorySilently();
+          const closeError: LocalizedText = {
+            en: `The realtime connection closed unexpectedly (${event.code}).`,
+            zh: `实时连接意外关闭（${event.code}）。`,
+          };
+          if (conversationStartedRef.current) {
+            if (sessionEstablishedRef.current) {
+              const unsettledError = new Error(
+                "The realtime connection closed before pending conversation data was saved.",
+              );
+              // Navigation and session-ending flows may already be waiting for
+              // persistence acknowledgements. Wake them immediately instead of
+              // leaving the UI blocked until their 32-second safety timeout.
+              completeAssistantSettlement(
+                { ok: false, error: unsettledError },
+                undefined,
+                true,
+              );
+              completeUserCommitSettlement({
+                ok: false,
+                error: unsettledError,
+              });
+            }
+            const queued = queueRuntimeRecovery({
+              conversationId: conversation.id,
+              runtimeEpoch,
+              error: closeError,
+            });
+            if (!queued) {
+              showSessionError(closeError);
+              void teardownSessionRuntime(false, true);
+              setRuntimeRecoveryFailed(true);
+              setSessionState("ended");
+            }
+          } else {
+            if (event.code !== 1000) setErrorMessage(closeError);
+            void teardownSessionRuntime(false);
+          }
+        },
+      });
+      realtimeRef.current = realtime;
+
+      await realtime.connect({
+        conversationId: conversation.id,
+        maxHistoryTurns: 20,
+      });
+      if (!isCurrentRuntime() || realtimeRef.current !== realtime) {
+        throw new Error("Session activation was superseded.");
+      }
+
+      conversationStartedRef.current = true;
+      sessionEstablishedRef.current = true;
+      setRuntimeRecoveryFailed(false);
+      setSessionActive(true);
+      setSessionState("ready");
+    } catch (error) {
+      if (isCurrentRuntime()) {
+        await teardownSessionRuntime(true, preserveSessionViewOnFailure);
+        if (preserveSessionViewOnFailure) {
+          setRuntimeRecoveryFailed(true);
+          setSessionState("ended");
+        }
+      } else {
+        realtime?.disconnect();
+        await audio.dispose().catch(() => undefined);
+      }
+      throw error;
+    }
+  }, [
+    completeAssistantSettlement,
+    completeUserCommitSettlement,
+    handleServerMessage,
+    muted,
+    queueRuntimeRecovery,
+    refreshConversationHistorySilently,
+    reportContextualError,
+    showSessionError,
+    teardownSessionRuntime,
+    tryFinalizeAssistant,
+    volume,
+  ]);
+
+  const runPendingRuntimeRecovery = useCallback(async (): Promise<void> => {
+    const request = pendingRuntimeRecoveryRef.current;
+    if (!request || transitionInProgressRef.current) return;
+
+    if (runtimeEpochRef.current !== request.runtimeEpoch) {
+      pendingRuntimeRecoveryRef.current = undefined;
+      runtimeRecoveryConsumedRef.current = false;
+      messageApi.destroy(SESSION_ERROR_MESSAGE_KEY);
+      return;
+    }
+
+    pendingRuntimeRecoveryRef.current = undefined;
+    transitionInProgressRef.current = true;
+    setIsStarting(true);
+    setSessionState("connecting");
+    let recoveryEpoch: number | undefined;
+    let activationStarted = false;
+    try {
+      // The failed upstream may contain a user audio item or assistant output
+      // that was never authoritative. Rebuild from finalized SQLite text
+      // instead of continuing with that uncertain Qwen context.
+      await teardownSessionRuntime(true, true);
+      recoveryEpoch = runtimeEpochRef.current;
+      const conversation = await loadConversation(request.conversationId);
+      if (!componentMountedRef.current) return;
+      if (runtimeEpochRef.current !== recoveryEpoch) {
+        if (
+          conversationStartedRef.current &&
+          !sessionEstablishedRef.current
+        ) {
+          showSessionError(request.error);
+          setRuntimeRecoveryFailed(true);
+          setSessionState("ended");
+        }
+        return;
+      }
+      activationStarted = true;
+      await activateConversation(conversation);
+      const recoveredEpoch = runtimeEpochRef.current;
+      runtimeRecoveryStabilityTimerRef.current = window.setTimeout(() => {
+        if (
+          runtimeEpochRef.current === recoveredEpoch &&
+          sessionEstablishedRef.current
+        ) {
+          runtimeRecoveryConsumedRef.current = false;
+        }
+        runtimeRecoveryStabilityTimerRef.current = undefined;
+      }, RUNTIME_RECOVERY_STABILITY_MS);
+    } catch (error) {
+      if (
+        !componentMountedRef.current ||
+        (!activationStarted &&
+          recoveryEpoch !== undefined &&
+          runtimeEpochRef.current !== recoveryEpoch)
+      ) {
+        return;
+      }
+      // This conversation was already established before recovery began.
+      // Preserve its durable view even when the replacement transport cannot
+      // initialize; the composer offers an explicit manual retry below.
+      showSessionError(readableError(error));
+      setRuntimeRecoveryFailed(true);
+      setSessionState("ended");
+    } finally {
+      transitionInProgressRef.current = false;
+      if (componentMountedRef.current) setIsStarting(false);
+      if (
+        componentMountedRef.current &&
+        pendingRuntimeRecoveryRef.current
+      ) {
+        runPendingRuntimeRecoveryRef.current();
+      }
+    }
+  }, [
+    activateConversation,
+    loadConversation,
+    messageApi,
+    showSessionError,
+    teardownSessionRuntime,
+  ]);
+  useEffect(() => {
+    runPendingRuntimeRecoveryRef.current = () => {
+      void runPendingRuntimeRecovery();
+    };
+    return () => {
+      runPendingRuntimeRecoveryRef.current = () => undefined;
+    };
+  }, [runPendingRuntimeRecovery]);
+
+  const retryRuntimeRecovery = useCallback(() => {
+    if (!activeConversationId || transitionInProgressRef.current) return;
+
+    runtimeRecoveryConsumedRef.current = false;
+    const queued = queueRuntimeRecovery({
+      conversationId: activeConversationId,
+      runtimeEpoch: runtimeEpochRef.current,
+      error: {
+        en: "The voice connection is unavailable.",
+        zh: "语音连接当前不可用。",
+      },
+      notify: false,
+    });
+    if (queued) messageApi.destroy(SESSION_ERROR_MESSAGE_KEY);
+  }, [activeConversationId, messageApi, queueRuntimeRecovery]);
 
   const startSession = async () => {
     if (!selectedPersona || !selectedScenario) {
@@ -743,123 +1589,125 @@ export function App() {
       });
       return;
     }
+    if (transitionInProgressRef.current) return;
+
+    transitionInProgressRef.current = true;
     setIsStarting(true);
-    setActiveSessionConfig(sessionConfig);
-    setErrorMessage(null);
-    setTurns([]);
-    setUserDraft("");
-    setAssistantDraft(null);
-    setIsReconciling(false);
-    assistantResponsesRef.current.clear();
-    activeResponseIdRef.current = undefined;
-    playbackActiveRef.current = false;
-    followLatestRef.current = true;
-
-    await cleanupPromiseRef.current;
-
-    const audio = new BrowserAudioEngine({
-      onInputPcm: (buffer) => {
-        try {
-          realtimeRef.current?.sendAudio(buffer);
-        } catch (error) {
-          setErrorMessage(readableError(error));
-          void audioRef.current?.cancelCapture();
-          recordingRef.current = false;
-          setIsRecording(false);
-        }
-      },
-      onInputLevel: (level) => setInputLevel(level),
-      onPlaybackStarted: (responseId) => {
-        activeResponseIdRef.current = responseId;
-        playbackActiveRef.current = true;
-        setSessionState("speaking");
-      },
-      onPlaybackDrained: (responseId) => {
-        playbackActiveRef.current = false;
-        const runtime = assistantResponsesRef.current.get(responseId);
-        if (runtime) runtime.playbackComplete = true;
-        tryFinalizeAssistant(responseId);
-      },
-      onError: (error) => setErrorMessage(readableError(error)),
-    });
-    audioRef.current = audio;
-
+    messageApi.destroy(SESSION_ERROR_MESSAGE_KEY);
     try {
-      await audio.prepare();
-      audio.setVolume(muted ? 0 : volume);
-
-      const realtime = new RealtimeClient({
-        onMessage: handleServerMessage,
-        onAudio: (responseId, buffer) => {
-          void audio.enqueuePcm24(responseId, buffer).catch((error: unknown) => {
-            setErrorMessage(readableError(error));
-          });
-        },
-        onMalformedMessage: () => {
-          setErrorMessage({
-            en: "The server returned an unrecognized realtime message.",
-            zh: "服务端返回了无法识别的实时消息。",
-          });
-        },
-        onClose: (event) => {
-          void teardownSessionRuntime(false);
-          if (event.code !== 1000) {
-            setErrorMessage({
-              en: `The realtime connection closed unexpectedly (${event.code}).`,
-              zh: `实时连接意外关闭（${event.code}）。`,
-            });
-          }
-        },
+      const conversation = await conversationHistory.create({
+        ...sessionConfig,
+        locale,
       });
-      realtimeRef.current = realtime;
-
-      await realtime.connect({
-        instructions,
-        voice: sessionConfig.persona.voice,
-        maxHistoryTurns: 20,
-      });
-
-      setSessionActive(true);
-      setSessionState("ready");
+      await activateConversation(conversation);
     } catch (error) {
-      await teardownSessionRuntime();
-      setErrorMessage(readableError(error));
+      reportContextualError(readableError(error));
     } finally {
+      transitionInProgressRef.current = false;
       setIsStarting(false);
+      runPendingRuntimeRecoveryRef.current();
+    }
+  };
+
+  const resumeConversation = async (conversationId: string) => {
+    setHistoryMobileOpen(false);
+    if (sessionActive && conversationId === activeConversationId) return;
+    if (transitionInProgressRef.current) return;
+
+    transitionInProgressRef.current = true;
+    setIsStarting(true);
+    setErrorMessage(null);
+    messageApi.destroy(SESSION_ERROR_MESSAGE_KEY);
+    try {
+      if (sessionActive) {
+        await pressToTalk.cancelActiveGesture();
+        await submissionCompletionRef.current;
+        if (recordingRef.current) await cancelRecording();
+        await settleSessionBeforeTransition();
+        await teardownSessionRuntime();
+      }
+      const conversation = await conversationHistory.load(conversationId);
+      await activateConversation(conversation);
+    } catch (error) {
+      reportContextualError(readableError(error));
+    } finally {
+      transitionInProgressRef.current = false;
+      setIsStarting(false);
+      runPendingRuntimeRecoveryRef.current();
+    }
+  };
+
+  const showNewConversation = async () => {
+    setHistoryMobileOpen(false);
+    if (transitionInProgressRef.current) return;
+    transitionInProgressRef.current = true;
+    setIsStarting(true);
+    messageApi.destroy(SESSION_ERROR_MESSAGE_KEY);
+    try {
+      if (sessionActive) {
+        await pressToTalk.cancelActiveGesture();
+        await submissionCompletionRef.current;
+        if (recordingRef.current) await cancelRecording();
+        await settleSessionBeforeTransition();
+        await teardownSessionRuntime();
+      }
+      await refreshConversationHistorySilently();
+      setErrorMessage(null);
+      setTurns([]);
+    } catch (error) {
+      reportContextualError(readableError(error));
+    } finally {
+      transitionInProgressRef.current = false;
+      setIsStarting(false);
+      runPendingRuntimeRecoveryRef.current();
     }
   };
 
   const beginRecording = useCallback(async (): Promise<boolean> => {
+    const runtimeEpoch = runtimeEpochRef.current;
+    const audio = audioRef.current;
+    const realtime = realtimeRef.current;
+    const isCurrentRuntime = () =>
+      runtimeEpochRef.current === runtimeEpoch &&
+      audioRef.current === audio &&
+      realtimeRef.current === realtime;
     if (
       !sessionActive ||
+      transitionInProgressRef.current ||
+      userCommitPendingRef.current ||
       recordingRef.current ||
       submissionRef.current ||
-      !audioRef.current ||
-      !realtimeRef.current
+      !audio ||
+      !realtime
     ) {
       return false;
+    }
+    runtimeRecoveryConsumedRef.current = false;
+    if (runtimeRecoveryStabilityTimerRef.current !== undefined) {
+      window.clearTimeout(runtimeRecoveryStabilityTimerRef.current);
+      runtimeRecoveryStabilityTimerRef.current = undefined;
     }
     setErrorMessage(null);
 
     const activeResponseId = activeResponseIdRef.current;
     if (activeResponseId) {
-      const runtime = assistantResponsesRef.current.get(activeResponseId);
-      if (runtime) runtime.interrupted = true;
-      const interruption = audioRef.current.interruptPlayback(activeResponseId);
-      playbackActiveRef.current = false;
-      realtimeRef.current.interruptPlayback(
-        activeResponseId,
-        interruption.safePlayedMs,
-      );
-      setAssistantDraft(null);
-      setIsReconciling(true);
+      void interruptActivePlaybackAndWait();
     }
 
     let inputStarted = false;
     try {
-      realtimeRef.current.startInput();
+      realtime.startInput();
       inputStarted = true;
-      await audioRef.current.startCapture();
+      await audio.startCapture();
+      if (!isCurrentRuntime()) {
+        await audio.cancelCapture().catch(() => undefined);
+        try {
+          realtime.clearInput();
+        } catch {
+          // A superseded realtime connection is usually already closed.
+        }
+        return false;
+      }
       recordingRef.current = true;
       recordingStartedAtRef.current = performance.now();
       setRecordingDuration(0);
@@ -869,53 +1717,125 @@ export function App() {
     } catch (error) {
       if (inputStarted) {
         try {
-          realtimeRef.current?.clearInput();
+          realtime.clearInput();
         } catch {
           // The realtime connection may close while microphone setup fails.
         }
       }
-      setErrorMessage(readableError(error));
+      if (isCurrentRuntime()) reportContextualError(readableError(error));
       return false;
     }
-  }, [sessionActive]);
+  }, [interruptActivePlaybackAndWait, reportContextualError, sessionActive]);
 
   const submitRecording = useCallback(async (): Promise<void> => {
-    if (!recordingRef.current || submissionRef.current) return;
+    const runtimeEpoch = runtimeEpochRef.current;
+    const audio = audioRef.current;
+    const realtime = realtimeRef.current;
+    const isCurrentRuntime = () =>
+      runtimeEpochRef.current === runtimeEpoch &&
+      audioRef.current === audio &&
+      realtimeRef.current === realtime;
+    if (
+      !recordingRef.current ||
+      submissionRef.current ||
+      !audio ||
+      !realtime
+    ) {
+      return;
+    }
     submissionRef.current = true;
     setIsSubmitting(true);
+    let completeSubmission: () => void = () => undefined;
+    submissionCompletionRef.current = new Promise<void>((resolve) => {
+      completeSubmission = resolve;
+    });
 
     try {
-      await audioRef.current?.finishCapture();
+      await audio.finishCapture();
+      if (!isCurrentRuntime()) {
+        try {
+          realtime.clearInput();
+        } catch {
+          // A superseded realtime connection is usually already closed.
+        }
+        return;
+      }
       recordingRef.current = false;
       setIsRecording(false);
       setRecordingDuration(0);
       setInputLevel(0);
-      realtimeRef.current?.commitInput();
+      void createUserCommitSettlement();
+      try {
+        realtime.commitInput();
+      } catch (error) {
+        completeUserCommitSettlement(
+          {
+            ok: false,
+            error:
+              error instanceof Error
+                ? error
+                : new Error("Realtime WebSocket is not open."),
+          },
+          true,
+        );
+        throw error;
+      }
       setSessionState("processing");
     } catch (error) {
-      recordingRef.current = false;
-      setIsRecording(false);
-      setInputLevel(0);
       try {
-        realtimeRef.current?.clearInput();
+        realtime.clearInput();
       } catch {
         // Cleanup is best effort if the realtime connection already failed.
       }
-      setErrorMessage(readableError(error));
+      if (isCurrentRuntime()) {
+        recordingRef.current = false;
+        setIsRecording(false);
+        setInputLevel(0);
+        reportContextualError(readableError(error));
+      }
     } finally {
-      submissionRef.current = false;
-      setIsSubmitting(false);
+      if (isCurrentRuntime()) {
+        submissionRef.current = false;
+        setIsSubmitting(false);
+      }
+      completeSubmission();
     }
-  }, []);
+  }, [
+    completeUserCommitSettlement,
+    createUserCommitSettlement,
+    reportContextualError,
+  ]);
 
   const cancelRecording = useCallback(async (): Promise<void> => {
-    if (!recordingRef.current || submissionRef.current) return;
+    const runtimeEpoch = runtimeEpochRef.current;
+    const audio = audioRef.current;
+    const realtime = realtimeRef.current;
+    const isCurrentRuntime = () =>
+      runtimeEpochRef.current === runtimeEpoch &&
+      audioRef.current === audio &&
+      realtimeRef.current === realtime;
+    if (
+      !recordingRef.current ||
+      submissionRef.current ||
+      !audio ||
+      !realtime
+    ) {
+      return;
+    }
     submissionRef.current = true;
     setIsSubmitting(true);
 
     try {
-      await audioRef.current?.cancelCapture();
-      realtimeRef.current?.clearInput();
+      await audio.cancelCapture();
+      if (!isCurrentRuntime()) {
+        try {
+          realtime.clearInput();
+        } catch {
+          // A superseded realtime connection is usually already closed.
+        }
+        return;
+      }
+      realtime.clearInput();
       recordingRef.current = false;
       setIsRecording(false);
       setRecordingDuration(0);
@@ -923,28 +1843,23 @@ export function App() {
       setInputLevel(0);
       setSessionState(isReconciling ? "processing" : "ready");
     } catch (error) {
-      setErrorMessage(readableError(error));
+      if (isCurrentRuntime()) reportContextualError(readableError(error));
     } finally {
-      submissionRef.current = false;
-      setIsSubmitting(false);
+      if (isCurrentRuntime()) {
+        submissionRef.current = false;
+        setIsSubmitting(false);
+      }
     }
-  }, [isReconciling]);
+  }, [isReconciling, reportContextualError]);
 
   const stopResponse = useCallback(() => {
     const responseId = activeResponseIdRef.current;
-    if (responseId) {
-      const runtime = assistantResponsesRef.current.get(responseId);
-      if (runtime) runtime.interrupted = true;
-      const interruption = audioRef.current?.interruptPlayback(responseId) ?? {
-        responseId,
-        safePlayedMs: 0,
-      };
-      playbackActiveRef.current = false;
-      realtimeRef.current?.interruptPlayback(
-        responseId,
-        interruption.safePlayedMs,
-      );
-      setIsReconciling(true);
+    if (
+      responseId ||
+      pendingAssistantResponseIdRef.current ||
+      assistantSettlementWaiterRef.current
+    ) {
+      void interruptActivePlaybackAndWait();
     } else {
       audioRef.current?.clearPlayback();
       realtimeRef.current?.cancelResponse();
@@ -952,20 +1867,38 @@ export function App() {
     }
     setAssistantDraft(null);
     setSessionState("processing");
-  }, []);
+  }, [interruptActivePlaybackAndWait]);
 
   const pressToTalk = usePressToTalk({
-    enabled: sessionActive && !isSubmitting,
+    enabled:
+      sessionActive &&
+      !isSubmitting &&
+      !isStarting &&
+      !isUserCommitPending &&
+      !runtimeRecoveryFailed,
     start: beginRecording,
     submit: submitRecording,
     cancel: cancelRecording,
   });
 
   const endSession = async () => {
-    await pressToTalk.cancelActiveGesture();
-    if (recordingRef.current) await cancelRecording();
-
-    await teardownSessionRuntime();
+    if (transitionInProgressRef.current) return;
+    transitionInProgressRef.current = true;
+    setIsStarting(true);
+    try {
+      await pressToTalk.cancelActiveGesture();
+      await submissionCompletionRef.current;
+      if (recordingRef.current) await cancelRecording();
+      await settleSessionBeforeTransition();
+      await teardownSessionRuntime();
+      await refreshConversationHistorySilently();
+    } catch (error) {
+      reportContextualError(readableError(error));
+    } finally {
+      transitionInProgressRef.current = false;
+      setIsStarting(false);
+      runPendingRuntimeRecoveryRef.current();
+    }
   };
 
   const handleConversationScroll = () => {
@@ -1005,16 +1938,24 @@ export function App() {
     !isReconciling &&
     (sessionState === "processing" || sessionState === "speaking");
   const gestureActive = pressToTalk.visualState.pressed || isRecording;
-  const holdButtonLabel = pressToTalk.visualState.cancelling
-    ? t({ en: "Release to cancel", zh: "松开取消" })
-    : gestureActive
-      ? t({ en: "Release to send", zh: "松开发送" })
-      : sessionState === "speaking"
-        ? t({
-            en: "Hold to interrupt and talk",
-            zh: "按住打断并说话",
-          })
-        : t({ en: "Hold to talk", zh: "按住说话" });
+  const isRecoveringConnection =
+    sessionActive && isStarting && sessionState === "connecting";
+  const holdButtonLabel = runtimeRecoveryFailed
+    ? t({ en: "Retry voice connection", zh: "重试语音连接" })
+    : isRecoveringConnection
+      ? t({ en: "Reconnecting…", zh: "正在重新连接…" })
+      : isUserCommitPending
+        ? t({ en: "Saving your transcript…", zh: "正在保存语音转写…" })
+        : pressToTalk.visualState.cancelling
+          ? t({ en: "Release to cancel", zh: "松开取消" })
+          : gestureActive
+            ? t({ en: "Release to send", zh: "松开发送" })
+            : sessionState === "speaking"
+              ? t({
+                  en: "Hold to interrupt and talk",
+                  zh: "按住打断并说话",
+                })
+              : t({ en: "Hold to talk", zh: "按住说话" });
   const errorMessageText = resolveUiError(errorMessage);
   const launchError =
     errorMessageText ??
@@ -1107,26 +2048,43 @@ export function App() {
       }}
     >
       <AntApp className="application-root">
-        {!sessionActive ? (
-          appMode === "admin" ? (
-            <AdminConsole
-              catalog={rolePlayCatalog.catalog}
-              busy={rolePlayCatalog.busy}
-              error={
-                rolePlayCatalog.mutationError ??
-                rolePlayCatalog.loadError ??
-                undefined
-              }
-              themeButton={themeButton}
-              onExit={() => setAppMode("learner")}
-              onCreatePersona={rolePlayCatalog.createPersona}
-              onUpdatePersona={rolePlayCatalog.updatePersona}
-              onDeletePersona={rolePlayCatalog.deletePersona}
-              onCreateScenario={rolePlayCatalog.createScenario}
-              onUpdateScenario={rolePlayCatalog.updateScenario}
-              onDeleteScenario={rolePlayCatalog.deleteScenario}
+        {messageContextHolder}
+        {!sessionActive && appMode === "admin" ? (
+          <AdminConsole
+            catalog={rolePlayCatalog.catalog}
+            busy={rolePlayCatalog.busy}
+            error={
+              rolePlayCatalog.mutationError ??
+              rolePlayCatalog.loadError ??
+              undefined
+            }
+            themeButton={themeButton}
+            onExit={() => setAppMode("learner")}
+            onCreatePersona={rolePlayCatalog.createPersona}
+            onUpdatePersona={rolePlayCatalog.updatePersona}
+            onDeletePersona={rolePlayCatalog.deletePersona}
+            onCreateScenario={rolePlayCatalog.createScenario}
+            onUpdateScenario={rolePlayCatalog.updateScenario}
+            onDeleteScenario={rolePlayCatalog.deleteScenario}
+          />
+        ) : (
+          <div className="learner-workspace">
+            <ConversationHistoryNavigation
+              conversations={conversationHistory.conversations}
+              activeConversationId={activeConversationId}
+              loading={conversationHistory.loading}
+              busy={conversationHistory.busy || isStarting}
+              error={conversationHistory.error}
+              mobileOpen={historyMobileOpen}
+              onMobileClose={() => setHistoryMobileOpen(false)}
+              onSelect={resumeConversation}
+              onNew={showNewConversation}
+              onRetry={conversationHistory.refresh}
             />
-          ) : (
+            <div
+              className={`learner-workspace-main${sessionActive ? " has-active-session" : ""}`}
+            >
+              {!sessionActive ? (
             <LearnerLaunchPanel
               catalog={rolePlayCatalog.catalog}
               loading={rolePlayCatalog.loading}
@@ -1145,14 +2103,51 @@ export function App() {
               onStart={startSession}
               isStarting={isStarting}
               startDisabled={!canStart}
+              historyButton={
+                <Tooltip
+                  title={t({
+                    en: "Open conversation history",
+                    zh: "打开历史会话",
+                  })}
+                >
+                  <Button
+                    className="mobile-history-trigger"
+                    type="text"
+                    shape="circle"
+                    icon={<HistoryOutlined />}
+                    aria-label={t({
+                      en: "Open conversation history",
+                      zh: "打开历史会话",
+                    })}
+                    onClick={() => setHistoryMobileOpen(true)}
+                  />
+                </Tooltip>
+              }
               themeButton={themeButton}
               onOpenAdmin={() => setAppMode("admin")}
             />
-          )
-        ) : (
+              ) : (
           <main className="chat-shell">
             <header className="chat-header">
               <div className="persona-summary">
+                <Tooltip
+                  title={t({
+                    en: "Open conversation history",
+                    zh: "打开历史会话",
+                  })}
+                >
+                  <Button
+                    className="mobile-history-trigger"
+                    type="text"
+                    shape="circle"
+                    icon={<HistoryOutlined />}
+                    aria-label={t({
+                      en: "Open conversation history",
+                      zh: "打开历史会话",
+                    })}
+                    onClick={() => setHistoryMobileOpen(true)}
+                  />
+                </Tooltip>
                 <Avatar
                   size={42}
                   icon={<CustomerServiceOutlined />}
@@ -1236,17 +2231,6 @@ export function App() {
               aria-label={t({ en: "Conversation history", zh: "对话记录" })}
             >
               <div className="conversation-list">
-                {errorMessageText && (
-                  <Alert
-                    className="session-alert"
-                    type="error"
-                    showIcon
-                    closable
-                    title={errorMessageText}
-                    onClose={() => setErrorMessage(null)}
-                  />
-                )}
-
                 {turns.length === 0 && !userDraft && !assistantDraft && (
                   <Empty
                     className="empty-conversation"
@@ -1312,24 +2296,46 @@ export function App() {
                 size="large"
                 block
                 danger={pressToTalk.visualState.cancelling}
-                icon={<AudioFilled />}
-                loading={isSubmitting}
-                disabled={!sessionActive || isSubmitting}
+                icon={
+                  runtimeRecoveryFailed || isRecoveringConnection ? (
+                    <ReloadOutlined />
+                  ) : (
+                    <AudioFilled />
+                  )
+                }
+                loading={isSubmitting || isRecoveringConnection}
+                disabled={
+                  !sessionActive ||
+                  isSubmitting ||
+                  isStarting ||
+                  isUserCommitPending
+                }
                 aria-label={holdButtonLabel}
                 aria-pressed={gestureActive}
                 data-speaking={sessionState === "speaking" || undefined}
                 {...pressToTalk.bindings}
+                onClick={
+                  runtimeRecoveryFailed ? retryRuntimeRecovery : undefined
+                }
               >
                 {holdButtonLabel}
               </Button>
               <Typography.Text type="secondary" className="gesture-hint">
-                {t({
-                  en: "Hold to record · Release to send · Slide up to cancel",
-                  zh: "按住录音 · 松开发送 · 上滑取消",
-                })}
+                {runtimeRecoveryFailed
+                  ? t({
+                      en: "The conversation is kept. Retry to continue speaking.",
+                      zh: "当前会话已保留，重试连接后可继续交谈。",
+                    })
+                  : t({
+                      en: "Hold to record · Release to send · Slide up to cancel",
+                      zh: "按住录音 · 松开发送 · 上滑取消",
+                    })}
               </Typography.Text>
             </footer>
           </main>
+              )}
+            </div>
+          </div>
         )}
       </AntApp>
     </ConfigProvider>

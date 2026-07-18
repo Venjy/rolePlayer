@@ -137,11 +137,13 @@ Before starting audio, the learner chooses:
 
 The launch screen summarizes scenario goals, skill focus, voice behavior, persona identity, traits, communication style, behavior notes, and voice. Authored display translations cover the unmodified built-in personas and default scenario; an administrator edit disables that starter overlay so the saved content always wins. Custom records remain exactly as authored. A session cannot start without a valid compatible pair or without configured Qwen credentials.
 
-`App.tsx` snapshots the selected persona, scenario, and difficulty when startup begins. For an English launch, exact preset-backed persona values are first projected through the catalog's `valueEn`; unmatched free text remains untouched. Authored starter translations cover other built-in content. Later locale/catalog changes do not mutate an already active session. The snapshot supplies:
+`App.tsx` sends the selected localized persona, scenario, and difficulty to `POST /api/conversations` before audio startup. For an English launch, exact preset-backed persona values are first projected through the catalog's `valueEn`; unmatched free text remains untouched. Authored starter translations cover other built-in content. Node validates compatibility, compiles Instructions, and stores an immutable launch snapshot. Later locale/catalog changes do not mutate that conversation. The persisted runtime configuration supplies:
 
-- `persona.voice` as the Qwen `session.configure.voice` value;
-- `compileRolePlayInstructions({ persona, scenario, difficulty })` as `session.configure.instructions`;
+- `persona.voice` as the Qwen upstream `session.update.voice` value;
+- `compileRolePlayInstructions({ persona, scenario, difficulty })` as the Qwen upstream `session.update.instructions` value;
 - `persona.name` for assistant labels and speaking state in the chat UI.
+
+The browser realtime message contains only the durable `conversationId` and bounded history-turn limit. Node reloads the stored runtime configuration for both the initial connection and every later continuation; browser-supplied prompt or voice fields are rejected by the shared protocol.
 
 ## Deterministic Instructions compiler
 
@@ -157,7 +159,7 @@ This is intentional:
 
 The prompt has stable sections for the customer persona, sales scenario, behavior, and non-negotiable rules. It includes identity and demographics, personality, motivations, concerns, goals, skill focus, hidden success/scoring criteria, difficulty behavior, tone, pace, and conversational interjection behavior. It also instructs Qwen to remain the customer, keep turns concise, react to actual learner input, use the learner's language unless asked to switch, and never reveal hidden configuration.
 
-Difficulty is a runtime choice, not a persisted scenario field:
+Difficulty is a runtime choice and an immutable conversation snapshot field, not a persisted scenario-catalog field:
 
 - `easy` makes the customer cooperative with mild objections;
 - `medium` reveals information gradually and raises realistic objections;
@@ -167,7 +169,7 @@ The persona voice is sent as the separate Qwen `voice` parameter; describing a v
 
 ### Instructions length budget
 
-The application protocol accepts at most 12,000 characters in `session.configure.instructions`. `findRolePlayInstructionsLengthIssue` compiles easy, medium, and hard and reports the longest over-budget variant. The admin preview shows this budget for the selected pair; saving a scenario checks every `allowedPersonaId`, and editing an already-associated persona checks all scenarios that reference it. `CatalogRepository` repeats the same checks as the authoritative boundary, so bypassing the SPA cannot persist an unusable association.
+Compiled Instructions are capped at 12,000 characters before a conversation can be created. `findRolePlayInstructionsLengthIssue` compiles easy, medium, and hard and reports the longest over-budget variant. The admin preview shows this budget for the selected pair; saving a scenario checks every `allowedPersonaId`, and editing an already-associated persona checks all scenarios that reference it. `CatalogRepository` and the conversation-creation boundary repeat the same checks, so bypassing the SPA cannot persist or start an unusable combination.
 
 An unassociated persona may be saved as a draft even when a preview with a fallback or existing scenario is over budget, but it cannot later be associated until the combined configuration is shortened. `App.tsx` performs one final guard before microphone permission and WebSocket startup.
 
@@ -179,7 +181,7 @@ The **barge-in** feature is a different mechanism: the learner can press while t
 
 ## Persistence and evolution
 
-Presets, personas, scenarios, and compatibility links persist until explicitly updated/deleted, reinserted by a requested initializer run, or restored from a database backup. There is no built-in undo, soft delete, audit log, or catalog revision history. Session transcripts, audio, evaluation results, users, and learner difficulty choices are not persisted.
+Presets, personas, scenarios, and compatibility links persist until explicitly updated/deleted, reinserted by a requested initializer run, or restored from a database backup. Conversation launch snapshots—including difficulty, compiled Instructions, and voice—and finalized transcript text also persist in SQLite. Audio, transient transcript deltas, evaluation results, and users are not persisted. There is no built-in undo, soft delete, audit log, catalog revision history, conversation deletion API, or automatic retention job.
 
 When extending the catalog:
 

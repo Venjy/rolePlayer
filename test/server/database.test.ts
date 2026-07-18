@@ -72,6 +72,11 @@ describe("ApplicationDatabase", () => {
         name: "add_persona_preset_english_value",
         applied_at: expect.any(String),
       }),
+      expect.objectContaining({
+        version: 6,
+        name: "create_conversation_history",
+        applied_at: expect.any(String),
+      }),
     ]);
     expect(
       database.raw
@@ -79,12 +84,15 @@ describe("ApplicationDatabase", () => {
           `SELECT name, strict
            FROM pragma_table_list
            WHERE name IN (
+             'conversation_messages', 'conversation_sessions',
              'persona_presets', 'personas', 'scenarios', 'scenario_personas'
            )
            ORDER BY name`,
         )
         .all(),
     ).toEqual([
+      { name: "conversation_messages", strict: 1 },
+      { name: "conversation_sessions", strict: 1 },
       { name: "persona_presets", strict: 1 },
       { name: "personas", strict: 1 },
       { name: "scenario_personas", strict: 1 },
@@ -127,7 +135,7 @@ describe("ApplicationDatabase", () => {
       second.raw
         .prepare("SELECT COUNT(*) AS count FROM schema_migrations")
         .get(),
-    ).toMatchObject({ count: 5 });
+    ).toMatchObject({ count: 6 });
     expect(
       second.raw
         .prepare("SELECT applied_at FROM schema_migrations WHERE version = 1")
@@ -173,6 +181,7 @@ describe("ApplicationDatabase", () => {
       { version: 3, name: "add_scenario_persona_position" },
       { version: 4, name: "create_persona_presets" },
       { version: 5, name: "add_persona_preset_english_value" },
+      { version: 6, name: "create_conversation_history" },
     ]);
     expect(
       first.raw.prepare("SELECT COUNT(*) AS count FROM personas").get(),
@@ -365,6 +374,135 @@ describe("ApplicationDatabase", () => {
       value: "业务部门的最终决策者",
       value_en: "",
     });
+    upgraded.close();
+  });
+
+  it("upgrades version 5 with strict conversation history and cascading messages", () => {
+    const path = createDatabasePath();
+    mkdirSync(dirname(path), { recursive: true });
+    const legacyConnection = new DatabaseSync(path);
+    legacyConnection.exec("PRAGMA foreign_keys = ON");
+    runMigrations(legacyConnection, DATABASE_MIGRATIONS.slice(0, 5));
+    expect(
+      legacyConnection
+        .prepare(
+          `SELECT 1 AS present
+           FROM sqlite_schema
+           WHERE type = 'table' AND name = 'conversation_sessions'`,
+        )
+        .get(),
+    ).toBeUndefined();
+    legacyConnection.close();
+
+    const upgraded = new ApplicationDatabase({ path });
+    upgraded.open();
+    expect(
+      upgraded.raw
+        .prepare("SELECT name FROM schema_migrations WHERE version = 6")
+        .get(),
+    ).toEqual({ name: "create_conversation_history" });
+    expect(
+      upgraded.raw
+        .prepare(
+          `SELECT name, strict
+           FROM pragma_table_list
+           WHERE name IN ('conversation_sessions', 'conversation_messages')
+           ORDER BY name`,
+        )
+        .all(),
+    ).toEqual([
+      { name: "conversation_messages", strict: 1 },
+      { name: "conversation_sessions", strict: 1 },
+    ]);
+    expect(
+      upgraded.raw
+        .prepare(
+          `SELECT name
+           FROM sqlite_schema
+           WHERE type = 'index'
+             AND name LIKE 'conversation_%_idx'
+           ORDER BY name`,
+        )
+        .all(),
+    ).toEqual([
+      { name: "conversation_messages_response_idx" },
+      { name: "conversation_messages_source_item_idx" },
+      { name: "conversation_sessions_updated_at_idx" },
+    ]);
+
+    const timestamp = new Date().toISOString();
+    const insertSession = upgraded.raw.prepare(
+      `INSERT INTO conversation_sessions (
+        id, persona_json, scenario_json, difficulty, locale,
+        instructions, voice, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertSession.run(
+      "conversation_test",
+      JSON.stringify({ id: "persona_snapshot" }),
+      JSON.stringify({ id: "scenario_snapshot" }),
+      "medium",
+      "en",
+      "Stay in character.",
+      "longanqian",
+      timestamp,
+      timestamp,
+    );
+    expect(() =>
+      insertSession.run(
+        "conversation_invalid_json",
+        "[]",
+        JSON.stringify({ id: "scenario_snapshot" }),
+        "medium",
+        "en",
+        "Stay in character.",
+        "longanqian",
+        timestamp,
+        timestamp,
+      ),
+    ).toThrow();
+
+    const insertMessage = upgraded.raw.prepare(
+      `INSERT INTO conversation_messages (
+        id, conversation_id, position, role, text, interrupted,
+        source_item_id, response_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertMessage.run(
+      "message_test",
+      "conversation_test",
+      0,
+      "assistant",
+      "A persisted finalized response.",
+      1,
+      null,
+      "response_test",
+      timestamp,
+    );
+    expect(() =>
+      insertMessage.run(
+        "message_invalid_role",
+        "conversation_test",
+        1,
+        "system",
+        "Invalid role.",
+        0,
+        "item_invalid",
+        null,
+        timestamp,
+      ),
+    ).toThrow();
+
+    upgraded.raw
+      .prepare("DELETE FROM conversation_sessions WHERE id = ?")
+      .run("conversation_test");
+    expect(
+      upgraded.raw
+        .prepare(
+          "SELECT COUNT(*) AS count FROM conversation_messages WHERE conversation_id = ?",
+        )
+        .get("conversation_test"),
+    ).toEqual({ count: 0 });
     upgraded.close();
   });
 });

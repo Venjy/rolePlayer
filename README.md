@@ -1,6 +1,6 @@
 # AI Role Player — Realtime Voice Demo
 
-A single-repository React + Node/TypeScript application for configurable realtime voice sales role-play. Learners choose an SQLite-backed sales scenario, compatible customer persona, and difficulty; the browser then connects its microphone to Qwen `qwen-audio-3.0-realtime-plus` through a server-side WebSocket gateway, streams transcripts into a chat timeline, and plays the selected persona's voice. A responsive admin console provides persona/scenario CRUD and an inspectable model-Instructions preview.
+A single-repository React + Node/TypeScript application for configurable realtime voice sales role-play. Learners choose an SQLite-backed sales scenario, compatible customer persona, and difficulty; the browser then connects its microphone to Qwen `qwen-audio-3.0-realtime-plus` through a server-side WebSocket gateway, streams transcripts into a chat timeline, and plays the selected persona's voice. Finalized text conversations and launch snapshots are stored in SQLite, listed in responsive history navigation, and can be continued through a fresh Qwen connection with restored text context. A responsive admin console provides persona/scenario CRUD and an inspectable model-Instructions preview.
 
 The UI uses one responsive React component tree for mobile and desktop. Ant Design supplies the standard controls and theme algorithms; project CSS handles the chat layout, message bubbles, recording overlay, and audio-reactive waveform.
 
@@ -20,12 +20,14 @@ This is one root package, not a monorepo. Client, server, tests, and shared prot
 │   │   ├── audio/                  # Microphone capture and streamed playback
 │   │   ├── catalog/                # Catalog API and selection state
 │   │   ├── components/             # Chat messages and VoiceWaveform
+│   │   ├── conversations/          # History API, state, desktop rail/mobile Drawer
 │   │   ├── i18n/                   # Locale state, persistence, Ant Design locale
 │   │   ├── learner/                # Scenario/persona/difficulty launcher
 │   │   ├── realtime/               # Application-protocol WebSocket client
 │   │   └── voice/                  # Press-to-talk gesture state machine
 │   ├── server/
 │   │   ├── catalog/                # Catalog repository, routes, initializer
+│   │   ├── conversations/          # Durable conversation repository and REST API
 │   │   ├── database/               # SQLite lifecycle and migrations
 │   │   └── realtime/               # Qwen gateway and context repair
 │   └── shared/                     # Protocol, catalog schemas, prompt compiler
@@ -89,7 +91,7 @@ Official setup references:
    pnpm dev
    ```
 
-6. Open [http://localhost:5173](http://localhost:5173), choose a training scenario, compatible persona, and difficulty, then select **Start voice practice** and allow microphone access. Use **Admin console** to create or edit catalog records. The interface starts in English; use the upper-right language control to switch to Chinese.
+6. Open [http://localhost:5173](http://localhost:5173), choose a training scenario, compatible persona, and difficulty, then select **Start voice practice** and allow microphone access. Use the left history rail on wide screens—or its header Drawer button on smaller screens—to reopen and continue a saved conversation. Use **Admin console** to create or edit catalog records. The interface starts in English; use the upper-right language control to switch to Chinese.
 
 7. Hold **Hold to talk** while speaking. Release to send, or slide upward at least 72 px before releasing to cancel. While the selected persona is speaking, the control changes to **Hold to interrupt and talk**; holding it stops the current playback, begins context reconciliation, and records the next turn. The Chinese interface uses the equivalent **按住说话** and **按住打断并说话** labels.
 
@@ -128,7 +130,7 @@ With `pnpm dev:server` running, send any headerless PCM16, 16 kHz, mono recordin
 pnpm smoke:realtime /absolute/path/to/input.pcm
 ```
 
-The command succeeds only when it receives a user transcript, an assistant transcript, a completed response, and streamed assistant audio. It never reads the Qwen credentials; those remain inside the Node server process.
+The command creates a normal durable conversation through the local REST API, then succeeds only when it receives a persisted user transcript, an assistant transcript, streamed assistant audio, and the response-specific `response.persisted` acknowledgement after simulated playback completion. Its finalized text therefore appears in the history list. It never reads the Qwen credentials; those remain inside the Node server process.
 
 Add `--interrupt` to wait until generation finishes, simulate stopping queued playback partway through, and verify Qwen acknowledges the assistant-item delete/recreate repair transaction:
 
@@ -152,6 +154,10 @@ Use `--interrupt-during-generation` to exercise the cancellation path. With no t
 - Deterministic `compileRolePlayInstructions` template; no extra LLM is called to turn structured catalog fields into the Qwen system prompt
 - Shared 12,000-character Instructions budget, checked across every compatible persona and all three difficulty levels before an association can be saved
 - Session-start snapshot sends the selected persona's `voice` and the compiled persona/scenario/difficulty Instructions to Qwen, so later catalog edits affect only future sessions
+- Durable SQLite conversation history with immutable launch snapshots, finalized user/assistant text, activity ordering, and full transcript reload
+- Responsive history navigation: persistent 288 px left rail from 1200 px, shared Ant Design Drawer below that breakpoint, current-item state, and new-practice action
+- Text-context continuation through a fresh Qwen WebSocket: Node restores stored Instructions/voice and waits for recent `conversation.item.create` acknowledgements before declaring the session ready
+- Conversation switching/new-practice/end actions are serialized and wait for response-specific user/assistant persistence acknowledgements before disconnecting; failed settlement is reported instead of silently dropping the last turn
 - Bottom-anchored conversation history with live user and assistant drafts, timestamps, and interrupted-turn labels
 - Press-and-hold recording for mouse, touch, pen, Space, and Enter; release sends and upward slide cancels
 - Audio-reactive microphone waveform, recording duration, and release instruction while a gesture is active
@@ -162,11 +168,11 @@ Use `--interrupt-during-generation` to exercise the cancellation path. With no t
 - Streamed PCM16 24 kHz Qwen playback with volume, mute, stop-response, and end-session controls
 - Response-aware playback receipts and best-effort interrupted-response reconciliation
 - SQLite file setup, Fastify lifecycle ownership, WAL mode, foreign keys, busy timeout, an append-only migration runner, durable catalog CRUD, and an explicit transactional/idempotent catalog initializer
-- Basic malformed-message, connection, transcription, model, microphone, and configuration error handling
+- Phase-aware error handling: a first-time startup failure returns to the launcher; once ready, the chat stays visible, errors use a five-second Ant Design message at the top, fatal failures rebuild safely from finalized SQLite text, and a failed rebuild can be retried from the composer
 
 ## Persistence status
 
-Migration 2 persists the role-play catalog in strict `personas`, `scenarios`, and `scenario_personas` tables and contains the immutable legacy Alex/sales-discovery seed. Migration 3 adds deterministic per-scenario persona ordering and upgrades already-created catalog files without requiring deletion. Migration 4 creates the strict `persona_presets` reference table; it intentionally contains no business seed data. Migration 5 adds the backward-compatible English display column for preset rows. The catalog REST API is:
+Migration 2 persists the role-play catalog in strict `personas`, `scenarios`, and `scenario_personas` tables and contains the immutable legacy Alex/sales-discovery seed. Migration 3 adds deterministic per-scenario persona ordering and upgrades already-created catalog files without requiring deletion. Migration 4 creates the strict `persona_presets` reference table; it intentionally contains no business seed data. Migration 5 adds the backward-compatible English display column for preset rows. Migration 6 adds strict `conversation_sessions` and `conversation_messages` for immutable runtime snapshots and finalized text. The catalog REST API is:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -176,9 +182,17 @@ Migration 2 persists the role-play catalog in strict `personas`, `scenarios`, an
 
 Every successful admin mutation first updates local catalog state, then reloads the authoritative catalog. Learner selections therefore reflect saved changes immediately without a rebuild or restart, and remain accurate if the follow-up read temporarily fails. Persona deletion is rejected while a scenario references it; remove the compatibility link first. Scenario deletion cascades only its compatibility rows.
 
+The conversation REST API is:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/conversations` | Validate a localized persona/scenario/difficulty snapshot, compile Instructions on Node, and create a durable conversation |
+| `GET` | `/api/conversations` | List all conversations by latest persisted activity |
+| `GET` | `/api/conversations/:id` | Read one immutable launch snapshot and its ordered finalized messages |
+
 Business defaults are installed explicitly with `pnpm catalog:init` during source development or `pnpm catalog:init:prod` after building. The initializer inserts 70 bilingual presets (8 identities, 12 occupations, 16 personality traits, 8 communication styles, 12 motivations, and 14 concerns) plus the starter personas 林悦, 王强, and 陈晨. For an existing seed preset whose category and Chinese value are still unchanged, a blank English value is backfilled without replacing a non-empty administrator translation; legacy/custom rows with no English label fall back to their canonical text in the UI. If `scenario_sales_discovery` exists, the initializer appends missing starter-persona links without replacing the current ordering, but only after each pair passes the shared easy/medium/hard 12,000-character Instructions check. An over-budget pair produces a clear error and rolls back the initializer's data writes. The whole operation is transactional and idempotent.
 
-Sessions, learner difficulty choices, transcripts, audio, users, and evaluations are not persisted. There is no catalog soft deletion, audit history, or built-in undo. See [Catalog and prompt compilation](docs/CATALOG_AND_PROMPTS.md) and [Database](docs/DATABASE.md) for the complete contracts.
+Conversation snapshots, selected difficulty, compiled Instructions, voice, and finalized transcript text are persisted. Streaming drafts, microphone/model audio, users, and evaluations are not. The current private single-user deployment exposes one global history retained with the database file; there is no conversation deletion API or retention job yet. See [Catalog and prompt compilation](docs/CATALOG_AND_PROMPTS.md) and [Database](docs/DATABASE.md) for the complete contracts.
 
 The default `data/` directory is ignored by Git. A future single-container deployment must mount that directory as persistent storage; embedding the database file in an ephemeral image layer would lose catalog edits when the container is replaced.
 
@@ -188,7 +202,9 @@ Interrupted-response truncation is an estimate because Qwen does not provide wor
 
 Scenario `interruptFrequency` changes prompt-level conversational patience/interjection/challenge behavior only. Because the demo uses manual push-to-talk (`turn_detection: null`), it cannot make Qwen autonomously interrupt a learner in the middle of an utterance. Learner barge-in while the persona speaks is the separate playback-interruption feature.
 
-The demo does not yet include authentication/admin authorization, session or evaluation persistence, generated feedback/scoring, session recovery, production rate limiting, Docker, or production static file serving.
+History continuation is text-level context reconstruction, not revival of the old Qwen session or replay of original audio. It restores semantic transcript context but not acoustic details such as the learner's tone or emotion. The model currently receives the most recent 20 user turns while the UI keeps the complete stored transcript.
+
+The demo does not yet include authentication/admin authorization, per-user history ownership, conversation deletion/retention controls, evaluation persistence, generated feedback/scoring, multi-attempt transport retry/backoff, production rate limiting, Docker, or production static file serving.
 
 The build already separates artifacts as follows:
 

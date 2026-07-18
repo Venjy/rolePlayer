@@ -13,6 +13,7 @@ import {
 } from "./speech-prefix-estimator";
 
 const REPAIR_TIMEOUT_MS = 10_000;
+const USER_TRANSCRIPTION_TIMEOUT_MS = 30_000;
 
 type GenerationState =
   | "generating"
@@ -38,11 +39,22 @@ interface ResponseRecord {
   assistantItemId?: string;
   previousItemId?: string;
   interruption?: InterruptionSnapshot;
+  userTurn?: UserTurnPersistence;
+  waitingForUserPersistence?: boolean;
+}
+
+interface UserTurnPersistence {
+  status: "pending" | "persisted";
+  timeout?: NodeJS.Timeout;
 }
 
 interface RepairJob {
   responseId: string;
-  stage: "waiting_terminal" | "waiting_delete" | "waiting_create";
+  stage:
+    | "waiting_terminal"
+    | "waiting_delete"
+    | "waiting_create"
+    | "waiting_user_persistence";
   estimate?: PrefixEstimate;
   originalItemId?: string;
   replacementItemId?: string;
@@ -52,9 +64,18 @@ interface RepairJob {
 export interface RealtimeSessionControllerHandlers {
   send: (message: ServerMessage) => void;
   sendAudio: (audio: Buffer) => boolean;
+  persistMessage: (message: RealtimePersistedMessage) => void;
   closeWithError: (reason: string) => void;
   warn: (error: unknown, message: string) => void;
   error: (error: unknown, message: string) => void;
+}
+
+export interface RealtimePersistedMessage {
+  role: "user" | "assistant";
+  text: string;
+  interrupted: boolean;
+  sourceItemId?: string;
+  responseId?: string;
 }
 
 function responseItemTranscript(item: QwenConversationItem): string | undefined {
@@ -79,6 +100,7 @@ function isBenignCancellationRace(event: QwenServerEvent): boolean {
 }
 
 export class RealtimeSessionController {
+  private terminated = false;
   private inputActive = false;
   private inputBytes = 0;
   private pendingCommit = false;
@@ -87,6 +109,8 @@ export class RealtimeSessionController {
   private activeGenerationResponseId?: string;
   private lastSentState?: SessionState;
   private repair?: RepairJob;
+  private pendingUserTurn?: UserTurnPersistence;
+  private responseUserTurnAwaitingCreation?: UserTurnPersistence;
   private readonly responses = new Map<string, ResponseRecord>();
   private readonly responseIdByItemId = new Map<string, string>();
   private readonly estimator = new SpeechPrefixEstimator();
@@ -97,6 +121,7 @@ export class RealtimeSessionController {
   ) {}
 
   public handleControl(message: ClientControlMessage): void {
+    if (this.terminated) return;
     switch (message.type) {
       case "session.configure":
         this.sendError("ALREADY_CONFIGURED", "The session is already configured.", true);
@@ -123,6 +148,7 @@ export class RealtimeSessionController {
   }
 
   public appendAudio(pcm: Buffer): void {
+    if (this.terminated) return;
     if (!this.inputActive) return;
     try {
       this.qwen.appendAudio(pcm);
@@ -134,6 +160,7 @@ export class RealtimeSessionController {
   }
 
   public handleQwenEvent(event: QwenServerEvent): void {
+    if (this.terminated) return;
     switch (event.type) {
       case "conversation.item.input_audio_transcription.delta":
         this.handlers.send({
@@ -145,18 +172,12 @@ export class RealtimeSessionController {
         break;
 
       case "conversation.item.input_audio_transcription.completed":
-        this.handlers.send({
-          type: "transcript.user.done",
-          itemId: event.item_id ?? "unknown",
-          transcript: event.transcript ?? "",
-        });
+        this.completeUserTranscription(event);
         break;
 
       case "conversation.item.input_audio_transcription.failed":
-        this.sendError(
-          "TRANSCRIPTION_FAILED",
+        this.failUserTranscription(
           event.error?.message ?? "The user audio could not be transcribed.",
-          true,
         );
         break;
 
@@ -203,11 +224,22 @@ export class RealtimeSessionController {
 
   public dispose(): void {
     if (this.repair?.timeout) clearTimeout(this.repair.timeout);
+    if (this.pendingUserTurn?.timeout) {
+      clearTimeout(this.pendingUserTurn.timeout);
+    }
   }
 
   private startInput(): void {
     if (this.inputActive || this.pendingCommit) {
       this.sendError("INPUT_ALREADY_ACTIVE", "A user turn is already active.", true);
+      return;
+    }
+    if (this.pendingUserTurn) {
+      this.sendError(
+        "USER_TURN_PENDING",
+        "Wait for the previous user transcript to be saved before speaking again.",
+        true,
+      );
       return;
     }
 
@@ -254,6 +286,7 @@ export class RealtimeSessionController {
     if (
       !this.pendingCommit ||
       this.repair ||
+      this.pendingUserTurn ||
       this.activeGenerationResponseId ||
       this.awaitingResponseCreation
     ) {
@@ -262,7 +295,21 @@ export class RealtimeSessionController {
 
     this.pendingCommit = false;
     this.awaitingResponseCreation = true;
-    this.qwen.commitAudioAndCreateResponse();
+    const userTurn: UserTurnPersistence = { status: "pending" };
+    userTurn.timeout = setTimeout(() => {
+      this.failUserTranscription(
+        "Timed out while waiting for the finalized user transcript.",
+      );
+    }, USER_TRANSCRIPTION_TIMEOUT_MS);
+    this.pendingUserTurn = userTurn;
+    this.responseUserTurnAwaitingCreation = userTurn;
+    try {
+      this.qwen.commitAudioAndCreateResponse();
+    } catch (error) {
+      this.handlers.error(error, "Failed to commit user audio");
+      this.failUserTranscription("Could not submit the user audio turn.");
+      return;
+    }
     this.sendState("processing");
   }
 
@@ -275,7 +322,11 @@ export class RealtimeSessionController {
       suppressOutput: false,
       transcript: "",
       audioBytes: 0,
+      ...(this.responseUserTurnAwaitingCreation
+        ? { userTurn: this.responseUserTurnAwaitingCreation }
+        : {}),
     };
+    this.responseUserTurnAwaitingCreation = undefined;
     this.responses.set(responseId, record);
     this.awaitingResponseCreation = false;
     this.activeGenerationResponseId = responseId;
@@ -512,9 +563,31 @@ export class RealtimeSessionController {
   }
 
   private finalizeCompletedPlayback(record: ResponseRecord): void {
+    if (record.userTurn?.status === "pending") {
+      record.waitingForUserPersistence = true;
+      return;
+    }
+    if (
+      record.transcript.trim() &&
+      !this.persistMessage({
+        role: "assistant",
+        text: record.transcript,
+        interrupted: false,
+        ...(record.assistantItemId
+          ? { sourceItemId: record.assistantItemId }
+          : {}),
+        responseId: record.responseId,
+      })
+    ) {
+      return;
+    }
     if (record.transcript.trim() && record.audioBytes > 0) {
       this.estimator.addCompletedSample(record.transcript, record.audioBytes / 48);
     }
+    this.handlers.send({
+      type: "response.persisted",
+      responseId: record.responseId,
+    });
     this.removeResponse(record);
     this.sendState(this.inputActive ? "listening" : "ready");
     this.maybeFlushCommit();
@@ -628,7 +701,29 @@ export class RealtimeSessionController {
     const record = this.responses.get(repair.responseId);
     if (!record) return;
 
+    if (record.userTurn?.status === "pending") {
+      repair.stage = "waiting_user_persistence";
+      this.clearRepairTimeout();
+      return;
+    }
+
     this.clearRepairTimeout();
+    if (
+      repair.estimate.transcript.trim() &&
+      !this.persistMessage({
+        role: "assistant",
+        text: repair.estimate.transcript,
+        interrupted: true,
+        ...(repair.replacementItemId
+          ? { sourceItemId: repair.replacementItemId }
+          : repair.originalItemId
+            ? { sourceItemId: repair.originalItemId }
+            : {}),
+        responseId: repair.responseId,
+      })
+    ) {
+      return;
+    }
     this.handlers.send({
       type: "response.reconciled",
       responseId: repair.responseId,
@@ -652,6 +747,7 @@ export class RealtimeSessionController {
 
   private failContextRepair(message: string): void {
     this.clearRepairTimeout();
+    this.terminated = true;
     this.sendError("CONTEXT_STATE_UNCERTAIN", message, false);
     this.sendState("ended");
     this.handlers.closeWithError(message);
@@ -686,6 +782,88 @@ export class RealtimeSessionController {
   private clearRepairTimeout(): void {
     if (this.repair?.timeout) clearTimeout(this.repair.timeout);
     if (this.repair) this.repair.timeout = undefined;
+  }
+
+  private completeUserTranscription(event: QwenServerEvent): void {
+    const transcript = event.transcript?.trim();
+    if (!transcript) {
+      this.failUserTranscription(
+        "The user audio did not produce a finalized transcript.",
+      );
+      return;
+    }
+
+    const userTurn = this.pendingUserTurn;
+    if (userTurn?.timeout) clearTimeout(userTurn.timeout);
+    if (userTurn) userTurn.timeout = undefined;
+    this.pendingUserTurn = undefined;
+
+    if (
+      !this.persistMessage({
+        role: "user",
+        text: transcript,
+        interrupted: false,
+        ...(event.item_id ? { sourceItemId: event.item_id } : {}),
+      })
+    ) {
+      return;
+    }
+    if (userTurn) userTurn.status = "persisted";
+
+    this.handlers.send({
+      type: "transcript.user.done",
+      itemId: event.item_id ?? "unknown",
+      transcript,
+    });
+
+    for (const response of this.responses.values()) {
+      if (
+        response.userTurn === userTurn &&
+        response.waitingForUserPersistence
+      ) {
+        response.waitingForUserPersistence = false;
+        this.finalizeCompletedPlayback(response);
+        break;
+      }
+    }
+    if (
+      this.repair?.stage === "waiting_user_persistence" &&
+      this.responses.get(this.repair.responseId)?.userTurn === userTurn
+    ) {
+      this.finishRepair();
+    }
+    this.maybeFlushCommit();
+  }
+
+  private failUserTranscription(message: string): void {
+    if (this.terminated) return;
+    if (this.pendingUserTurn?.timeout) {
+      clearTimeout(this.pendingUserTurn.timeout);
+    }
+    this.pendingUserTurn = undefined;
+    this.responseUserTurnAwaitingCreation = undefined;
+    this.clearRepairTimeout();
+    this.terminated = true;
+    this.sendError("TRANSCRIPTION_FAILED", message, false);
+    this.sendState("ended");
+    this.handlers.closeWithError(message);
+  }
+
+  private persistMessage(message: RealtimePersistedMessage): boolean {
+    try {
+      this.handlers.persistMessage(message);
+      return true;
+    } catch (error) {
+      this.handlers.error(error, "Failed to persist authoritative conversation text");
+      this.clearRepairTimeout();
+      this.terminated = true;
+      const failureMessage =
+        "The authoritative conversation history could not be saved.";
+      this.sendError("HISTORY_PERSISTENCE_FAILED", failureMessage, false);
+      this.sendState("ended");
+      this.handlers.closeWithError(failureMessage);
+      return false;
+    }
   }
 
   private sendState(state: SessionState): void {

@@ -2,7 +2,7 @@
 
 ## Project goal
 
-Build an AI sales role-player around realtime voice conversations. The current milestone combines a reliable browser ↔ Node ↔ Qwen Audio voice loop with an editable, SQLite-backed persona/scenario catalog and a responsive learner/admin interface. Preserve the working voice core and catalog contracts while extending the product.
+Build an AI sales role-player around realtime voice conversations. The current milestone combines a reliable browser ↔ Node ↔ Qwen Audio voice loop with an editable, SQLite-backed persona/scenario catalog, durable text conversation history, and a responsive learner/admin interface. Preserve the working voice, history-recovery, and catalog contracts while extending the product.
 
 Before changing a subsystem, read its focused contract:
 
@@ -61,6 +61,8 @@ Catalog initializer tests must also use an explicit temporary `DATABASE_PATH`. N
 - Preserve semantic names, `role="log"`, status announcements, pointer/keyboard parity, and `prefers-reduced-motion` behavior.
 - Keep UI components free of API keys, Alibaba Cloud endpoints, and raw Qwen event types.
 - Keep the learner launcher, admin console, and active session in one responsive React application. The learner selects a searchable scenario, a compatible persona, and a difficulty before starting; the admin console owns persona/scenario CRUD and prompt preview.
+- Keep conversation history in the learner workspace: a persistent left rail at 1200 px and above, and the same list content inside an Ant Design Drawer below that breakpoint. Selecting a saved conversation must reconnect with its immutable snapshot and restored text context; it must not reuse current catalog rows.
+- Before switching conversations, starting a new role-play, or ending an active session, serialize the transition and settle durable state first: cancel uncertain uncommitted input, reconcile the current assistant, wait for any committed user turn's persisted `transcript.user.done`, then re-check for a newly-created assistant. Interrupted output requires `response.reconciled`; natural drain requires the matching `response.persisted`. Timeout/close/send failure must not be treated as a successful acknowledgement.
 - Keep `.application-root` at viewport height with its own scrolling because `body` uses `overflow: hidden`. On the learner launcher, keep difficulty and the primary start action ahead of the longer summaries so the CTA remains discoverable.
 - An active session must display the snapshotted persona identity. Catalog refreshes or edits must not silently change a session already in progress.
 - Persona identity, occupation, personality traits, communication style, motivations, and concerns use database-backed preset choices. Name, age, background, and behavior notes remain free-form. Existing persona text that is not present in the current presets must remain visible and savable.
@@ -72,6 +74,7 @@ Catalog initializer tests must also use an explicit temporary `DATABASE_PATH`. N
 - Normal release submits exactly once. Moving upward by at least 72 px and then releasing cancels.
 - `pointercancel`, unexpected lost pointer capture, window blur, hidden-document transition, disabled input, unmount, and explicit session end must cancel rather than commit uncertain audio.
 - A quick release that occurs before asynchronous microphone startup resolves must still finish deterministically: submit after a successful start, or return to idle if startup fails.
+- Forced cancellation and session transitions must wait for the whole gesture lifecycle, including already-released `starting` work and an already-running `finishing` handler. Async capture/submit/cancel continuations must be scoped to their runtime epoch and local audio/realtime instances.
 - Space and Enter provide the same hold/release lifecycle for keyboard users.
 - Cancellation stops capture, clears the upstream input buffer, and never sends `input.commit`.
 - Before a normal commit, wait for the AudioWorklet to flush its final partial frame and acknowledge stop.
@@ -86,9 +89,13 @@ Catalog initializer tests must also use an explicit temporary `DATABASE_PATH`. N
 - Qwen output is little-endian PCM16, 24 kHz, mono.
 - On response cancellation, clear local scheduled audio immediately and send upstream cancellation. Node must suppress late audio for the cancelled response.
 - Treat Qwen user transcript delta as `text + stash`; do not append each `text` value.
+- Permit only one committed user turn to await finalized transcription. Disable browser push-to-talk while it is pending and reject a second server-side `input.start` with `USER_TURN_PENDING` as defense in depth.
 - Unknown upstream events must be ignored rather than terminating a session.
 - Closing a browser WebSocket must close its Qwen WebSocket to avoid leaks and continued billing.
-- Build `session.configure.instructions` with the shared deterministic `compileRolePlayInstructions` function and use the selected persona's `voice`. Do not add a second model call to paraphrase structured catalog fields.
+- Browser `session.configure` carries only the durable `conversationId` and bounded history limit. Node must load snapshotted Instructions/voice from `ConversationRepository`; never trust browser-supplied prompt or voice fields. Do not add a second model call to paraphrase structured catalog fields.
+- A Qwen WebSocket cannot revive an expired upstream session. Resume by opening a new Qwen connection and acknowledging ordered `conversation.item.create` text-history injection before emitting browser `session.ready`.
+- Route errors by lifecycle phase. A conversation that has never reached `session.ready` fails initialization back to the launcher. After its first readiness, show every error through an Ant Design message at the top for five seconds; for a fatal runtime error, preserve the chat surface and rebuild the same conversation once from finalized SQLite text instead of reusing uncertain Qwen context. If that rebuild fails, keep the chat visible and turn the composer button into a manual reconnect action rather than navigating automatically.
+- Persist the final user transcript before publishing `transcript.user.done`. Associate each generated response with its committed user turn and hold assistant persistence until that user text is durable; failed/empty ASR must not leave an orphan assistant. Persist a normal assistant message only after both generation and browser playback complete, then publish response-specific `response.persisted`; persist an interrupted assistant message only after context repair confirms its retained prefix. Never persist streaming drafts or unheard generated suffixes.
 
 ## Catalog and prompt invariants
 
@@ -100,7 +107,7 @@ Catalog initializer tests must also use an explicit temporary `DATABASE_PATH`. N
 - Persona records store selected preset text as ordinary field snapshots. Do not add foreign keys from persona fields to `persona_presets`; changing or removing a preset must not rewrite existing personas.
 - Persona names and scenario names are unique case-insensitively. A referenced persona cannot be deleted; remove it from every scenario first. Scenario deletion may cascade only its compatibility rows.
 - `compileRolePlayInstructions` must remain deterministic, inspectable, and unit-tested. Preserve hidden criteria/rules and omit empty optional fields; do not introduce nondeterministic prompt generation into session startup.
-- `session.configure.instructions` has a shared 12,000-character limit. Validate every compatible persona/scenario pair across easy, medium, and hard before saving an association, and keep the App-level guard as defense in depth.
+- Compiled conversation Instructions have a shared 12,000-character limit. Validate every compatible persona/scenario pair across easy, medium, and hard before saving an association, and keep the App-level guard as defense in depth.
 - Difficulty is selected per launch and is not stored on a scenario. Snapshot persona, scenario, and difficulty before connecting so later catalog edits cannot mutate an active session.
 - `voiceBehavior.interruptFrequency` describes conversational interjections/challenge style within model turns. With manual push-to-talk it cannot make Qwen autonomously interrupt a learner who is still speaking; learner barge-in is the separate playback-interruption flow.
 
@@ -115,9 +122,11 @@ Catalog initializer tests must also use an explicit temporary `DATABASE_PATH`. N
 - Migration 3 adds `scenario_personas.position` and its unique ordering index, including forward upgrade of an already-created migration-2 database. It is immutable as well.
 - Migration 4 creates the `persona_presets` schema only. New business/reference content belongs in the explicit catalog initializer, not in migration SQL. Migration 2's historical Alex/scenario seed is immutable legacy behavior, not a pattern for later migrations.
 - Migration 5 adds `persona_presets.value_en` with an empty legacy default. Existing databases require the normal initializer run to backfill deployment-owned English labels without replacing administrator edits.
+- Migration 6 creates `conversation_sessions` and `conversation_messages`. Sessions store immutable localized persona/scenario snapshots, difficulty, locale, exact compiled Instructions, and voice; messages store finalized text only and cascade with their owning session. Migration 6 is immutable.
 - Keep catalog access behind `CatalogRepository`. Avoid long synchronous queries in request handlers because `DatabaseSync` blocks the Node event loop.
+- Keep conversation access behind `ConversationRepository`. Current ownership is a single private deployment with one global history; there is no retention job or deletion endpoint, and records live with the SQLite file. Add authentication/authorization and per-owner filtering before any multi-user or public deployment.
 - `pnpm catalog:init` and `pnpm catalog:init:prod` must be transactional and idempotent: insert missing stable records/links, backfill only blank English values on otherwise unchanged stable seed rows, preserve administrator edits, and never require Qwen credentials. Detect an existing preset by stable ID or case-insensitive category/value; append a missing preset when its preferred position is occupied rather than reordering existing data. Before inserting any missing scenario link, enforce `MAX_SCENARIO_PERSONAS` and validate that pair across easy/medium/hard against the shared 12,000-character Instructions limit; either failure must abort and roll back the whole initializer data transaction. Development setup runs the source command before `pnpm dev`; container startup runs the built command against the persistent database volume before starting the service.
-- Do not add speculative session, transcript, user, audio, or evaluation tables. Define ownership, retention, deletion, recovery, and authorization before persisting those domains.
+- Do not add audio, user, evaluation, or parallel session/transcript tables speculatively. Extend the existing conversation tables only after defining ownership, retention, deletion, recovery, and authorization for the new behavior.
 - Database files and WAL/SHM sidecars are runtime data and must remain uncommitted. Production must mount a persistent directory rather than store the file only in the container image layer.
 
 ## Engineering conventions
@@ -139,4 +148,4 @@ Catalog initializer tests must also use an explicit temporary `DATABASE_PATH`. N
 
 ## Scope discipline
 
-The project requirements are in the external case-study document referenced by the user. Build iteratively: preserve the working voice path and editable catalog first, then add authentication/authorization, session and evaluation persistence, feedback evaluation, recovery, observability, and deployment support in separate milestones.
+The project requirements are in the external case-study document referenced by the user. Build iteratively: preserve the working voice path, durable text-history recovery, and editable catalog first, then add authentication/authorization, evaluation persistence, feedback evaluation, observability, and deployment support in separate milestones.

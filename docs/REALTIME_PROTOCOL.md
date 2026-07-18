@@ -23,38 +23,33 @@ The browser drops binary audio when there is no active response or after that
 response has been interrupted. Supporting concurrent responses would require a
 response identifier in the binary frame format.
 
-## Catalog-derived session configuration
+## Persisted conversation-derived session configuration
 
-The catalog REST API is separate from this WebSocket protocol. Before opening
-`/ws/realtime`, the learner launcher loads `GET /api/catalog` and chooses a
-scenario, one of its compatible personas, and easy/medium/hard difficulty.
+The catalog and conversation REST APIs are separate from this WebSocket
+protocol. Before opening `/ws/realtime`, the learner launcher chooses a
+scenario, one of its compatible personas, and easy/medium/hard difficulty, then
+creates a persisted conversation snapshot. That snapshot owns the selected
+persona/scenario data, locale, difficulty, deterministically compiled
+Instructions, and voice for every later resume.
 
-`App.tsx` snapshots that selection for the lifetime of the session. It derives
-the first control message as follows:
+The browser identifies that snapshot with `conversationId`; it never submits
+Instructions or a voice over the realtime protocol. Node resolves both values
+from SQLite at configuration time. This keeps prompt/voice authority on the
+server and ensures later catalog edits cannot silently change an existing
+conversation.
 
-```ts
-const instructions = compileRolePlayInstructions({
-  persona,
-  scenario,
-  difficulty,
-});
-const voice = persona.voice;
-```
+`compileRolePlayInstructions` remains a deterministic shared template, not a
+call to another language model. It includes the snapshotted persona
+identity/behavior, scenario goals and hidden criteria, difficulty, tone, pace,
+and interjection behavior in stable, previewable sections. Conversation creation
+rejects compiled Instructions over the shared 12,000-character limit; the
+catalog association guards and App-level check remain defense in depth.
 
-`compileRolePlayInstructions` is a deterministic shared template, not a call to
-another language model. It includes the persona identity/behavior, scenario
-goals and hidden criteria, difficulty, tone, pace, and interjection behavior in
-stable, previewable sections. The selected Qwen voice remains a separate
-protocol field. Catalog edits or refreshes after connection do not alter the
-active session; they apply to a later connection.
-
-`session.configure.instructions` is limited to 12,000 characters by the shared
-protocol schema. Catalog writes validate every compatible persona/scenario pair
-for easy, medium, and hard and return `400 instructions_too_long` when any
-compiled prompt exceeds that budget. The browser checks the chosen combination
-again before microphone setup. Any error received before `session.ready`
-rejects startup immediately, regardless of whether that error could have been
-recoverable in an already-ready session.
+Any error received before `session.ready` rejects startup immediately,
+regardless of whether that error could have been recoverable in an already-ready
+session. The browser settles that rejection with the server's structured error
+before the App tears down the partial socket, so a synchronous disconnect cannot
+replace the localized cause with a generic close message.
 
 Scenario `voiceBehavior.interruptFrequency` does not change protocol turn
 detection. With manual push-to-talk (`turn_detection: null`), it can guide brief
@@ -73,18 +68,41 @@ Must be the first message after WebSocket open.
 ```json
 {
   "type": "session.configure",
-  "instructions": "Stay in character...",
-  "voice": "longanqian",
+  "conversationId": "conversation_...",
   "maxHistoryTurns": 20
 }
 ```
 
-Node opens the Qwen connection, waits for `session.created`, sends `session.update`, and waits for `session.updated`. The browser cannot send audio before Node replies with `session.ready`.
+`conversationId` is a non-empty string of at most 100 characters.
+`maxHistoryTurns` is an integer from 1 through 50 and defaults to 20 when
+omitted. A turn is counted by user messages: restoration starts at the selected
+recent user turn and includes all following user/assistant messages in their
+persisted order.
 
-For normal SPA sessions, `instructions` is the compiled selected configuration
-and `voice` is the selected persona's saved Qwen voice. The protocol still
-validates both fields at the Node boundary; neither value authorizes the browser
-to send credentials or raw Qwen events.
+Node rejects a missing conversation instead of trusting browser-supplied runtime
+configuration. The browser cannot send audio before Node has restored the
+session and replied with `session.ready`.
+
+### Qwen history restoration
+
+A resumed conversation always creates a fresh Qwen WebSocket; an expired Qwen
+socket is not resumed. Node performs this ordered handshake:
+
+1. Load the conversation's snapshotted Instructions, voice, and bounded recent
+   finalized text from SQLite.
+2. Wait for Qwen `session.created`, send `session.update`, and wait for
+   `session.updated`.
+3. Replay each persisted message with `conversation.item.create`: a user message
+   uses `input_text`, and an assistant message uses `output_text`.
+4. Wait for the matching `conversation.item.created` acknowledgement before
+   sending the next item.
+5. Emit `session.ready` only after every history item is acknowledged.
+
+Restoration never sends `response.create`, so reconnecting cannot make the model
+answer old text. With no persisted messages, readiness follows
+`session.updated` as before. An upstream error, close, or acknowledgement timeout
+during restoration fails configuration rather than starting with partial
+context; timeout handling also terminates the upstream socket.
 
 ### Start input
 
@@ -93,6 +111,12 @@ to send credentials or raw Qwen events.
 ```
 
 This marks subsequent binary frames as the current user turn. If a model response is active, Node cancels and suppresses its late audio.
+
+Only one submitted user turn may await finalized transcription at a time. The
+browser disables push-to-talk while that persistence acknowledgement is pending,
+and Node independently rejects an early `input.start` with recoverable
+`USER_TURN_PENDING`. This keeps the browser's single user-settlement barrier
+aligned with the server's active transcription.
 
 When the browser already knows the active `responseId`, it must first stop local
 playback, calculate the conservative played duration, and send
@@ -191,7 +215,11 @@ still active, and reconciles the assistant item as described below.
 ### Ready and state
 
 ```json
-{ "type": "session.ready", "sessionId": "sess_..." }
+{
+  "type": "session.ready",
+  "sessionId": "sess_...",
+  "conversationId": "conversation_..."
+}
 ```
 
 ```json
@@ -254,15 +282,47 @@ Status can be `completed`, `cancelled`, or `failed`.
 
 `response.done` means Qwen finished producing data. It does **not** mean the
 browser playback queue has drained or the user heard the complete response. A
-normal spoken response therefore has two terminal events:
+normal spoken response therefore has two browser/model terminal events and one
+persistence acknowledgement:
 
 ```text
 response.done       Qwen/Node generation is terminal
 playback.completed  browser playback later drained naturally
+response.persisted  Node committed the finalized assistant text to SQLite
 ```
 
-The browser keeps the completed response ID until it has sent the playback
-receipt.
+The browser keeps the response runtime after sending the playback receipt and
+does not move its draft into finalized history until it receives the matching:
+
+```json
+{ "type": "response.persisted", "responseId": "resp_..." }
+```
+
+### Authoritative persistence points
+
+SQLite stores finalized conversation text, not streaming drafts. Node performs
+the write synchronously at these boundaries:
+
+- A user message is written when Qwen emits the final
+  `conversation.item.input_audio_transcription.completed` event, before Node
+  publishes `transcript.user.done`. Empty or failed transcription is fatal for
+  that realtime session because persisting a following assistant without its
+  user turn would create unrecoverable ordering.
+- A normal assistant message is written only when Qwen generation has completed
+  **and** the browser has sent `playback.completed`. Either event may arrive
+  first; both are required. Node additionally holds that write until the user
+  transcript associated with the response has been persisted, then publishes
+  `response.persisted`.
+- An interrupted assistant message is written only when reconciliation retains a
+  non-empty prefix and Qwen has acknowledged the delete/recreate repair. The
+  stored text is exactly the prefix reported by `response.reconciled`, with
+  `interrupted: true`.
+
+Transient user/assistant deltas, generated-but-unplayed assistant suffixes,
+empty interruption rollbacks, PCM audio, and timing estimates are never stored.
+If an authoritative write fails, Node sends non-recoverable
+`HISTORY_PERSISTENCE_FAILED`, transitions to `ended`, and closes both sides. It
+must not continue with SQLite and Qwen holding divergent histories.
 
 ### Reconciled interrupted response
 
@@ -336,6 +396,7 @@ protocol messages is a contract:
 | Upward slide of at least 72 px, then release | cancel capture → `input.clear`; never `input.commit` |
 | `pointercancel`, unexpected lost capture, window blur, hidden document, disabled input, unmount, or session end | cancel capture → `input.clear`; never `input.commit` |
 | Microphone startup fails after `input.start` | best-effort `input.clear`; no binary commit |
+| Switch/new/end after a commit | settle current assistant → wait for persisted `transcript.user.done` → settle any newly-created assistant → close |
 
 Pointer capture keeps a normal release observable when the pointer leaves the
 button. A release can also occur while microphone startup is still awaiting
@@ -355,11 +416,30 @@ unheard assistant suffix.
   "type": "error",
   "code": "TRANSCRIPTION_FAILED",
   "message": "The user audio could not be transcribed.",
-  "recoverable": true
+  "recoverable": false
 }
 ```
 
-Unknown Qwen events are ignored. Malformed application events are rejected. A Qwen `server_error` or upstream close ends the browser connection; invalid request and transcription failures can leave it open.
+Unknown Qwen events are ignored. Malformed application events are rejected. A Qwen `server_error`, upstream close, failed/empty finalized user transcription, or authoritative SQLite write failure ends the current browser connection. Continuing on that same Qwen context after transcription failure could persist an assistant without the user turn that prompted it, so the failed socket is never reused.
+
+The browser treats transport severity and UI navigation as separate concerns.
+If the visible conversation has never reached `session.ready`, an error fails
+initialization, tears down the partial runtime, and returns to the learner
+launcher. After the conversation has been ready at least once, recoverable errors
+keep the current socket and appear in a top Ant Design message for five seconds.
+A non-recoverable runtime error still closes the uncertain socket, but the
+browser preserves the chat surface and performs one serialized same-conversation
+recovery: it reloads finalized SQLite text and opens a fresh Qwen socket. If that
+replacement cannot initialize, the durable chat surface still remains open, the
+error message expires after five seconds, and the composer becomes a manual reconnect button;
+the existing confirmed end-session control remains available in the header.
+Only an initial connection that has never reached `session.ready` returns to the
+launcher automatically.
+The close event from the discarded socket is epoch-guarded and must not overwrite
+the original error or tear down the replacement runtime. An unexpected close
+also rejects any in-flight user/assistant persistence barrier immediately;
+navigation and session ending never wait for their 32-second safety timeout
+after the transport is gone.
 
 ## Qwen upstream mapping
 

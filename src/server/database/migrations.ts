@@ -255,6 +255,83 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
         CHECK (length(value_en) <= 500);
     `,
   },
+  {
+    version: 6,
+    name: "create_conversation_history",
+    up: `
+      CREATE TABLE conversation_sessions (
+        id TEXT PRIMARY KEY
+          CHECK (length(trim(id)) BETWEEN 1 AND 100),
+        persona_json TEXT NOT NULL
+          CHECK (
+            json_valid(persona_json)
+            AND json_type(persona_json) = 'object'
+          ),
+        scenario_json TEXT NOT NULL
+          CHECK (
+            json_valid(scenario_json)
+            AND json_type(scenario_json) = 'object'
+          ),
+        difficulty TEXT NOT NULL
+          CHECK (difficulty IN ('easy', 'medium', 'hard')),
+        locale TEXT NOT NULL
+          CHECK (locale IN ('en', 'zh')),
+        instructions TEXT NOT NULL
+          CHECK (length(trim(instructions)) BETWEEN 1 AND 12000),
+        voice TEXT NOT NULL
+          CHECK (
+            voice IN (
+              'longanqian',
+              'longanlingxin',
+              'longanlingxi',
+              'longanxiaoxin',
+              'longanlufeng'
+            )
+          ),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE conversation_messages (
+        id TEXT PRIMARY KEY
+          CHECK (length(trim(id)) BETWEEN 1 AND 100),
+        conversation_id TEXT NOT NULL,
+        position INTEGER NOT NULL
+          CHECK (position >= 0),
+        role TEXT NOT NULL
+          CHECK (role IN ('user', 'assistant')),
+        text TEXT NOT NULL
+          CHECK (length(trim(text)) BETWEEN 1 AND 100000),
+        interrupted INTEGER NOT NULL DEFAULT 0
+          CHECK (interrupted IN (0, 1)),
+        source_item_id TEXT
+          CHECK (
+            source_item_id IS NULL
+            OR length(trim(source_item_id)) BETWEEN 1 AND 200
+          ),
+        response_id TEXT
+          CHECK (
+            response_id IS NULL
+            OR length(trim(response_id)) BETWEEN 1 AND 200
+          ),
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (conversation_id)
+          REFERENCES conversation_sessions(id) ON DELETE CASCADE,
+        UNIQUE (conversation_id, position)
+      ) STRICT;
+
+      CREATE INDEX conversation_sessions_updated_at_idx
+        ON conversation_sessions(updated_at DESC, id DESC);
+
+      CREATE UNIQUE INDEX conversation_messages_source_item_idx
+        ON conversation_messages(conversation_id, source_item_id)
+        WHERE source_item_id IS NOT NULL;
+
+      CREATE UNIQUE INDEX conversation_messages_response_idx
+        ON conversation_messages(conversation_id, response_id)
+        WHERE response_id IS NOT NULL;
+    `,
+  },
 ];
 
 interface AppliedMigration {

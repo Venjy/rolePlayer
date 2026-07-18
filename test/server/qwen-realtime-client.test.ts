@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import {
   QwenRealtimeClient,
@@ -23,6 +23,10 @@ class FakeQwenSocket extends EventEmitter {
     }
   }
 
+  public emitJson(event: Record<string, unknown>): void {
+    this.emit("message", Buffer.from(JSON.stringify(event)));
+  }
+
   public close(): void {
     this.readyState = WebSocket.CLOSED;
     queueMicrotask(() => this.emit("close", 1000, Buffer.from("closed")));
@@ -32,6 +36,64 @@ class FakeQwenSocket extends EventEmitter {
     this.close();
   }
 }
+
+const sessionConfiguration = {
+  instructions: "Stay in character.",
+  voice: "longanqian" as const,
+  maxHistoryTurns: 20,
+};
+
+function createSocketFactory(
+  socket: FakeQwenSocket,
+  sessionId = "sess_test",
+): QwenSocketFactory {
+  return () => {
+    queueMicrotask(() => {
+      socket.emitJson({
+        type: "session.created",
+        session: { id: sessionId },
+      });
+    });
+    return socket as unknown as WebSocket;
+  };
+}
+
+function createClient(
+  socket: FakeQwenSocket,
+  socketFactory: QwenSocketFactory = createSocketFactory(socket),
+): QwenRealtimeClient {
+  return new QwenRealtimeClient(
+    {
+      apiKey: "test-secret",
+      endpoint: "ws://qwen.example/realtime",
+      model: "qwen-audio-3.0-realtime-plus",
+      workspaceId: "ws_test",
+    },
+    {
+      onEvent: vi.fn(),
+      onClose: vi.fn(),
+      onMalformedEvent: vi.fn(),
+    },
+    socketFactory,
+  );
+}
+
+function historyItemId(event: Record<string, unknown>): string {
+  return (event.item as { id: string }).id;
+}
+
+function sentEvent(
+  socket: FakeQwenSocket,
+  index: number,
+): Record<string, unknown> {
+  const event = socket.sent[index];
+  if (!event) throw new Error(`Expected sent Qwen event at index ${index}.`);
+  return event;
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("QwenRealtimeClient", () => {
   it("configures a manual session and sends audio before commit/create", async () => {
@@ -70,11 +132,7 @@ describe("QwenRealtimeClient", () => {
     );
 
     await expect(
-      client.connect({
-        instructions: "Stay in character.",
-        voice: "longanqian",
-        maxHistoryTurns: 20,
-      }),
+      client.connect(sessionConfiguration),
     ).resolves.toBe("sess_test");
 
     client.appendAudio(Buffer.from([1, 0, 2, 0]));
@@ -115,5 +173,137 @@ describe("QwenRealtimeClient", () => {
     });
 
     client.close();
+  });
+
+  it("restores text history sequentially and waits for each matching ACK", async () => {
+    const socket = new FakeQwenSocket();
+    const client = createClient(socket);
+
+    const connection = client.connect(sessionConfiguration, [
+      { role: "user", text: "Hello." },
+      { role: "assistant", text: "How can I help?" },
+      { role: "user", text: "Tell me about the plan." },
+    ]);
+
+    await vi.waitFor(() => {
+      expect(socket.sent).toHaveLength(2);
+    });
+
+    const firstCreate = sentEvent(socket, 1);
+    expect(firstCreate).toMatchObject({
+      type: "conversation.item.create",
+      item: {
+        role: "user",
+        content: [{ type: "input_text", text: "Hello." }],
+      },
+    });
+    expect(socket.sent.some((event) => event.type === "response.create")).toBe(
+      false,
+    );
+
+    socket.emitJson({
+      type: "conversation.item.created",
+      item: { id: "an_unrelated_item" },
+    });
+    await Promise.resolve();
+    expect(socket.sent).toHaveLength(2);
+
+    socket.emitJson({
+      type: "conversation.item.created",
+      item: { id: historyItemId(firstCreate) },
+    });
+    await vi.waitFor(() => {
+      expect(socket.sent).toHaveLength(3);
+    });
+
+    const secondCreate = sentEvent(socket, 2);
+    expect(secondCreate).toMatchObject({
+      type: "conversation.item.create",
+      item: {
+        role: "assistant",
+        content: [{ type: "output_text", text: "How can I help?" }],
+      },
+    });
+
+    socket.emitJson({
+      type: "conversation.item.created",
+      item: { id: historyItemId(secondCreate) },
+    });
+    await vi.waitFor(() => {
+      expect(socket.sent).toHaveLength(4);
+    });
+
+    const thirdCreate = sentEvent(socket, 3);
+    expect(thirdCreate).toMatchObject({
+      type: "conversation.item.create",
+      item: {
+        role: "user",
+        content: [
+          { type: "input_text", text: "Tell me about the plan." },
+        ],
+      },
+    });
+
+    socket.emitJson({
+      type: "conversation.item.created",
+      item: { id: historyItemId(thirdCreate) },
+    });
+
+    await expect(connection).resolves.toBe("sess_test");
+    expect(socket.sent.map((event) => event.type)).toEqual([
+      "session.update",
+      "conversation.item.create",
+      "conversation.item.create",
+      "conversation.item.create",
+    ]);
+
+    client.close();
+  });
+
+  it("rejects history restoration when Qwen returns an error", async () => {
+    const socket = new FakeQwenSocket();
+    const client = createClient(socket);
+    const connection = client.connect(sessionConfiguration, [
+      { role: "user", text: "Restore me." },
+    ]);
+
+    await vi.waitFor(() => {
+      expect(socket.sent).toHaveLength(2);
+    });
+
+    socket.emitJson({
+      type: "error",
+      error: { message: "History item was rejected." },
+    });
+
+    await expect(connection).rejects.toThrow("History item was rejected.");
+    expect(socket.readyState).toBe(WebSocket.CLOSED);
+    expect(() => client.appendAudio(Buffer.from([1, 0]))).toThrow(
+      "Qwen session is not ready",
+    );
+    client.close();
+  });
+
+  it("rejects when a history item ACK times out", async () => {
+    vi.useFakeTimers();
+    const socket = new FakeQwenSocket();
+    const client = createClient(socket);
+    const connection = client.connect(sessionConfiguration, [
+      { role: "assistant", text: "An earlier answer." },
+    ]);
+    const rejection = expect(connection).rejects.toThrow(
+      "Timed out while restoring Qwen conversation history item 1/1.",
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(socket.sent.map((event) => event.type)).toEqual([
+      "session.update",
+      "conversation.item.create",
+    ]);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await rejection;
+    expect(socket.readyState).toBe(WebSocket.CLOSED);
   });
 });

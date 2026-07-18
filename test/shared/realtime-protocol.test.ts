@@ -1,55 +1,68 @@
 import { describe, expect, it } from "vitest";
 import {
   clientControlMessageSchema,
-  MAX_REALTIME_INSTRUCTIONS_LENGTH,
   serverMessageSchema,
 } from "../../src/shared/realtime-protocol";
 
 describe("realtime protocol", () => {
-  it("accepts a valid Qwen session configuration", () => {
+  it("accepts a persisted conversation session configuration", () => {
     expect(
       clientControlMessageSchema.parse({
         type: "session.configure",
-        instructions: "Stay in character.",
-        voice: "longanqian",
+        conversationId: "conversation_123",
         maxHistoryTurns: 20,
       }),
-    ).toMatchObject({ type: "session.configure", voice: "longanqian" });
+    ).toMatchObject({
+      type: "session.configure",
+      conversationId: "conversation_123",
+    });
   });
 
   it("rejects invalid history limits", () => {
     expect(() =>
       clientControlMessageSchema.parse({
         type: "session.configure",
-        instructions: "Stay in character.",
-        voice: "longanqian",
+        conversationId: "conversation_123",
         maxHistoryTurns: 51,
       }),
     ).toThrow();
   });
 
-  it("enforces the shared Instructions length limit", () => {
-    const baseConfiguration = {
-      type: "session.configure" as const,
-      voice: "longanqian" as const,
-      maxHistoryTurns: 20,
-    };
-
+  it("requires a bounded conversation ID and rejects browser prompt fields", () => {
     expect(
       clientControlMessageSchema.safeParse({
-        ...baseConfiguration,
-        instructions: "x".repeat(MAX_REALTIME_INSTRUCTIONS_LENGTH),
+        type: "session.configure",
+        conversationId: "x".repeat(100),
+        maxHistoryTurns: 20,
       }).success,
     ).toBe(true);
     expect(
       clientControlMessageSchema.safeParse({
-        ...baseConfiguration,
-        instructions: "x".repeat(MAX_REALTIME_INSTRUCTIONS_LENGTH + 1),
+        type: "session.configure",
+        conversationId: "x".repeat(101),
+        maxHistoryTurns: 20,
       }).success,
     ).toBe(false);
+    expect(() =>
+      clientControlMessageSchema.parse({
+        type: "session.configure",
+        conversationId: "conversation_123",
+        maxHistoryTurns: 20,
+        instructions: "Browser-controlled prompt",
+        voice: "longanqian",
+      }),
+    ).toThrow();
   });
 
   it("accepts stable gateway response events", () => {
+    expect(
+      serverMessageSchema.parse({
+        type: "session.ready",
+        sessionId: "sess_1",
+        conversationId: "conversation_123",
+      }),
+    ).toMatchObject({ type: "session.ready" });
+
     expect(
       serverMessageSchema.parse({
         type: "transcript.user.delta",
@@ -68,6 +81,13 @@ describe("realtime protocol", () => {
         safePlayedMs: 1_250,
       }),
     ).toMatchObject({ type: "playback.interrupted", safePlayedMs: 1_250 });
+
+    expect(
+      serverMessageSchema.parse({
+        type: "response.persisted",
+        responseId: "resp_1",
+      }),
+    ).toMatchObject({ type: "response.persisted", responseId: "resp_1" });
 
     expect(
       serverMessageSchema.parse({

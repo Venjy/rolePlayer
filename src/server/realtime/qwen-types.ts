@@ -6,6 +6,12 @@ export interface QwenSessionConfiguration {
   maxHistoryTurns: number;
 }
 
+/** Final text history replayed into a newly-created Qwen WebSocket session. */
+export interface QwenConversationHistoryItem {
+  role: "user" | "assistant";
+  text: string;
+}
+
 export interface QwenConversationContent {
   type?: string;
   text?: string;

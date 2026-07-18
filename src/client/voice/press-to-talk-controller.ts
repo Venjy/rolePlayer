@@ -25,6 +25,7 @@ export class PressToTalkController {
   private cancelling = false;
   private originY = 0;
   private startTask?: Promise<void>;
+  private finishTask?: Promise<void>;
 
   public constructor(
     private handlers: PressToTalkControllerHandlers,
@@ -37,6 +38,10 @@ export class PressToTalkController {
 
   public get isActivePress(): boolean {
     return this.activePress;
+  }
+
+  public get isLifecycleActive(): boolean {
+    return this.phase !== "idle";
   }
 
   public press(originY: number): Promise<void> {
@@ -73,7 +78,21 @@ export class PressToTalkController {
     if (this.phase === "recording") {
       return this.finish(this.cancelling);
     }
-    return this.startTask ?? Promise.resolve();
+    return this.finishTask ?? this.startTask ?? Promise.resolve();
+  }
+
+  /**
+   * Force-cancels a held or still-starting gesture and waits for any finishing
+   * submit/cancel handler that can no longer be reversed.
+   */
+  public cancelAndWait(): Promise<void> {
+    if (this.phase === "idle") return Promise.resolve();
+    this.activePress = false;
+    this.cancelling = true;
+    this.emitVisualState();
+
+    if (this.phase === "recording") return this.finish(true);
+    return this.finishTask ?? this.startTask ?? Promise.resolve();
   }
 
   private async startLifecycle(): Promise<void> {
@@ -93,15 +112,22 @@ export class PressToTalkController {
     }
   }
 
-  private async finish(cancel: boolean): Promise<void> {
-    if (this.phase !== "recording") return;
-    this.phase = "finishing";
-    try {
-      if (cancel) await this.handlers.cancel();
-      else await this.handlers.submit();
-    } finally {
-      this.reset();
+  private finish(cancel: boolean): Promise<void> {
+    if (this.phase === "finishing") {
+      return this.finishTask ?? Promise.resolve();
     }
+    if (this.phase !== "recording") return Promise.resolve();
+    this.phase = "finishing";
+    const task = (async () => {
+      try {
+        if (cancel) await this.handlers.cancel();
+        else await this.handlers.submit();
+      } finally {
+        this.reset();
+      }
+    })();
+    this.finishTask = task;
+    return task;
   }
 
   private reset(): void {
@@ -109,6 +135,7 @@ export class PressToTalkController {
     this.activePress = false;
     this.cancelling = false;
     this.startTask = undefined;
+    this.finishTask = undefined;
     this.emitVisualState();
   }
 
