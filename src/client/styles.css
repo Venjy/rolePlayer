@@ -94,6 +94,15 @@ input {
   overflow: hidden;
 }
 
+.route-loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 100dvh;
+}
+
 .mobile-history-trigger {
   flex: none;
 }

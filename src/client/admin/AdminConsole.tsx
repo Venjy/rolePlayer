@@ -715,6 +715,7 @@ export function AdminConsole({
             personaDrawer.mode === "edit" ? personaDrawer.persona : undefined
           }
           personaPresets={catalog.personaPresets}
+          qwenVoices={catalog.qwenVoices}
         />
       ) : null}
 

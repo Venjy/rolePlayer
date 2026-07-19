@@ -96,7 +96,7 @@ Official setup references:
    pnpm dev
    ```
 
-6. Open [http://localhost:5173](http://localhost:5173), choose a training scenario, compatible persona, and difficulty, then select **Start voice practice** and allow microphone access. Use the left history rail on wide screens—or its header Drawer button on smaller screens—to reopen and continue a saved conversation. Use **Admin console** to create or edit catalog records. The interface starts in English; use the upper-right language control to switch to Chinese.
+6. Open [http://localhost:5173](http://localhost:5173), choose a training scenario, compatible persona, and difficulty, then select **Start voice practice** and allow microphone access. Use the left history rail on wide screens—or its header Drawer button on smaller screens—to reopen and continue a saved conversation. The admin console has its own route at [http://localhost:5173/admin](http://localhost:5173/admin). Active conversations use `/chat/:conversationId`, such as `http://localhost:5173/chat/1`; refreshing that URL reloads the persisted snapshot/transcript and reconnects the same conversation. The interface starts in English; use the upper-right language control to switch to Chinese.
 
 7. Hold **Hold to talk** while speaking. Release to send, or slide upward at least 72 px before releasing to cancel. While the selected persona is speaking, the control changes to **Hold to interrupt and talk**; holding it stops the current playback, begins context reconciliation, and records the next turn. The Chinese interface uses the equivalent **按住说话** and **按住打断并说话** labels.
 
@@ -150,6 +150,7 @@ Use `--interrupt-during-generation` to exercise the cancellation path. With no t
 ## Current behavior
 
 - One responsive Ant Design SPA for learner launch, admin catalog, and voice chat on mobile and desktop; no separate mobile application or duplicated component tree
+- Browser routes for the learner launcher (`/`), admin console (`/admin`), and refreshable persisted conversations (`/chat/:conversationId`)
 - English and Chinese UI with English as the first-run default, an upper-right language control, Ant Design locale synchronization, and the saved `role-player:locale` preference in `localStorage`
 - Light and dark themes, initialized from the saved choice or OS preference and switchable from the upper-right control
 - Learner launcher with searchable scenario/persona selectors, compatibility filtering, Ant Design easy/medium/hard Radio buttons, and summaries of goals, skill focus, persona voice behavior, and traits
@@ -184,7 +185,7 @@ Fresh catalog and conversation files have independent migration histories and co
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/catalog` | Read `personaPresets`, `scenarioPresets`, bilingual personas/scenarios, and compatibility IDs |
+| `GET` | `/api/catalog` | Read `qwenVoices`, `personaPresets`, `scenarioPresets`, bilingual personas/scenarios, and compatibility IDs |
 | `POST`, `PUT`, `DELETE` | `/api/personas`, `/api/personas/:id` | Create, replace, or delete a persona |
 | `POST`, `PUT`, `DELETE` | `/api/scenarios`, `/api/scenarios/:id` | Create, replace, or delete a scenario |
 
@@ -198,7 +199,7 @@ The conversation REST API is:
 | `GET` | `/api/conversations` | List all conversations by latest persisted activity |
 | `GET` | `/api/conversations/:id` | Read one immutable launch snapshot and its ordered finalized messages |
 
-Business defaults are defined only in `src/server/catalog/initial-data/*.json` and installed with `pnpm catalog:init` (source) or `pnpm catalog:init:prod` (built). The initializer inserts bilingual presets, three starter personas, three starter scenarios, and compatibility links. Stable IDs and transactional conflict-tolerant writes make repeated runs safe without duplicate data or overwritten administrator rows.
+Business defaults are defined only in `src/server/catalog/initial-data/*.json` and installed with `pnpm catalog:init` (source) or `pnpm catalog:init:prod` (built). The initializer inserts bilingual Qwen voice names, bilingual presets, three starter personas, three starter scenarios, and compatibility links. Stable seed keys and transactional conflict-tolerant writes make repeated runs safe without duplicate data or overwritten existing rows.
 
 Conversation snapshots, selected difficulty, compiled Instructions, voice, and finalized transcript text are persisted in the conversation database. Streaming drafts, microphone/model audio, users, and evaluations are not. The current private single-user deployment exposes one global history; there is no conversation deletion API or retention job yet. See [Catalog and prompt compilation](docs/CATALOG_AND_PROMPTS.md) and [Database](docs/DATABASE.md) for the complete contracts.
 

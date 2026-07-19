@@ -15,6 +15,7 @@ import type {
   PersonaInput,
   PersonaPreset,
   PersonaPresetCategory,
+  QwenVoiceDefinition,
 } from "../../shared/role-play-catalog";
 import { compilePersonaInstructions } from "../../shared/role-play-instructions";
 import { resolvePersonaPresetReferences } from "../../shared/role-play-preset-resolution";
@@ -39,6 +40,7 @@ import styles from "./AdminConsole.module.css";
 interface PersonaEditorDrawerProps {
   persona?: Persona;
   personaPresets: PersonaPreset[];
+  qwenVoices: QwenVoiceDefinition[];
   busy: boolean;
   onCancel: () => void;
   onSubmit: (input: PersonaInput) => Promise<void>;
@@ -84,6 +86,7 @@ function buildPreviewPersona(
 export function PersonaEditorDrawer({
   persona,
   personaPresets,
+  qwenVoices,
   busy,
   onCancel,
   onSubmit,
@@ -96,6 +99,10 @@ export function PersonaEditorDrawer({
   const presetOptions = useMemo(
     () => buildPersonaPresetOptions(personaPresets, locale),
     [locale, personaPresets],
+  );
+  const voiceOptions = useMemo(
+    () => getVoiceOptions(qwenVoices, locale),
+    [locale, qwenVoices],
   );
   const requiredPresetLabels: Partial<
     Record<PersonaPresetCategory, string>
@@ -111,6 +118,9 @@ export function PersonaEditorDrawer({
             presetOptions[category as PersonaPresetCategory].length === 0,
         )
         .map(([, label]) => label);
+  if (voiceOptions.length === 0) {
+    missingRequiredPresets.push(t({ en: "voice", zh: "音色" }));
+  }
   const presetInitializationMessage =
     missingRequiredPresets.length > 0
       ? t(
@@ -485,7 +495,7 @@ export function PersonaEditorDrawer({
             name="voice"
             rules={[{ required: true }]}
           >
-            <Select options={getVoiceOptions(locale)} />
+            <Select options={voiceOptions} />
           </Form.Item>
           <Form.Item
             label={t({

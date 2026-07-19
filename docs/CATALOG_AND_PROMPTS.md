@@ -12,13 +12,14 @@ All deployment-owned business data is JSON under `src/server/catalog/initial-dat
 - `persona-tone-styles.json`
 - `persona-motivations.json`
 - `persona-concerns.json`
+- `qwen-voices.json`
 - `scenario-training-goals.json`
 - `scenario-skill-focuses.json`
 - `scenario-success-criteria.json`
 - `personas.json`
 - `scenarios.json`
 
-`catalog-initializer.ts` contains validation and idempotent database writes only. Do not add seed labels, occupations, personas, scenarios, or criteria to TypeScript, React localization files, or migrations.
+`catalog-initializer.ts` contains validation and idempotent database writes only. Do not add seed voice names, labels, occupations, personas, scenarios, or criteria to TypeScript, React localization files, or migrations.
 
 ## Bilingual fields
 
@@ -45,6 +46,8 @@ Preset API records follow the same convention: `value` is English and `valueZhCn
 ## Persona and scenario boundaries
 
 Persona owns identity-independent character behavior: occupation, demographics, background, personality, communication style, tone, motivations, concerns, Qwen voice, speaking pace, and interjection/challenge tendency. There is no separate identity field.
+
+Qwen voices keep the official provider ID (`longanqian`, etc.) separate from their bilingual display names. `qwen-voices.json` installs those names into `qwen_voices`; `GET /api/catalog` returns them as `qwenVoices`. Persona records and immutable conversation snapshots continue to store the official ID because that exact value is sent to Qwen. UI labels combine both pieces, for example `longanqian - Natural female voice` or `longanqian - 自然女声`.
 
 Scenario owns training context: description, goals, skill focus, success criteria, and scoring weights. Scoring item names are derived from success criteria and cannot be authored separately. Whole-number default weights are evenly distributed with rounding units placed at the end, so three items receive `33, 33, 34`; totals must remain exactly 100.
 

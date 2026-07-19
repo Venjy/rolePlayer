@@ -22,6 +22,7 @@ import {
   Popconfirm,
   Popover,
   Slider,
+  Spin,
   theme as antdTheme,
   Tooltip,
   Typography,
@@ -66,13 +67,17 @@ import {
   RealtimeClient,
   RealtimeServerError,
 } from "./realtime/realtime-client";
+import {
+  ADMIN_ROUTE,
+  HOME_ROUTE,
+  useAppRoute,
+} from "./routing";
 import { usePressToTalk } from "./voice/use-press-to-talk";
 
 const THEME_STORAGE_KEY = "role-player:color-mode";
 
 type ColorMode = "light" | "dark";
 type UiPreviewMode = "session" | "recording" | null;
-type AppMode = "learner" | "admin";
 type UiError = string | LocalizedText;
 
 interface ActiveSessionConfig {
@@ -421,6 +426,7 @@ const UI_PREVIEW_FIXTURE = import.meta.env.DEV
 
 export function App() {
   const { locale, antdLocale, t } = useI18n();
+  const { route, routeRef: requestedRouteRef, navigate } = useAppRoute();
   const [messageApi, messageContextHolder] = antMessage.useMessage();
   const uiPreviewMode = UI_PREVIEW_FIXTURE?.mode ?? null;
   const sessionUiPreview = uiPreviewMode !== null;
@@ -443,7 +449,6 @@ export function App() {
   const refreshConversationHistorySilently =
     conversationHistory.refreshSilently;
   const [colorMode, setColorMode] = useState<ColorMode>(getInitialColorMode);
-  const [appMode, setAppMode] = useState<AppMode>("learner");
   const [difficulty, setDifficulty] = useState<Difficulty>("medium");
   const [activeSessionConfig, setActiveSessionConfig] =
     useState<ActiveSessionConfig | null>(null);
@@ -453,7 +458,9 @@ export function App() {
   const [sessionState, setSessionState] = useState<SessionState>(
     recordingUiPreview ? "listening" : sessionUiPreview ? "speaking" : "ended",
   );
-  const [isStarting, setIsStarting] = useState(false);
+  const [isStarting, setIsStarting] = useState(
+    route.page === "chat" && !sessionUiPreview,
+  );
   const [isRecording, setIsRecording] = useState(recordingUiPreview);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
@@ -501,6 +508,8 @@ export function App() {
   const pendingRuntimeRecoveryRef = useRef<
     RuntimeRecoveryRequest | undefined
   >(undefined);
+  const activeConversationIdRef = useRef<number | null>(null);
+  const synchronizeRequestedRouteRef = useRef<() => void>(() => undefined);
   const runtimeRecoveryConsumedRef = useRef(false);
   const runtimeRecoveryStabilityTimerRef = useRef<number | undefined>(
     undefined,
@@ -892,6 +901,7 @@ export function App() {
         messageApi.destroy(SESSION_ERROR_MESSAGE_KEY);
         setSessionActive(false);
         setActiveSessionConfig(null);
+        activeConversationIdRef.current = null;
         setActiveConversationId(null);
         setSessionState("ended");
       }
@@ -1276,6 +1286,7 @@ export function App() {
     };
 
     setActiveSessionConfig(sessionConfig);
+    activeConversationIdRef.current = conversation.id;
     setActiveConversationId(conversation.id);
     setErrorMessage(null);
     setTurns(
@@ -1527,6 +1538,7 @@ export function App() {
       ) {
         runPendingRuntimeRecoveryRef.current();
       }
+      synchronizeRequestedRouteRef.current();
     }
   }, [
     activateConversation,
@@ -1582,16 +1594,23 @@ export function App() {
         locale,
       });
       await activateConversation(conversation);
+      if (requestedRouteRef.current.page === "home") {
+        navigate({ page: "chat", conversationId: conversation.id });
+      }
     } catch (error) {
       reportContextualError(readableError(error));
     } finally {
       transitionInProgressRef.current = false;
       setIsStarting(false);
       runPendingRuntimeRecoveryRef.current();
+      synchronizeRequestedRouteRef.current();
     }
   };
 
-  const resumeConversation = async (conversationId: number) => {
+  const resumeConversation = async (
+    conversationId: number,
+    synchronizeUrl = true,
+  ) => {
     setHistoryMobileOpen(false);
     if (sessionActive && conversationId === activeConversationId) return;
     if (transitionInProgressRef.current) return;
@@ -1610,16 +1629,29 @@ export function App() {
       }
       const conversation = await conversationHistory.load(conversationId);
       await activateConversation(conversation);
+      if (synchronizeUrl) {
+        navigate({ page: "chat", conversationId: conversation.id });
+      }
     } catch (error) {
       reportContextualError(readableError(error));
+      const currentConversationId = activeConversationIdRef.current;
+      if (conversationStartedRef.current && currentConversationId !== null) {
+        navigate(
+          { page: "chat", conversationId: currentConversationId },
+          { replace: true },
+        );
+      } else {
+        navigate(HOME_ROUTE, { replace: true });
+      }
     } finally {
       transitionInProgressRef.current = false;
       setIsStarting(false);
       runPendingRuntimeRecoveryRef.current();
+      synchronizeRequestedRouteRef.current();
     }
   };
 
-  const showNewConversation = async () => {
+  const showNewConversation = async (synchronizeUrl = true) => {
     setHistoryMobileOpen(false);
     if (transitionInProgressRef.current) return;
     transitionInProgressRef.current = true;
@@ -1636,12 +1668,21 @@ export function App() {
       await refreshConversationHistorySilently();
       setErrorMessage(null);
       setTurns([]);
+      if (synchronizeUrl) navigate(HOME_ROUTE);
     } catch (error) {
       reportContextualError(readableError(error));
+      const currentConversationId = activeConversationIdRef.current;
+      if (conversationStartedRef.current && currentConversationId !== null) {
+        navigate(
+          { page: "chat", conversationId: currentConversationId },
+          { replace: true },
+        );
+      }
     } finally {
       transitionInProgressRef.current = false;
       setIsStarting(false);
       runPendingRuntimeRecoveryRef.current();
+      synchronizeRequestedRouteRef.current();
     }
   };
 
@@ -1874,14 +1915,57 @@ export function App() {
       await settleSessionBeforeTransition();
       await teardownSessionRuntime();
       await refreshConversationHistorySilently();
+      navigate(HOME_ROUTE);
     } catch (error) {
       reportContextualError(readableError(error));
+      const currentConversationId = activeConversationIdRef.current;
+      if (conversationStartedRef.current && currentConversationId !== null) {
+        navigate(
+          { page: "chat", conversationId: currentConversationId },
+          { replace: true },
+        );
+      }
     } finally {
       transitionInProgressRef.current = false;
       setIsStarting(false);
       runPendingRuntimeRecoveryRef.current();
+      synchronizeRequestedRouteRef.current();
     }
   };
+
+  useEffect(() => {
+    synchronizeRequestedRouteRef.current = () => {
+      if (sessionUiPreview || transitionInProgressRef.current) return;
+
+      const requestedRoute = requestedRouteRef.current;
+      if (requestedRoute.page === "not_found") {
+        navigate(HOME_ROUTE, { replace: true });
+        return;
+      }
+
+      if (requestedRoute.page === "chat") {
+        if (
+          activeConversationIdRef.current === requestedRoute.conversationId &&
+          conversationStartedRef.current
+        ) {
+          return;
+        }
+        void resumeConversation(requestedRoute.conversationId, false);
+        return;
+      }
+
+      if (
+        activeConversationIdRef.current !== null ||
+        conversationStartedRef.current
+      ) {
+        void showNewConversation(false);
+      }
+    };
+  });
+
+  useEffect(() => {
+    synchronizeRequestedRouteRef.current();
+  }, [route]);
 
   const handleConversationScroll = () => {
     const viewport = conversationViewportRef.current;
@@ -1962,6 +2046,8 @@ export function App() {
   const themeToggleLabel = isDark
     ? t({ en: "Switch to light theme", zh: "切换到浅色主题" })
     : t({ en: "Switch to dark theme", zh: "切换到深色主题" });
+  const restoringConversationRoute =
+    route.page === "chat" && !sessionActive && !sessionUiPreview;
 
   const playbackControls = (
     <div className="playback-popover">
@@ -2031,7 +2117,7 @@ export function App() {
     >
       <AntApp className="application-root">
         {messageContextHolder}
-        {!sessionActive && appMode === "admin" ? (
+        {!sessionActive && route.page === "admin" ? (
           <AdminConsole
             catalog={rolePlayCatalog.catalog}
             busy={rolePlayCatalog.busy}
@@ -2041,7 +2127,7 @@ export function App() {
               undefined
             }
             themeButton={themeButton}
-            onExit={() => setAppMode("learner")}
+            onExit={() => navigate(HOME_ROUTE)}
             onCreatePersona={rolePlayCatalog.createPersona}
             onUpdatePersona={rolePlayCatalog.updatePersona}
             onDeletePersona={rolePlayCatalog.deletePersona}
@@ -2066,70 +2152,80 @@ export function App() {
             <div
               className={`learner-workspace-main${sessionActive ? " has-active-session" : ""}`}
             >
-              {!sessionActive ? (
-            <LearnerLaunchPanel
-              catalog={rolePlayCatalog.catalog}
-              loading={rolePlayCatalog.loading}
-              error={launchError}
-              selectedScenarioId={selectedScenario?.id ?? null}
-              selectedPersonaId={selectedPersona?.id ?? null}
-              difficulty={difficulty}
-              onScenarioChange={handleScenarioSelection}
-              onPersonaChange={(personaId) =>
-                setCatalogSelection((current) => ({
-                  ...current,
-                  personaId,
-                }))
-              }
-              onDifficultyChange={setDifficulty}
-              onStart={startSession}
-              isStarting={isStarting}
-              startDisabled={!canStart}
-              historyButton={
-                <Tooltip
-                  title={t({
-                    en: "Open conversation history",
-                    zh: "打开历史会话",
-                  })}
-                >
-                  <Button
-                    className="mobile-history-trigger"
-                    type="text"
-                    shape="circle"
-                    icon={<HistoryOutlined />}
-                    aria-label={t({
-                      en: "Open conversation history",
-                      zh: "打开历史会话",
+              {restoringConversationRoute ? (
+                <main className="route-loading-state" aria-busy="true">
+                  <Spin size="large" />
+                  <Typography.Text type="secondary">
+                    {t({
+                      en: "Restoring conversation…",
+                      zh: "正在恢复会话…",
                     })}
-                    onClick={() => setHistoryMobileOpen(true)}
-                  />
-                </Tooltip>
-              }
-              themeButton={themeButton}
-              onOpenAdmin={() => setAppMode("admin")}
-            />
+                  </Typography.Text>
+                </main>
+              ) : !sessionActive ? (
+                <LearnerLaunchPanel
+                  catalog={rolePlayCatalog.catalog}
+                  loading={rolePlayCatalog.loading}
+                  error={launchError}
+                  selectedScenarioId={selectedScenario?.id ?? null}
+                  selectedPersonaId={selectedPersona?.id ?? null}
+                  difficulty={difficulty}
+                  onScenarioChange={handleScenarioSelection}
+                  onPersonaChange={(personaId) =>
+                    setCatalogSelection((current) => ({
+                      ...current,
+                      personaId,
+                    }))
+                  }
+                  onDifficultyChange={setDifficulty}
+                  onStart={startSession}
+                  isStarting={isStarting}
+                  startDisabled={!canStart}
+                  historyButton={
+                    <Tooltip
+                      title={t({
+                        en: "Open conversation history",
+                        zh: "打开历史会话",
+                      })}
+                    >
+                      <Button
+                        className="mobile-history-trigger"
+                        type="text"
+                        shape="circle"
+                        icon={<HistoryOutlined />}
+                        aria-label={t({
+                          en: "Open conversation history",
+                          zh: "打开历史会话",
+                        })}
+                        onClick={() => setHistoryMobileOpen(true)}
+                      />
+                    </Tooltip>
+                  }
+                  themeButton={themeButton}
+                  onOpenAdmin={() => navigate(ADMIN_ROUTE)}
+                />
               ) : (
-          <main className="chat-shell">
-            <header className="chat-header">
-              <div className="persona-summary">
-                <Tooltip
-                  title={t({
-                    en: "Open conversation history",
-                    zh: "打开历史会话",
-                  })}
-                >
-                  <Button
-                    className="mobile-history-trigger"
-                    type="text"
-                    shape="circle"
-                    icon={<HistoryOutlined />}
-                    aria-label={t({
-                      en: "Open conversation history",
-                      zh: "打开历史会话",
-                    })}
-                    onClick={() => setHistoryMobileOpen(true)}
-                  />
-                </Tooltip>
+                <main className="chat-shell">
+                  <header className="chat-header">
+                    <div className="persona-summary">
+                      <Tooltip
+                        title={t({
+                          en: "Open conversation history",
+                          zh: "打开历史会话",
+                        })}
+                      >
+                        <Button
+                          className="mobile-history-trigger"
+                          type="text"
+                          shape="circle"
+                          icon={<HistoryOutlined />}
+                          aria-label={t({
+                            en: "Open conversation history",
+                            zh: "打开历史会话",
+                          })}
+                          onClick={() => setHistoryMobileOpen(true)}
+                        />
+                      </Tooltip>
                 <Avatar
                   size={42}
                   icon={<CustomerServiceOutlined />}

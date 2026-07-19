@@ -72,6 +72,13 @@ describe("catalog routes", () => {
       const response = await app.inject({ method: "GET", url: "/api/catalog" });
       expect(response.statusCode).toBe(200);
       const catalog = rolePlayCatalogSchema.parse(response.json());
+      expect(catalog.qwenVoices).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          voice: "longanlufeng",
+          name: "Cheerful male voice",
+          nameZhCn: "开朗男声",
+        }),
+      ]));
       expect(catalog.personaPresets).toEqual(expect.arrayContaining([
         expect.objectContaining({ category: "occupation", value: "Sales Director", valueZhCn: "销售总监" }),
       ]));

@@ -23,7 +23,13 @@ import {
   Typography,
 } from "antd";
 import { useMemo, type ReactNode } from "react";
-import type { Difficulty, Persona, RolePlayCatalog, Scenario } from "../../shared/role-play-catalog";
+import type {
+  Difficulty,
+  Persona,
+  QwenVoiceDefinition,
+  RolePlayCatalog,
+  Scenario,
+} from "../../shared/role-play-catalog";
 import { localizeCatalog } from "../catalog/catalog-localization";
 import { getVoiceLabel } from "../catalog/qwen-voice-options";
 import {
@@ -174,9 +180,10 @@ function ScenarioSummary({ scenario }: ScenarioSummaryProps) {
 
 interface PersonaSummaryProps {
   persona: Persona;
+  qwenVoices: readonly QwenVoiceDefinition[];
 }
 
-function PersonaSummary({ persona }: PersonaSummaryProps) {
+function PersonaSummary({ persona, qwenVoices }: PersonaSummaryProps) {
   const { locale, t } = useI18n();
   const basicDetails = [
     t(GENDER_LABELS[persona.gender]),
@@ -258,7 +265,7 @@ function PersonaSummary({ persona }: PersonaSummaryProps) {
             children: (
               <Space size={6}>
                 <AudioOutlined />
-                <span>{getVoiceLabel(persona.voice, locale)}</span>
+                <span>{getVoiceLabel(persona.voice, qwenVoices, locale)}</span>
               </Space>
             ),
           },
@@ -573,7 +580,10 @@ export function LearnerLaunchPanel({
                     <ScenarioSummary scenario={selectedScenario} />
                   )}
                   {selectedPersona && (
-                    <PersonaSummary persona={selectedPersona} />
+                    <PersonaSummary
+                      persona={selectedPersona}
+                      qwenVoices={localizedCatalog.qwenVoices}
+                    />
                   )}
                 </div>
               )}

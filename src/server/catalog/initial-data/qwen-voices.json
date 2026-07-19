@@ -1,0 +1,37 @@
+[
+  {
+    "key": "qwen_voice_longanqian",
+    "voice": "longanqian",
+    "name": "Natural female voice",
+    "nameZhCn": "自然女声",
+    "position": 0
+  },
+  {
+    "key": "qwen_voice_longanlingxin",
+    "voice": "longanlingxin",
+    "name": "Sophisticated female voice",
+    "nameZhCn": "知性女声",
+    "position": 1
+  },
+  {
+    "key": "qwen_voice_longanlingxi",
+    "voice": "longanlingxi",
+    "name": "Lively female voice",
+    "nameZhCn": "活泼女声",
+    "position": 2
+  },
+  {
+    "key": "qwen_voice_longanxiaoxin",
+    "voice": "longanxiaoxin",
+    "name": "Emotional female voice",
+    "nameZhCn": "感性女声",
+    "position": 3
+  },
+  {
+    "key": "qwen_voice_longanlufeng",
+    "voice": "longanlufeng",
+    "name": "Cheerful male voice",
+    "nameZhCn": "开朗男声",
+    "position": 4
+  }
+]

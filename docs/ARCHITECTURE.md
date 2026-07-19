@@ -63,6 +63,7 @@ During development, Vite runs on port 5173 and proxies `/api` and `/ws` to Fasti
 
 ### `src/client`
 
+- `routing/` owns the native History API route contract for `/`, `/admin`, and `/chat/:conversationId`; `App.tsx` synchronizes those routes with safe realtime-session transitions.
 - `App.tsx` owns session/UI state, catalog selection, the active-session configuration snapshot, and composition of learner, admin, and chat views.
 - `learner/` owns the searchable scenario/persona selectors, compatibility-filtered launch summary, and per-launch difficulty selection.
 - `admin/` owns searchable catalog lists, database-backed persona/scenario preset selection, locale-specific create/edit drawers, validation feedback, compatibility editing, deletion controls, and live Instructions preview.
@@ -122,6 +123,8 @@ The learner launcher, admin console, and active session each have one component 
 The learner launcher fetches `GET /api/catalog`, lets the learner search for a scenario, filters personas through the scenario's compatibility IDs, and offers easy/medium/hard difficulty. It summarizes goals, skill focus, role traits, behavior, and voice before start. The admin console uses the same catalog state for searchable persona/scenario tabs and responsive edit drawers. Persona and scenario editors keep preset IDs as form values while localizing only the option labels. A successful mutation applies its returned result locally and then reloads the complete catalog, so returning to the learner view shows saved changes immediately without rebuilding the SPA.
 
 The learner workspace adds one responsive navigation region around the launcher or active session. At 1200 px and above, a 288 px history rail remains on the left. Below 1200 px, the rail is hidden and the same list content opens in an Ant Design Drawer from a header button. The Drawer/rail can select any persisted conversation or return to a new launch without creating a separate mobile page.
+
+Top-level surfaces have stable browser URLs: `/` opens the learner launcher, `/admin` opens catalog administration, and `/chat/:conversationId` restores a persisted conversation by its existing SQLite-generated positive integer ID. Starting or selecting a conversation updates the URL only after the durable record has loaded and realtime initialization succeeds. `useAppRoute` publishes every programmatic or popstate destination to a synchronous `routeRef` before scheduling React route state; the serialized session-transition coordinator must read that reference so a completion callback cannot act on the previous URL and clear freshly restored turns. A direct load or refresh of a chat URL fetches its immutable snapshots and finalized messages before rebuilding the Qwen connection. Browser back/forward navigation uses the same settlement and teardown barriers as in-app navigation. Numeric IDs are valid URL path segments; do not introduce a second hash identifier without an authorization, public-enumeration, or external-sharing requirement.
 
 The active session remains a three-row grid inside that workspace:
 

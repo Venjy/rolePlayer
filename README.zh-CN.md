@@ -96,7 +96,7 @@
    pnpm dev
    ```
 
-6. 打开 [http://localhost:5173](http://localhost:5173)，选择训练场景、兼容角色和难度，点击 **Start voice practice（开始语音对练）**，并允许浏览器使用麦克风。在宽屏设备上使用左侧历史栏，在较小屏幕上使用页面头部的 Drawer 按钮，即可重新进入并继续历史会话。通过 **Admin console（管理控制台）** 可以新建或编辑目录数据。界面首次使用时默认为英文，可通过右上角语言按钮切换到中文。
+6. 打开 [http://localhost:5173](http://localhost:5173)，选择训练场景、兼容角色和难度，点击 **Start voice practice（开始语音对练）**，并允许浏览器使用麦克风。在宽屏设备上使用左侧历史栏，在较小屏幕上使用页面头部的 Drawer 按钮，即可重新进入并继续历史会话。管理控制台拥有独立地址 [http://localhost:5173/admin](http://localhost:5173/admin)。聊天会话使用 `/chat/:conversationId`，例如 `http://localhost:5173/chat/1`；刷新该地址会重新读取持久化的快照和文字历史，并连接到同一个会话。界面首次使用时默认为英文，可通过右上角语言按钮切换到中文。
 
 7. 说话时按住 **Hold to talk（按住说话）**，松开发送；向上滑动至少 72 px 后再松开可取消。如果角色正在说话，按钮会变为 **Hold to interrupt and talk（按住打断并说话）**；按住后会立即停止当前播放、开始上下文修复，并录制下一轮输入。
 
@@ -150,6 +150,7 @@ pnpm smoke:realtime /absolute/path/to/input.pcm --interrupt
 ## 当前功能
 
 - 学员启动页、目录管理和语音聊天使用同一个响应式 Ant Design SPA，同时适配移动端和桌面端；没有独立移动应用或重复组件树
+- 启动页（`/`）、管理控制台（`/admin`）和可刷新恢复的会话（`/chat/:conversationId`）拥有独立浏览器地址
 - 中英文界面，首次使用默认为英文；右上角提供语言切换，Ant Design locale 保持同步，并将 `role-player:locale` 保存到 `localStorage`
 - 支持明暗主题，根据保存值或系统偏好初始化，并可从右上角切换
 - 学员启动页提供可搜索的场景和角色选择、兼容性过滤、Ant Design 简单/中等/困难单选按钮，以及目标、技能重点、角色语音行为和性格摘要
@@ -184,7 +185,7 @@ pnpm smoke:realtime /absolute/path/to/input.pcm --interrupt
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| `GET` | `/api/catalog` | 读取 `personaPresets`、`scenarioPresets`、双语角色/场景和兼容 ID |
+| `GET` | `/api/catalog` | 读取 `qwenVoices`、`personaPresets`、`scenarioPresets`、双语角色/场景和兼容 ID |
 | `POST`、`PUT`、`DELETE` | `/api/personas`、`/api/personas/:id` | 新建、整体替换或删除角色 |
 | `POST`、`PUT`、`DELETE` | `/api/scenarios`、`/api/scenarios/:id` | 新建、整体替换或删除场景 |
 
@@ -198,7 +199,7 @@ pnpm smoke:realtime /absolute/path/to/input.pcm --interrupt
 | `GET` | `/api/conversations` | 按最新持久化活动时间列出全部会话 |
 | `GET` | `/api/conversations/:id` | 读取一个不可变启动快照及其有序最终消息 |
 
-业务默认值只定义在 `src/server/catalog/initial-data/*.json` 中。源码开发通过 `pnpm catalog:init` 安装，构建后通过 `pnpm catalog:init:prod` 安装。初始化器写入双语预设、三个双语示例角色和三个双语场景；SQLite 自增 ID、稳定初始化键与事务化冲突容忍写入保证重复运行不产生重复数据，也不会覆盖管理员已有记录。
+业务默认值只定义在 `src/server/catalog/initial-data/*.json` 中。源码开发通过 `pnpm catalog:init` 安装，构建后通过 `pnpm catalog:init:prod` 安装。初始化器写入双语 Qwen 音色名称、双语预设、三个双语示例角色和三个双语场景；SQLite 自增 ID、稳定初始化键与事务化冲突容忍写入保证重复运行不产生重复数据，也不会覆盖已有记录。
 
 系统会在会话数据库中持久化会话快照、所选难度、编译后的 Instructions、音色和最终转写文字。流式草稿、麦克风/模型音频、用户和评估数据不会持久化。目前的私有单用户部署暴露一份全局历史记录，尚无会话删除 API 或保留期限任务。完整契约请参阅[目录与提示词编译](docs/CATALOG_AND_PROMPTS.md)和[数据库](docs/DATABASE.md)。
 

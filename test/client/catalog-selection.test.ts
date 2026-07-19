@@ -33,6 +33,7 @@ function scenario(id: number, allowedPersonaIds: number[]): Scenario {
   };
 }
 const catalog: RolePlayCatalog = {
+  qwenVoices: [],
   personaPresets: [], scenarioPresets: [], personas: [persona(1), persona(2)],
   scenarios: [scenario(1, [1]), scenario(2, [2])],
 };

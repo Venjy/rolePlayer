@@ -20,6 +20,7 @@ import type {
 } from "../i18n/locale";
 
 const EMPTY_CATALOG: RolePlayCatalog = {
+  qwenVoices: [],
   personaPresets: [],
   scenarioPresets: [],
   personas: [],

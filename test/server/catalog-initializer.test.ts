@@ -6,6 +6,7 @@ import {
   INITIAL_CATALOG_PERSONAS,
   INITIAL_CATALOG_SCENARIOS,
   INITIAL_PERSONA_PRESETS,
+  INITIAL_QWEN_VOICES,
   INITIAL_SCENARIO_PRESETS,
   initializeCatalogData,
 } from "../../src/server/catalog/catalog-initializer";
@@ -35,6 +36,14 @@ describe("initializeCatalogData", () => {
   it("loads every localized business value from JSON-backed definitions", () => {
     expect(INITIAL_PERSONA_PRESETS.length).toBeGreaterThan(20);
     expect(INITIAL_SCENARIO_PRESETS.length).toBeGreaterThan(10);
+    expect(INITIAL_QWEN_VOICES).toHaveLength(5);
+    expect(INITIAL_QWEN_VOICES).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        voice: "longanqian",
+        name: "Natural female voice",
+        nameZhCn: "自然女声",
+      }),
+    ]));
     for (const preset of [...INITIAL_PERSONA_PRESETS, ...INITIAL_SCENARIO_PRESETS]) {
       expect(preset.value.trim()).not.toBe("");
       expect(preset.valueZhCn.trim()).not.toBe("");
@@ -50,6 +59,7 @@ describe("initializeCatalogData", () => {
     try {
       const first = initializeCatalogData(database);
       expect(first).toMatchObject({
+        qwenVoiceRowsInserted: INITIAL_QWEN_VOICES.length,
         presetRowsInserted: INITIAL_PERSONA_PRESETS.length,
         scenarioPresetRowsInserted: INITIAL_SCENARIO_PRESETS.length,
         personaRowsInserted: INITIAL_CATALOG_PERSONAS.length,
@@ -57,6 +67,8 @@ describe("initializeCatalogData", () => {
       });
       const second = initializeCatalogData(database);
       expect(second).toMatchObject({
+        qwenVoiceRowsInserted: 0,
+        qwenVoiceRowsSkipped: INITIAL_QWEN_VOICES.length,
         presetRowsInserted: 0,
         presetRowsSkipped: INITIAL_PERSONA_PRESETS.length,
         scenarioPresetRowsInserted: 0,
@@ -67,6 +79,13 @@ describe("initializeCatalogData", () => {
         scenarioRowsSkipped: INITIAL_CATALOG_SCENARIOS.length,
       });
       expect(new CatalogRepository(database).listCatalog()).toMatchObject({
+        qwenVoices: expect.arrayContaining([
+          expect.objectContaining({
+            voice: "longanqian",
+            name: "Natural female voice",
+            nameZhCn: "自然女声",
+          }),
+        ]),
         personas: expect.arrayContaining([
           expect.objectContaining({ id: expect.any(Number), name: "Alex", nameZhCn: "亚历克斯" }),
           expect.objectContaining({ id: expect.any(Number), name: "Lin Yue", nameZhCn: "林悦" }),
@@ -169,6 +188,8 @@ describe("initializeCatalogData", () => {
       ).get())
         .toEqual({ count: 0 });
       expect(database.raw.prepare("SELECT COUNT(*) AS count FROM personas").get())
+        .toEqual({ count: 0 });
+      expect(database.raw.prepare("SELECT COUNT(*) AS count FROM qwen_voices").get())
         .toEqual({ count: 0 });
     } finally {
       database.close();

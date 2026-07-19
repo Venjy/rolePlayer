@@ -39,12 +39,15 @@ import personaOccupationData from "./initial-data/persona-occupations.json";
 import personaPersonalityTraitData from "./initial-data/persona-personality-traits.json";
 import personaToneStyleData from "./initial-data/persona-tone-styles.json";
 import personaData from "./initial-data/personas.json";
+import qwenVoiceData from "./initial-data/qwen-voices.json";
 import scenarioSkillFocusData from "./initial-data/scenario-skill-focuses.json";
 import scenarioSuccessCriterionData from "./initial-data/scenario-success-criteria.json";
 import scenarioTrainingGoalData from "./initial-data/scenario-training-goals.json";
 import scenarioData from "./initial-data/scenarios.json";
 
 export interface CatalogInitializationResult {
+  qwenVoiceRowsInserted: number;
+  qwenVoiceRowsSkipped: number;
   presetRowsInserted: number;
   presetRowsSkipped: number;
   scenarioPresetRowsInserted: number;
@@ -72,8 +75,24 @@ interface StarterPresetJson {
   position: number;
 }
 
+interface StarterQwenVoice {
+  key: string;
+  voice: z.infer<typeof qwenVoiceSchema>;
+  name: string;
+  nameZhCn: string;
+  position: number;
+}
+
 const starterKeySchema = z.string().trim().min(1).max(100);
 const localizedOptionalText = (maximum: number) => z.string().trim().max(maximum);
+
+const starterQwenVoiceSchema = z.object({
+  key: starterKeySchema,
+  voice: qwenVoiceSchema,
+  name: z.string().trim().min(1).max(120),
+  nameZhCn: z.string().trim().min(1).max(120),
+  position: z.number().int().min(0),
+});
 
 const starterPersonaInputSchema = z.object({
   name: localizedOptionalText(80),
@@ -146,6 +165,10 @@ export class CatalogInitializationScenarioCapacityError extends Error {
 export const DEFAULT_INITIAL_SCENARIO_KEY = "scenario_sales_discovery";
 const SEED_TIMESTAMP = formatDatabaseTimestamp(0);
 
+export const INITIAL_QWEN_VOICES: StarterQwenVoice[] = qwenVoiceData.map(
+  (definition) => starterQwenVoiceSchema.parse(definition),
+);
+
 export const INITIAL_PERSONA_PRESETS: StarterPreset[] = [
   ...parsePresetDefinitions(personaOccupationData, "occupation", "persona"),
   ...parsePresetDefinitions(personaPersonalityTraitData, "personality_trait", "persona"),
@@ -177,6 +200,8 @@ export function initializeCatalogData(
   const connection = database.raw;
   const timestamp = formatDatabaseTimestamp();
   const result: CatalogInitializationResult = {
+    qwenVoiceRowsInserted: 0,
+    qwenVoiceRowsSkipped: 0,
     presetRowsInserted: 0,
     presetRowsSkipped: 0,
     scenarioPresetRowsInserted: 0,
@@ -191,6 +216,7 @@ export function initializeCatalogData(
 
   connection.exec("BEGIN IMMEDIATE");
   try {
+    insertQwenVoices(connection, timestamp, result);
     insertPresets(connection, timestamp, result);
     const personas = resolveStarterPersonas(connection);
     const scenarios = resolveStarterScenarios(connection);
@@ -204,6 +230,44 @@ export function initializeCatalogData(
     connection.exec("ROLLBACK");
     throw error;
   }
+}
+
+function insertQwenVoices(
+  connection: DatabaseSync,
+  timestamp: string,
+  result: CatalogInitializationResult,
+): void {
+  // The frozen legacy combined-database chain predates this catalog-only table.
+  if (!hasTable(connection, "qwen_voices")) return;
+  const insert = connection.prepare(`
+    INSERT INTO qwen_voices (
+      seed_key, voice, name, name_zh_cn, position, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(seed_key) DO NOTHING
+  `);
+  for (const definition of INITIAL_QWEN_VOICES) {
+    const write = insert.run(
+      definition.key,
+      definition.voice,
+      definition.name,
+      definition.nameZhCn,
+      definition.position,
+      timestamp,
+      timestamp,
+    );
+    if (write.changes > 0) result.qwenVoiceRowsInserted += 1;
+    else result.qwenVoiceRowsSkipped += 1;
+  }
+}
+
+function hasTable(connection: DatabaseSync, table: string): boolean {
+  return Boolean(
+    connection
+      .prepare(
+        "SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = ?",
+      )
+      .get(table),
+  );
 }
 
 function parsePresetDefinitions(
@@ -646,6 +710,7 @@ function readSeedId(
 
 function assertUniqueStarterKeys(): void {
   for (const group of [
+    INITIAL_QWEN_VOICES,
     INITIAL_PERSONA_PRESETS,
     INITIAL_SCENARIO_PRESETS,
     INITIAL_CATALOG_PERSONAS,

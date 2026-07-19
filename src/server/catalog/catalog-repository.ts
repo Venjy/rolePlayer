@@ -4,6 +4,7 @@ import type {
   PersonaInput,
   PersonaPreset,
   PersonaPresetCategory,
+  QwenVoiceDefinition,
   ResolvedPersonaInput,
   ResolvedScenarioInput,
   RolePlayCatalog,
@@ -15,6 +16,7 @@ import type {
 import {
   personaPresetSchema,
   personaSchema,
+  qwenVoiceDefinitionSchema,
   scenarioPresetSchema,
   scenarioSchema,
 } from "../../shared/role-play-catalog";
@@ -98,6 +100,16 @@ interface PresetRow {
   updated_at: string;
 }
 
+interface QwenVoiceRow {
+  id: number;
+  voice: string;
+  name: string;
+  name_zh_cn: string;
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export class CatalogNameConflictError extends Error {
   public constructor(
     public readonly entity: "persona" | "scenario",
@@ -145,6 +157,7 @@ export class CatalogRepository {
   public constructor(private readonly database: ApplicationDatabase) {}
 
   public listCatalog(): RolePlayCatalog {
+    const qwenVoices = this.listQwenVoices();
     const personaPresets = this.listPersonaPresets();
     const scenarioPresets = this.listScenarioPresets();
     const personaRows = this.connection.prepare(PERSONA_SELECT).all() as unknown as PersonaRow[];
@@ -211,6 +224,7 @@ export class CatalogRepository {
       .all() as unknown as ScenarioPersonaRow[];
 
     return {
+      qwenVoices,
       personaPresets,
       scenarioPresets,
       personas: personaRows.map((row) =>
@@ -241,6 +255,7 @@ export class CatalogRepository {
 
   public createPersona(input: PersonaInput): Persona {
     this.assertNamesAvailable("persona", input.name, input.nameZhCn);
+    this.assertQwenVoiceExists(input.voice);
     this.resolvePersona(input);
     const timestamp = formatDatabaseTimestamp();
     const id = this.inTransaction(() => {
@@ -272,6 +287,7 @@ export class CatalogRepository {
     const existing = this.getPersona(id);
     if (!existing) return null;
     this.assertNamesAvailable("persona", input.name, input.nameZhCn, id);
+    this.assertQwenVoiceExists(input.voice);
     const resolved = this.resolvePersona(input);
     this.assertPersonaPromptsFit(id, resolved);
     const timestamp = nextDatabaseTimestamp(existing.updatedAt);
@@ -380,6 +396,30 @@ export class CatalogRepository {
     );
   }
 
+  private listQwenVoices(): QwenVoiceDefinition[] {
+    const tableExists = this.connection
+      .prepare(
+        "SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = 'qwen_voices'",
+      )
+      .get();
+    if (!tableExists) return [];
+    const rows = this.connection
+      .prepare(
+        `SELECT id, voice, name, name_zh_cn, position, created_at, updated_at
+         FROM qwen_voices ORDER BY position, id`,
+      )
+      .all() as unknown as QwenVoiceRow[];
+    return rows.map((row) => qwenVoiceDefinitionSchema.parse({
+      id: row.id,
+      voice: row.voice,
+      name: row.name,
+      nameZhCn: row.name_zh_cn,
+      position: row.position,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  }
+
   private listScenarioPresets(): ScenarioPreset[] {
     return SCENARIO_PRESET_TABLES.flatMap((storage) =>
       readPresetRows(this.connection, storage).map((row) =>
@@ -431,6 +471,23 @@ export class CatalogRepository {
     const statement = this.connection.prepare("SELECT 1 AS present FROM personas WHERE id = ?");
     const missing = personaIds.filter((id) => !statement.get(id));
     if (missing.length > 0) throw new MissingPersonaReferencesError(missing);
+  }
+
+  private assertQwenVoiceExists(voice: PersonaInput["voice"]): void {
+    const tableExists = this.connection
+      .prepare(
+        "SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = 'qwen_voices'",
+      )
+      .get();
+    if (!tableExists) return;
+    const present = this.connection
+      .prepare("SELECT 1 AS present FROM qwen_voices WHERE voice = ?")
+      .get(voice);
+    if (!present) {
+      throw new Error(
+        `Qwen voice "${voice}" is not initialized. Run the catalog initializer.`,
+      );
+    }
   }
 
   private assertPersonaPromptsFit(

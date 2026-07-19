@@ -219,6 +219,24 @@ export const CATALOG_DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
     name: "reference_catalog_presets_by_id",
     up: migrateCatalogRecordsToPresetReferences,
   },
+  {
+    version: 6,
+    name: "create_qwen_voice_catalog",
+    up: `
+      CREATE TABLE qwen_voices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        seed_key TEXT UNIQUE
+          CHECK (seed_key IS NULL OR length(trim(seed_key)) BETWEEN 1 AND 100),
+        voice TEXT NOT NULL UNIQUE
+          CHECK (voice IN ('longanqian', 'longanlingxin', 'longanlingxi', 'longanxiaoxin', 'longanlufeng')),
+        name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 120),
+        name_zh_cn TEXT NOT NULL CHECK (length(trim(name_zh_cn)) BETWEEN 1 AND 120),
+        position INTEGER NOT NULL UNIQUE CHECK (position >= 0),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+    `,
+  },
 ];
 
 /** Fresh-schema migrations for immutable session snapshots and messages only. */

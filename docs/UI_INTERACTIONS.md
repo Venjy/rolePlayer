@@ -4,6 +4,8 @@
 
 The current UI has three responsive surfaces—learner launch, admin catalog, and active voice chat—plus shared conversation-history navigation around the learner surfaces. Mobile and desktop use one React application and one semantic component tree.
 
+The surfaces have distinct SPA routes: `/` for the launcher, `/admin` for the management console, and `/chat/:conversationId` for an existing chat. Refreshing a chat route shows a restoring state, reloads the persisted immutable snapshots and transcript, and reconnects that conversation. Unsupported paths are replaced with `/`. Browser back/forward navigation never bypasses the existing pending-input and assistant-settlement barriers.
+
 Primary files:
 
 | File | Responsibility |
@@ -52,7 +54,7 @@ Difficulty and the primary start action appear immediately after the two selecto
 
 The admin console contains responsive persona and scenario tabs. The Back to practice control is immediately left of the upper-left title; language/theme actions remain upper-right. Each tab has search, count, responsive cards, create/edit drawers, deletion confirmation, and global/form error feedback.
 
-Persona editing covers name, gender, age, occupation, background, personality traits, communication style, tone style, behavior notes, motivations, concerns, Qwen voice, speaking pace, and interjection/challenge tendency. Occupation, communication style, tone style, traits, motivations, and concerns come from `catalog.personaPresets`. Name, gender, age, and occupation share one responsive grid: four columns on wide drawers, two at tablet width, and one per row on narrow screens. There is no identity field.
+Persona editing covers name, gender, age, occupation, background, personality traits, communication style, tone style, behavior notes, motivations, concerns, Qwen voice, speaking pace, and interjection/challenge tendency. Occupation, communication style, tone style, traits, motivations, and concerns come from `catalog.personaPresets`; voice labels come from `catalog.qwenVoices` and retain the official Qwen ID in the visible option. Name, gender, age, and occupation share one responsive grid: four columns on wide drawers, two at tablet width, and one per row on narrow screens. There is no identity field.
 
 New roles cannot invent arbitrary values in preset-backed persona fields. If required occupation, personality-trait, communication-style, or tone-style options are absent, the drawer disables save and directs the operator to run the initializer. Existing values absent from the current preset list remain visible and savable.
 

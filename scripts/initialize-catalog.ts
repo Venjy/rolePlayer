@@ -15,6 +15,7 @@ try {
   console.log(`Catalog initialization completed for ${database.path}.`);
   console.log(JSON.stringify(result, null, 2));
   const inserted =
+    result.qwenVoiceRowsInserted +
     result.presetRowsInserted +
     result.scenarioPresetRowsInserted +
     result.personaRowsInserted +

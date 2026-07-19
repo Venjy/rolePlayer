@@ -107,6 +107,18 @@ export const voiceBehaviorSchema = z.object({
   speakingPace: speakingPaceSchema,
 });
 
+/** Database-backed display metadata for a provider-owned Qwen voice ID. */
+export const qwenVoiceDefinitionSchema = z.object({
+  id: databaseIdSchema,
+  voice: qwenVoiceSchema,
+  name: requiredText(120),
+  nameZhCn: requiredText(120),
+  position: z.number().int().min(0),
+  createdAt: z.string().datetime({ offset: true }),
+  updatedAt: z.string().datetime({ offset: true }),
+});
+export type QwenVoiceDefinition = z.infer<typeof qwenVoiceDefinitionSchema>;
+
 const personaInputObjectSchema = z.object({
   name: optionalText(80),
   nameZhCn: optionalText(80),
@@ -334,6 +346,7 @@ export const resolvedScenarioInputSchema = z.object({
 export type ResolvedScenarioInput = z.infer<typeof resolvedScenarioInputSchema>;
 
 export const rolePlayCatalogSchema = z.object({
+  qwenVoices: z.array(qwenVoiceDefinitionSchema),
   personaPresets: z.array(personaPresetSchema),
   scenarioPresets: z.array(scenarioPresetSchema),
   personas: z.array(personaSchema),
