@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-A single-repository React + Node/TypeScript application for configurable realtime voice sales role-play. Learners choose an SQLite-backed sales scenario, compatible customer persona, and difficulty; the browser then connects its microphone to Qwen `qwen-audio-3.0-realtime-plus` through a server-side WebSocket gateway, streams transcripts into a chat timeline, and plays the selected persona's voice. Finalized text conversations and launch snapshots are stored in SQLite, listed in responsive history navigation, and can be continued through a fresh Qwen connection with restored text context. A responsive admin console provides persona/scenario CRUD and an inspectable model-Instructions preview.
+A single-repository React + Node/TypeScript application for configurable realtime voice sales role-play. Learners choose an SQLite-backed sales scenario, compatible customer persona, and difficulty; the browser then connects its microphone to Qwen `qwen-audio-3.0-realtime-plus` through a server-side WebSocket gateway, streams transcripts into a chat timeline, and plays the selected persona's voice. Finalized conversations, heard audio, and launch snapshots are stored in SQLite, listed in responsive history navigation, and can be continued through a fresh Qwen connection with restored text context. Conversations can be downloaded as a transcript, one alternating-speaker MP3, or a ZIP containing both. A responsive admin console provides persona/scenario CRUD and an inspectable model-Instructions preview.
 
 The UI uses one responsive React component tree for mobile and desktop. Ant Design supplies the standard controls and theme algorithms; project CSS handles the chat layout, message bubbles, recording overlay, and audio-reactive waveform.
 
@@ -163,14 +163,15 @@ Use `--interrupt-during-generation` to exercise the cancellation path. With no t
 - Deterministic `compileRolePlayInstructions` template; no extra LLM is called to turn structured catalog fields into the Qwen system prompt
 - Shared 12,000-character Instructions budget, checked across every compatible persona and all three difficulty levels before an association can be saved
 - Session-start snapshot sends the selected persona's `voice` and the compiled persona/scenario/difficulty Instructions to Qwen, so later catalog edits affect only future sessions
-- Durable SQLite conversation history with immutable launch snapshots, finalized user/assistant text, activity ordering, and full transcript reload
+- Durable SQLite conversation history with immutable launch snapshots, finalized user/assistant text and PCM audio, activity ordering, and full transcript reload
+- Active-conversation download as a UTF-8 transcript, one chronological mono MP3 with short gaps between speakers, or a ZIP containing both; request-time speech-aware loudness normalization balances microphone/model turns, and interrupted assistant exports exclude the conservative unheard suffix
 - Responsive history navigation: persistent 288 px left rail from 1200 px, shared Ant Design Drawer below that breakpoint, current-item state, and new-practice action
 - Text-context continuation through a fresh Qwen WebSocket: Node restores stored Instructions/voice and waits for recent `conversation.item.create` acknowledgements before declaring the session ready
 - Conversation switching/new-practice/end actions are serialized and wait for response-specific user/assistant persistence acknowledgements before disconnecting; failed settlement is reported instead of silently dropping the last turn
 - Bottom-anchored conversation history with live user and assistant drafts, timestamps, and interrupted-turn labels
 - Press-and-hold recording for mouse, touch, pen, Space, and Enter; release sends and upward slide cancels
 - Audio-reactive microphone waveform, recording duration, and release instruction while a gesture is active
-- Browser microphone capture with requested echo cancellation, noise suppression, and automatic gain control
+- Browser microphone capture with requested echo cancellation/noise suppression, AGC disabled, a short initialization settling window, an 80 Hz high-pass filter, and privacy-safe effective-settings diagnostics
 - Streaming downsampling from the browser device rate to PCM16 16 kHz mono
 - Tail-buffer acknowledgement before audio commit, avoiding clipped final syllables
 - Node WebSocket proxy with server-only Qwen authentication
@@ -198,10 +199,11 @@ The conversation REST API is:
 | `POST` | `/api/conversations` | Resolve authoritative persona/scenario IDs, store a bilingual snapshot, compile Instructions, and create a durable conversation |
 | `GET` | `/api/conversations` | List all conversations by latest persisted activity |
 | `GET` | `/api/conversations/:id` | Read one immutable launch snapshot and its ordered finalized messages |
+| `GET` | `/api/conversations/:id/download?format=audio\|text\|both` | Download one MP3, one UTF-8 transcript, or a ZIP containing both |
 
 Business defaults are defined only in `src/server/catalog/initial-data/*.json` and installed with `pnpm catalog:init` (source) or `pnpm catalog:init:prod` (built). The initializer inserts bilingual Qwen voice names, bilingual presets, three starter personas, three starter scenarios, and compatibility links. Stable seed keys and transactional conflict-tolerant writes make repeated runs safe without duplicate data or overwritten existing rows.
 
-Conversation snapshots, selected difficulty, compiled Instructions, voice, and finalized transcript text are persisted in the conversation database. Streaming drafts, microphone/model audio, users, and evaluations are not. The current private single-user deployment exposes one global history; there is no conversation deletion API or retention job yet. See [Catalog and prompt compilation](docs/CATALOG_AND_PROMPTS.md) and [Database](docs/DATABASE.md) for the complete contracts.
+Conversation snapshots, selected difficulty, compiled Instructions, voice, finalized transcript text, and the matching finalized-message PCM are persisted in the conversation database. Cancelled input, streaming drafts, and generated-but-unheard assistant suffixes are not stored. Pre-feature text-only conversations remain available for transcript download but cannot be reconstructed as audio. The current private single-user deployment exposes one global history; there is no conversation deletion API or retention job yet. See [Catalog and prompt compilation](docs/CATALOG_AND_PROMPTS.md) and [Database](docs/DATABASE.md) for the complete contracts.
 
 The default `data/` directory is ignored by Git. A future single-container deployment must mount that directory as persistent storage; embedding the database file in an ephemeral image layer would lose catalog edits when the container is replaced.
 

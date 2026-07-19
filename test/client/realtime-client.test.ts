@@ -188,6 +188,43 @@ describe("RealtimeClient connection lifecycle", () => {
     expect(socket?.readyState).toBe(FakeWebSocket.OPEN);
   });
 
+  it("waits for the server clear acknowledgement before completing cancellation", async () => {
+    const onMessage = vi.fn();
+    const client = new RealtimeClient({
+      onMessage,
+      onAudio: vi.fn(),
+      onClose: vi.fn(),
+      onMalformedMessage: vi.fn(),
+    });
+    const connection = client.connect({
+      conversationId: 1,
+      maxHistoryTurns: 20,
+    });
+    const socket = FakeWebSocket.instances[0];
+    socket?.open();
+    socket?.receive({
+      type: "session.ready",
+      sessionId: "session_1",
+      conversationId: 1,
+    });
+    await connection;
+
+    const clearing = client.clearInput();
+    let settled = false;
+    void clearing.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(socket?.sent.at(-1)).toBe(JSON.stringify({ type: "input.clear" }));
+
+    socket?.receive({ type: "input.cleared" });
+    await clearing;
+    expect(settled).toBe(true);
+    expect(onMessage).toHaveBeenLastCalledWith({ type: "input.cleared" });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("rejects immediately and clears the timer when disconnected before ready", async () => {
     const client = createClient();
     const connection = client.connect({

@@ -213,6 +213,14 @@ input {
 
 .persona-summary > div:last-child {
   min-width: 0;
+  overflow: hidden;
+}
+
+.persona-summary .ant-typography {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .persona-summary .ant-badge-status-text {
@@ -545,6 +553,12 @@ input {
 
   .message-content {
     max-width: 84%;
+  }
+}
+
+@media (max-width: 350px) {
+  .persona-avatar {
+    display: none;
   }
 }
 

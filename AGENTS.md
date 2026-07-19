@@ -2,7 +2,7 @@
 
 ## Project goal
 
-Build an AI sales role-player around realtime voice conversations. The current milestone combines a reliable browser ↔ Node ↔ Qwen Audio voice loop with an editable, SQLite-backed persona/scenario catalog, durable text conversation history, and a responsive learner/admin interface. Preserve the working voice, history-recovery, and catalog contracts while extending the product.
+Build an AI sales role-player around realtime voice conversations. The current milestone combines a reliable browser ↔ Node ↔ Qwen Audio voice loop with an editable, SQLite-backed persona/scenario catalog, durable finalized text/audio conversation history, downloadable transcript/MP3 exports, and a responsive learner/admin interface. Preserve the working voice, history-recovery, download, and catalog contracts while extending the product.
 
 Before changing a subsystem, read its focused contract:
 
@@ -77,9 +77,10 @@ Catalog initializer tests must also use an explicit temporary `CATALOG_DATABASE_
 - A quick release that occurs before asynchronous microphone startup resolves must still finish deterministically: submit after a successful start, or return to idle if startup fails.
 - Forced cancellation and session transitions must wait for the whole gesture lifecycle, including already-released `starting` work and an already-running `finishing` handler. Async capture/submit/cancel continuations must be scoped to their runtime epoch and local audio/realtime instances.
 - Space and Enter provide the same hold/release lifecycle for keyboard users.
-- Cancellation stops capture, clears the upstream input buffer, and never sends `input.commit`.
+- Cancellation hides the browser draft immediately, stops capture, clears the upstream input buffer, waits for Qwen's clear acknowledgement, and never sends `input.commit`. Ignore late transcription from cancelled turns; only accept/persist finalized transcription whose `item_id` matches the current `input_audio_buffer.committed` acknowledgement.
 - Before a normal commit, wait for the AudioWorklet to flush its final partial frame and acknowledge stop.
 - Pressing while AI speech is active first captures a conservative playback receipt and interrupts that response, then starts the new input turn. Preserve this ordering.
+- Request browser echo cancellation/noise suppression but disable browser AGC, allow the microphone pipeline to settle at session startup, and keep the 80 Hz capture high-pass filter. Effective-settings diagnostics must never include device labels or IDs.
 
 ## Realtime invariants
 
@@ -88,6 +89,7 @@ Catalog initializer tests must also use an explicit temporary `CATALOG_DATABASE_
 - Do not send microphone audio until Qwen has emitted `session.updated` and Node has emitted `session.ready`.
 - Microphone input to Qwen is little-endian PCM16, 16 kHz, mono.
 - Qwen output is little-endian PCM16, 24 kHz, mono.
+- Persist authoritative raw PCM unchanged. MP3 export may normalize a decoded copy per finalized turn, but must measure active speech rather than whole-turn silence, keep gain/attenuation bounded, enforce a peak ceiling, and never write mastered samples back to SQLite or Qwen context.
 - On response cancellation, clear local scheduled audio immediately and send upstream cancellation. Node must suppress late audio for the cancelled response.
 - Treat Qwen user transcript delta as `text + stash`; do not append each `text` value.
 - Permit only one committed user turn to await finalized transcription. Disable browser push-to-talk while it is pending and reject a second server-side `input.start` with `USER_TURN_PENDING` as defense in depth.
@@ -96,7 +98,7 @@ Catalog initializer tests must also use an explicit temporary `CATALOG_DATABASE_
 - Browser `session.configure` carries only the durable `conversationId` and bounded history limit. Node must load snapshotted Instructions/voice from `ConversationRepository`; never trust browser-supplied prompt or voice fields. Do not add a second model call to paraphrase structured catalog fields.
 - A Qwen WebSocket cannot revive an expired upstream session. Resume by opening a new Qwen connection and acknowledging ordered `conversation.item.create` text-history injection before emitting browser `session.ready`.
 - Route errors by lifecycle phase. A conversation that has never reached `session.ready` fails initialization back to the launcher. After its first readiness, show every error through an Ant Design message at the top for five seconds; for a fatal runtime error, preserve the chat surface and rebuild the same conversation once from finalized SQLite text instead of reusing uncertain Qwen context. If that rebuild fails, keep the chat visible and turn the composer button into a manual reconnect action rather than navigating automatically.
-- Persist the final user transcript before publishing `transcript.user.done`. Associate each generated response with its committed user turn and hold assistant persistence until that user text is durable; failed/empty ASR must not leave an orphan assistant. Persist a normal assistant message only after both generation and browser playback complete, then publish response-specific `response.persisted`; persist an interrupted assistant message only after context repair confirms its retained prefix. Never persist streaming drafts or unheard generated suffixes.
+- Persist the final user transcript and its submitted PCM before publishing `transcript.user.done`. Associate each generated response with its committed user turn and hold assistant persistence until that user text is durable; failed/empty ASR must not leave an orphan assistant. Persist a normal assistant message and PCM only after both generation and browser playback complete, then publish response-specific `response.persisted`; persist an interrupted assistant message only after context repair confirms its retained text prefix and trim its PCM independently to `safePlayedMs`. Never persist streaming drafts or unheard generated text/audio suffixes.
 
 ## Catalog and prompt invariants
 
@@ -132,11 +134,12 @@ Catalog initializer tests must also use an explicit temporary `CATALOG_DATABASE_
 - Migration 14 removes the former `persona_presets` and `scenario_presets` discriminator tables. Each of the six persona preset domains and three scenario preset domains owns a physical table with domain-named bilingual columns. API `category` and `value` fields are derived adapters only; never add a preset discriminator/category column back to storage.
 - Migration 15 replaces copied preset-backed catalog text/JSON with foreign keys and ordered relation tables. It promotes unmatched historical values to custom preset rows before rebuilding records. Scenario scoring weight belongs on the success-criterion relation. The split catalog chain implements the same change as migration 5.
 - The split conversation chain's migration 4 renames its six business tables to `sessions`, `persona_snapshots`, `scenario_snapshots`, `scenario_scoring_criteria`, `scenario_personas`, and `messages`, and removes redundant prefixes from their explicit index names. Keep the `conversation_` source names only in the frozen combined migration chain and the legacy-to-split copy mapping.
+- The split conversation chain's migration 5 adds `message_audio` as an optional one-to-one child of finalized `messages`. User audio is PCM16 LE 16 kHz; assistant audio is PCM16 LE 24 kHz. Audio owns no independent lifecycle: deletion cascades with its message, old text-only rows stay valid, and a conversation is audio-downloadable only when every finalized message has audio.
 - `pnpm database:split` is the only supported migration from the historical combined file. It must preserve IDs and every business row, validate target columns/counts/foreign keys, mark both destination files with the absolute legacy source path, leave the legacy file as a backup, and never merge into or overwrite existing targets.
 - Keep catalog access behind `CatalogRepository`. Avoid long synchronous queries in request handlers because `DatabaseSync` blocks the Node event loop.
 - Keep conversation access behind `ConversationRepository`. Current ownership is a single private deployment with one global history; there is no retention job or deletion endpoint, and records live with the SQLite file. Add authentication/authorization and per-owner filtering before any multi-user or public deployment.
 - All initializer business data lives in `src/server/catalog/initial-data/*.json`; TypeScript initializer code contains validation and writes only. Each preset table has its own JSON file and preset JSON never carries a category discriminator. JSON `key` values are stable initializer-only markers stored as nullable `seed_key` metadata; never put database IDs in initializer JSON. `pnpm catalog:init` and `pnpm catalog:init:prod` are transactional and idempotent, preserve existing rows, never require Qwen credentials, enforce compatibility capacity, and validate seeded prompt combinations before writing.
-- Do not add audio, user, evaluation, or parallel session/transcript tables speculatively. Extend the existing conversation tables only after defining ownership, retention, deletion, recovery, and authorization for the new behavior.
+- Do not add user, evaluation, or parallel session/transcript tables speculatively. Extend conversation storage only after defining ownership, retention, deletion, recovery, and authorization for the new behavior. Current finalized audio shares the private global-history authorization/retention boundary, cascades with messages, is not replayed into Qwen recovery, and is encoded into temporary response-only MP3/ZIP artifacts.
 - Database files and any SQLite journal sidecars are runtime data and must remain uncommitted. Production must mount the directory containing both database files rather than store them only in the container image layer.
 
 ## Engineering conventions

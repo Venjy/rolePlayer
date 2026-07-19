@@ -11,6 +11,15 @@ const requiredText = (maximum: number) =>
 
 export const conversationLocaleSchema = z.enum(["en", "zh"]);
 export const conversationMessageRoleSchema = z.enum(["user", "assistant"]);
+export const conversationDownloadFormatSchema = z.enum([
+  "audio",
+  "text",
+  "both",
+]);
+
+export type ConversationDownloadFormat = z.infer<
+  typeof conversationDownloadFormatSchema
+>;
 
 /**
  * The client submits only catalog IDs. The server resolves the authoritative
@@ -44,6 +53,8 @@ export const conversationSummarySchema = z.object({
   difficulty: difficultySchema,
   locale: conversationLocaleSchema,
   messageCount: z.number().int().min(0),
+  audioMessageCount: z.number().int().min(0),
+  audioAvailable: z.boolean(),
   lastMessagePreview: z.string().max(240).nullable(),
   createdAt: z.string().datetime({ offset: true }),
   updatedAt: z.string().datetime({ offset: true }),

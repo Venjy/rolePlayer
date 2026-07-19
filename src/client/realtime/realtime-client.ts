@@ -7,6 +7,14 @@ import {
 const INITIAL_CONNECTION_TIMEOUT_MS = 20_000;
 const HISTORY_ITEM_TIMEOUT_BUDGET_MS = 15_000;
 const MAX_BUFFERED_AUDIO_BYTES = 256 * 1024;
+const INPUT_CLEAR_TIMEOUT_MS = 7_000;
+
+interface PendingInputClear {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timeoutId: number;
+}
 
 export interface RealtimeClientHandlers {
   onMessage: (message: ServerMessage) => void;
@@ -36,6 +44,7 @@ export class RealtimeClient {
   private abortPendingConnection?: (error: Error) => void;
   private activeAudioResponseId?: string;
   private readonly ignoredAudioResponseIds = new Set<string>();
+  private pendingInputClear?: PendingInputClear;
 
   public constructor(private readonly handlers: RealtimeClientHandlers) {}
 
@@ -117,6 +126,9 @@ export class RealtimeClient {
         }
 
         const message = parsed.data;
+        if (message.type === "input.cleared") {
+          this.settleInputClear();
+        }
         if (message.type === "response.started") {
           this.activeAudioResponseId = message.responseId;
           this.ignoredAudioResponseIds.delete(message.responseId);
@@ -171,6 +183,9 @@ export class RealtimeClient {
 
       socket.onclose = (event) => {
         window.clearTimeout(timeout);
+        this.settleInputClear(
+          new Error("The realtime connection closed before input was cleared."),
+        );
         if (!settled) {
           settled = true;
           clearPendingConnection();
@@ -193,8 +208,31 @@ export class RealtimeClient {
     this.send({ type: "input.commit" });
   }
 
-  public clearInput(): void {
-    this.send({ type: "input.clear" });
+  public clearInput(): Promise<void> {
+    if (this.pendingInputClear) return this.pendingInputClear.promise;
+
+    let resolve!: () => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<void>((onResolve, onReject) => {
+      resolve = onResolve;
+      reject = onReject;
+    });
+    const timeoutId = window.setTimeout(() => {
+      this.settleInputClear(
+        new Error("Timed out while clearing the cancelled recording."),
+      );
+    }, INPUT_CLEAR_TIMEOUT_MS);
+    this.pendingInputClear = { promise, resolve, reject, timeoutId };
+    try {
+      this.send({ type: "input.clear" });
+    } catch (error) {
+      this.settleInputClear(
+        error instanceof Error
+          ? error
+          : new Error("Could not clear the cancelled recording."),
+      );
+    }
+    return promise;
   }
 
   public cancelResponse(): void {
@@ -235,6 +273,9 @@ export class RealtimeClient {
       new Error("Realtime connection closed before it was ready."),
     );
     this.abortPendingConnection = undefined;
+    this.settleInputClear(
+      new Error("The realtime connection closed before input was cleared."),
+    );
     if (!this.socket) return;
     this.socket.onclose = null;
     this.socket.close(1000, "User ended session");
@@ -248,5 +289,14 @@ export class RealtimeClient {
       throw new Error("Realtime WebSocket is not open.");
     }
     this.socket.send(JSON.stringify(message));
+  }
+
+  private settleInputClear(error?: Error): void {
+    const pending = this.pendingInputClear;
+    if (!pending) return;
+    this.pendingInputClear = undefined;
+    window.clearTimeout(pending.timeoutId);
+    if (error) pending.reject(error);
+    else pending.resolve();
   }
 }

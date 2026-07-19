@@ -400,4 +400,19 @@ export const CONVERSATION_DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
         WHERE response_id IS NOT NULL;
     `,
   },
+  {
+    version: 5,
+    name: "persist_finalized_message_audio",
+    up: `
+      CREATE TABLE message_audio (
+        message_id INTEGER PRIMARY KEY,
+        sample_rate INTEGER NOT NULL CHECK (sample_rate IN (16000, 24000)),
+        pcm BLOB NOT NULL
+          CHECK (length(pcm) > 0 AND length(pcm) % 2 = 0),
+        duration_ms INTEGER NOT NULL CHECK (duration_ms > 0),
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+      ) STRICT;
+    `,
+  },
 ];

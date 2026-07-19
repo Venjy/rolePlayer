@@ -6,7 +6,7 @@ The application is a single Node/TypeScript project containing a React SPA, a Fa
 
 The browser must not connect directly to Qwen Audio Realtime. Qwen requires an `Authorization` header during the WebSocket handshake, which browser WebSocket APIs cannot safely provide. More importantly, direct access would expose the permanent Model Studio API key.
 
-SQLite is embedded in the Node process so the eventual deployment can remain one service and one container. Both database files should live on storage mounted into that container, not in a separately deployed database server or an ephemeral image layer. The catalog file persists editable configuration; the conversation file persists text history and launch-time persona/scenario/difficulty snapshots. Audio, transient transcript drafts, users, and evaluations are not persisted.
+SQLite is embedded in the Node process so the eventual deployment can remain one service and one container. Both database files should live on storage mounted into that container, not in a separately deployed database server or an ephemeral image layer. The catalog file persists editable configuration; the conversation file persists launch-time snapshots plus authoritative text and PCM audio for finalized messages. Transient transcript drafts, unheard assistant suffixes, users, and evaluations are not persisted.
 
 ## Runtime topology
 
@@ -54,7 +54,7 @@ flowchart LR
     Player -->|"completed / interrupted receipt"| Gateway
     Reconciler -->|"delete + optional recreate"| Qwen
     ConversationRepository -->|"ordered text history"| Gateway
-    Gateway -->|"finalized text only"| ConversationRepository
+    Gateway -->|"finalized text + heard PCM"| ConversationRepository
 ```
 
 During development, Vite runs on port 5173 and proxies `/api` and `/ws` to Fastify on port 3001. This preserves a same-origin browser interface. Fastify opens both SQLite files during `onReady`, so a listening server has already created the database directory, applied both migration chains, and completed startup checks.
@@ -85,7 +85,7 @@ React components do not know the upstream Qwen event schema. They use the stable
 - Fastify and browser WebSocket lifecycle;
 - SQLite connection ownership and migrations;
 - validated persona/scenario CRUD routes and the server-only `CatalogRepository`;
-- validated conversation create/list/detail routes and the server-only `ConversationRepository`;
+- validated conversation create/list/detail/download routes and the server-only `ConversationRepository`;
 - input validation and audio frame limits;
 - Qwen authentication and WebSocket lifecycle;
 - translation between application messages and Qwen events;
@@ -94,6 +94,7 @@ React components do not know the upstream Qwen event schema. They use the stable
 - interrupted assistant-item reconciliation;
 - a delete/recreate barrier before the next inference.
 - authoritative finalized-message persistence and bounded text-context rehydration before session readiness.
+- request-time transcript rendering, mono timeline assembly, 16-to-24 kHz resampling, MP3 encoding, and ZIP packaging for downloads.
 
 The permanent API key and database file paths exist only in this process.
 
@@ -190,20 +191,22 @@ idle → starting → recording → finishing → idle
 
 `activePress` records whether the user is still holding while `start()` awaits microphone setup. Releasing during `starting` is therefore not lost. A normal release submits once; crossing the 72 px upward threshold marks the release for cancellation. Forced cancellation is used when pointer capture is lost unexpectedly, the pointer is cancelled, the window loses focus, the document becomes hidden, input becomes disabled, or the component/session is torn down.
 
-When the AI is speaking, the same control remains available for barge-in. `beginRecording` first stops scheduled playback and sends the conservative `playback.interrupted` receipt for the active response, then sends `input.start` and begins microphone capture. This lets the user speak while Node performs the assistant-context repair barrier. Normal release later flushes capture and commits the turn; cancelled input is cleared and never committed.
+When the AI is speaking, the same control remains available for barge-in. `beginRecording` first stops scheduled playback and sends the conservative `playback.interrupted` receipt for the active response, then sends `input.start` and begins microphone capture. This lets the user speak while Node performs the assistant-context repair barrier. Normal release later flushes capture and commits the turn. Cancelled input removes its browser draft immediately, waits for Qwen's clear acknowledgement, and is never committed. Final user transcription is persisted only when its `item_id` matches the acknowledgement for the pending audio commit, so late events from a cancelled turn cannot leak into history or a later recording.
 
 ## Audio pipeline
 
 ### Input
 
 1. A user gesture creates and resumes one `AudioContext`.
-2. `getUserMedia` requests mono input, echo cancellation, noise suppression, and automatic gain control.
-3. The browser can still choose 44.1 or 48 kHz, so the AudioWorklet reads its actual global sample rate.
-4. Channels are averaged to mono.
-5. A streaming area downsampler converts audio to 16 kHz.
-6. Samples are clamped and encoded as little-endian PCM16.
-7. Normal chunks contain 1,600 samples: 100 ms / 3,200 bytes.
-8. Browser-to-Node frames are binary; Node performs the Base64 conversion required by Qwen.
+2. `getUserMedia` requests mono input with echo cancellation and noise suppression, but requests automatic gain control off because browser/device AGC can introduce inconsistent startup gain.
+3. The effective, privacy-safe track settings (sample rate, channel count, and processing flags only) are logged once for diagnostics; browser constraints are best effort.
+4. The live track gets a 350 ms session-level settling window and an 80 Hz high-pass filter before capture, reducing initialization transients and low-frequency rumble without delaying ordinary holds after session setup.
+5. The browser can still choose 44.1 or 48 kHz, so the AudioWorklet reads its actual global sample rate.
+6. Channels are averaged to mono.
+7. A streaming area downsampler converts audio to 16 kHz.
+8. Samples are clamped and encoded as little-endian PCM16.
+9. Normal chunks contain 1,600 samples: 100 ms / 3,200 bytes.
+10. Browser-to-Node frames are binary; Node performs the Base64 conversion required by Qwen.
 
 When capture stops, the Worklet first emits its final partial chunk and then emits a `stopped` acknowledgement. The browser sends `input.commit` only after that acknowledgement. This ordering is an invariant.
 
@@ -217,6 +220,8 @@ The capture engine also reports a normalized RMS input level. `VoiceWaveform` ap
 4. The browser converts PCM16 to Float32 `AudioBuffer` instances at 24 kHz.
 5. Buffers are scheduled on a shared `AudioContext` with a small initial lead time, while their response ID, start time, and end time are retained.
 6. Qwen `response.done` marks generation terminal but does not mark playback complete. The browser reports `playback.completed` only after all sources end naturally.
+
+Persisted PCM remains the original submitted/heard conversation evidence. MP3 export performs non-destructive request-time mastering on a copy: each finalized turn measures only 20 ms frames above -45 dBFS, targets -20 dBFS active-speech RMS, limits gain/attenuation to 12 dB, and caps peaks at -1 dBFS. A single turn-wide gain avoids pumping the noise floor between words. SQLite PCM and Qwen input are never rewritten by export mastering.
 7. On interruption, the browser snapshots rendered duration before stopping sources, removes output latency and a 300 ms safety allowance, clears the queue immediately, and sends `playback.interrupted` with `safePlayedMs`.
 
 ## Best-effort interruption reconciliation
@@ -269,7 +274,7 @@ Startup enables SQLite `DELETE` journal mode, foreign-key enforcement, and a 5-s
 
 Each fresh file has its own migration table and domain schema migration. Schema migrations do not own current business defaults. Catalog records use `CatalogRepository`; conversation records use `ConversationRepository`, and its snapshots intentionally have no foreign keys to the catalog file. This separation means catalog backup/reset/initialization and conversation retention can evolve independently.
 
-The current ownership contract is a private single-user deployment with one global history. Conversation data is retained with the SQLite file, has no deletion API yet, and must not be publicly or multi-tenant exposed until authentication, authorization, owner filtering, and a deletion policy are added. Audio, users, and evaluations remain intentionally absent. Because `DatabaseSync` is synchronous, long queries must not run on the Node event loop without redesign.
+The current ownership contract is a private single-user deployment with one global history. Text and audio share the owning finalized message and are retained with the SQLite file; deleting a message or conversation cascades its audio row. There is no deletion API or retention job yet, so the service must not be publicly or multi-tenant exposed until authentication, authorization, owner filtering, and a deletion policy are added. MP3/ZIP artifacts are generated per request and are not retained. Users and evaluations remain intentionally absent. Because `DatabaseSync` is synchronous, long queries must not run on the Node event loop without redesign; request-time MP3 encoding is currently bounded to 64 MiB of source PCM and processes one message segment at a time.
 
 See `docs/DATABASE.md` for operational and migration details.
 

@@ -56,6 +56,7 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
     conversationId: databaseIdSchema,
   }),
   z.object({ type: z.literal("session.state"), state: sessionStateSchema }),
+  z.object({ type: z.literal("input.cleared") }),
   z.object({
     type: z.literal("transcript.user.delta"),
     itemId: z.string(),

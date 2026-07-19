@@ -353,6 +353,107 @@ describe("RealtimeSessionController context reconciliation", () => {
 });
 
 describe("RealtimeSessionController authoritative history persistence", () => {
+  it("waits for clear acknowledgement and ignores late transcription from a cancelled turn", () => {
+    const harness = createHarness();
+    harness.controller.handleControl({ type: "input.start" });
+    harness.controller.appendAudio(Buffer.alloc(INPUT_CHUNK_BYTES));
+    harness.controller.handleQwenEvent({
+      type: "conversation.item.input_audio_transcription.delta",
+      item_id: "item_cancelled",
+      text: "This draft must disappear",
+      stash: "",
+    });
+    expect(harness.sent).toContainEqual({
+      type: "transcript.user.delta",
+      itemId: "item_cancelled",
+      text: "This draft must disappear",
+      stash: "",
+    });
+
+    harness.controller.handleControl({ type: "input.clear" });
+    expect(harness.qwen.operations.at(-1)).toEqual({ type: "clear" });
+    expect(harness.sent.at(-1)).toEqual({
+      type: "session.state",
+      state: "processing",
+    });
+
+    harness.controller.handleQwenEvent({
+      type: "conversation.item.input_audio_transcription.delta",
+      item_id: "item_cancelled",
+      text: "Late cancelled draft",
+      stash: "",
+    });
+    harness.controller.handleQwenEvent({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "item_cancelled",
+      transcript: "Late cancelled final transcript.",
+    });
+    expect(harness.persisted).toEqual([]);
+    expect(harness.sent).not.toContainEqual(
+      expect.objectContaining({
+        type: "transcript.user.done",
+        itemId: "item_cancelled",
+      }),
+    );
+
+    harness.controller.handleQwenEvent({ type: "input_audio_buffer.cleared" });
+    expect(harness.sent).toContainEqual({ type: "input.cleared" });
+    expect(harness.sent.at(-1)).toEqual({
+      type: "session.state",
+      state: "ready",
+    });
+
+    const sentCount = harness.sent.length;
+    harness.controller.handleControl({ type: "input.start" });
+    harness.controller.handleQwenEvent({
+      type: "conversation.item.input_audio_transcription.delta",
+      item_id: "item_cancelled",
+      text: "Still late after the next turn started",
+      stash: "",
+    });
+    expect(harness.sent).toHaveLength(sentCount + 1);
+    expect(harness.sent.at(-1)).toEqual({
+      type: "session.state",
+      state: "listening",
+    });
+  });
+
+  it("ignores a finalized transcript that does not match the committed user item", () => {
+    const harness = createHarness();
+    harness.controller.handleControl({ type: "input.start" });
+    harness.controller.appendAudio(Buffer.alloc(INPUT_CHUNK_BYTES));
+    harness.controller.handleControl({ type: "input.commit" });
+    harness.controller.handleQwenEvent({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "item_expected",
+      transcript: "This arrived before the commit acknowledgement.",
+    });
+    expect(harness.persisted).toEqual([]);
+    harness.controller.handleQwenEvent({
+      type: "input_audio_buffer.committed",
+      item_id: "item_expected",
+    });
+
+    harness.controller.handleQwenEvent({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "item_cancelled_old",
+      transcript: "This belongs to an older cancelled turn.",
+    });
+    expect(harness.persisted).toEqual([]);
+
+    harness.controller.handleQwenEvent({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "item_expected",
+      transcript: "This is the committed turn.",
+    });
+    expect(harness.persisted).toHaveLength(1);
+    expect(harness.persisted[0]).toMatchObject({
+      text: "This is the committed turn.",
+      sourceItemId: "item_expected",
+      audio: { sampleRate: 16_000 },
+    });
+  });
+
   it("rejects a second input while the previous user transcript is pending", () => {
     const harness = createHarness();
     harness.controller.handleControl({ type: "input.start" });
@@ -371,6 +472,10 @@ describe("RealtimeSessionController authoritative history persistence", () => {
     expect(harness.qwen.operations.map(({ type }) => type)).toEqual(["commit"]);
 
     harness.controller.handleQwenEvent({
+      type: "input_audio_buffer.committed",
+      item_id: "item_user_saved",
+    });
+    harness.controller.handleQwenEvent({
       type: "conversation.item.input_audio_transcription.completed",
       item_id: "item_user_saved",
       transcript: "The first turn is now durable.",
@@ -385,6 +490,13 @@ describe("RealtimeSessionController authoritative history persistence", () => {
 
   it("persists a final user transcript before publishing transcript.user.done", () => {
     const harness = createHarness();
+    harness.controller.handleControl({ type: "input.start" });
+    harness.controller.appendAudio(Buffer.alloc(INPUT_CHUNK_BYTES));
+    harness.controller.handleControl({ type: "input.commit" });
+    harness.controller.handleQwenEvent({
+      type: "input_audio_buffer.committed",
+      item_id: "item_user_final",
+    });
 
     harness.controller.handleQwenEvent({
       type: "conversation.item.input_audio_transcription.completed",
@@ -392,14 +504,14 @@ describe("RealtimeSessionController authoritative history persistence", () => {
       transcript: "I need a faster qualification workflow.",
     });
 
-    expect(harness.persisted).toEqual([
-      {
-        role: "user",
-        text: "I need a faster qualification workflow.",
-        interrupted: false,
-        sourceItemId: "item_user_final",
-      },
-    ]);
+    expect(harness.persisted).toHaveLength(1);
+    expect(harness.persisted[0]).toMatchObject({
+      role: "user",
+      text: "I need a faster qualification workflow.",
+      interrupted: false,
+      sourceItemId: "item_user_final",
+      audio: { sampleRate: 16_000 },
+    });
     expect(harness.sent).toContainEqual({
       type: "transcript.user.done",
       itemId: "item_user_final",
@@ -419,15 +531,18 @@ describe("RealtimeSessionController authoritative history persistence", () => {
 
     completeResponse(harness.controller);
 
-    expect(harness.persisted).toEqual([
-      {
-        role: "assistant",
-        text: TRANSCRIPT,
-        interrupted: false,
-        sourceItemId: ASSISTANT_ITEM_ID,
-        responseId: RESPONSE_ID,
-      },
-    ]);
+    expect(harness.persisted).toHaveLength(1);
+    expect(harness.persisted[0]).toMatchObject({
+      role: "assistant",
+      text: TRANSCRIPT,
+      interrupted: false,
+      sourceItemId: ASSISTANT_ITEM_ID,
+      responseId: RESPONSE_ID,
+      audio: { sampleRate: 24_000 },
+    });
+    expect(harness.persisted[0]?.audio?.pcm).toHaveLength(
+      GENERATED_AUDIO_MS * PCM24_BYTES_PER_MILLISECOND,
+    );
     expect(harness.sent).toContainEqual({
       type: "response.persisted",
       responseId: RESPONSE_ID,
@@ -452,26 +567,32 @@ describe("RealtimeSessionController authoritative history persistence", () => {
     ).toBe(false);
 
     harness.controller.handleQwenEvent({
+      type: "input_audio_buffer.committed",
+      item_id: "item_user_slow_asr",
+    });
+    harness.controller.handleQwenEvent({
       type: "conversation.item.input_audio_transcription.completed",
       item_id: "item_user_slow_asr",
       transcript: "This transcript arrived after the assistant finished.",
     });
 
-    expect(harness.persisted).toEqual([
-      {
-        role: "user",
-        text: "This transcript arrived after the assistant finished.",
-        interrupted: false,
-        sourceItemId: "item_user_slow_asr",
-      },
-      {
-        role: "assistant",
-        text: TRANSCRIPT,
-        interrupted: false,
-        sourceItemId: ASSISTANT_ITEM_ID,
-        responseId: RESPONSE_ID,
-      },
-    ]);
+    expect(harness.persisted).toHaveLength(2);
+    expect(harness.persisted[0]).toMatchObject({
+      role: "user",
+      text: "This transcript arrived after the assistant finished.",
+      interrupted: false,
+      sourceItemId: "item_user_slow_asr",
+      audio: { sampleRate: 16_000 },
+    });
+    expect(harness.persisted[0]?.audio?.pcm).toHaveLength(INPUT_CHUNK_BYTES);
+    expect(harness.persisted[1]).toMatchObject({
+      role: "assistant",
+      text: TRANSCRIPT,
+      interrupted: false,
+      sourceItemId: ASSISTANT_ITEM_ID,
+      responseId: RESPONSE_ID,
+      audio: { sampleRate: 24_000 },
+    });
     expect(harness.sent).toContainEqual({
       type: "response.persisted",
       responseId: RESPONSE_ID,
@@ -494,15 +615,44 @@ describe("RealtimeSessionController authoritative history persistence", () => {
 
     acknowledgeReplacement(harness.controller, create);
 
-    expect(harness.persisted).toEqual([
-      {
-        role: "assistant",
-        text: "One two three four.",
-        interrupted: true,
-        sourceItemId: create.input.itemId,
-        responseId: RESPONSE_ID,
-      },
-    ]);
+    expect(harness.persisted).toHaveLength(1);
+    expect(harness.persisted[0]).toMatchObject({
+      role: "assistant",
+      text: "One two three four.",
+      interrupted: true,
+      sourceItemId: create.input.itemId,
+      responseId: RESPONSE_ID,
+      audio: { sampleRate: 24_000 },
+    });
+    expect(harness.persisted[0]?.audio?.pcm).toHaveLength(
+      SAFE_PLAYED_MS * PCM24_BYTES_PER_MILLISECOND,
+    );
+  });
+
+  it("persists neither text nor audio when a completed response is interrupted at zero safe playback", () => {
+    const harness = createHarness();
+    startResponse(harness.controller);
+    completeResponse(harness.controller);
+
+    harness.controller.handleControl({
+      type: "playback.interrupted",
+      responseId: RESPONSE_ID,
+      safePlayedMs: 0,
+    });
+    harness.controller.handleQwenEvent({
+      type: "conversation.item.deleted",
+      item_id: ASSISTANT_ITEM_ID,
+    });
+
+    expect(harness.persisted).toEqual([]);
+    expect(harness.sent).toContainEqual({
+      type: "response.reconciled",
+      responseId: RESPONSE_ID,
+      originalItemId: ASSISTANT_ITEM_ID,
+      transcript: "",
+      strategy: "rollback",
+      confidence: "low",
+    });
   });
 
   it("ends the session immediately when authoritative persistence fails", () => {
@@ -513,13 +663,21 @@ describe("RealtimeSessionController authoritative history persistence", () => {
       },
     });
 
+    harness.controller.handleControl({ type: "input.start" });
+    harness.controller.appendAudio(Buffer.alloc(INPUT_CHUNK_BYTES));
+    harness.controller.handleControl({ type: "input.commit" });
+    harness.controller.handleQwenEvent({
+      type: "input_audio_buffer.committed",
+      item_id: "item_user_failed",
+    });
+
     harness.controller.handleQwenEvent({
       type: "conversation.item.input_audio_transcription.completed",
       item_id: "item_user_failed",
       transcript: "This must be durable.",
     });
 
-    expect(harness.sent).toEqual([
+    expect(harness.sent.slice(-2)).toEqual([
       {
         type: "error",
         code: "HISTORY_PERSISTENCE_FAILED",
@@ -529,6 +687,7 @@ describe("RealtimeSessionController authoritative history persistence", () => {
       { type: "session.state", state: "ended" },
     ]);
     expect(harness.closeWithError).toHaveBeenCalledOnce();
+    const sentCount = harness.sent.length;
 
     harness.controller.handleQwenEvent({
       type: "conversation.item.input_audio_transcription.completed",
@@ -537,7 +696,7 @@ describe("RealtimeSessionController authoritative history persistence", () => {
     });
     harness.controller.handleControl({ type: "input.start" });
     expect(harness.persistMessage).toHaveBeenCalledOnce();
-    expect(harness.sent).toHaveLength(2);
+    expect(harness.sent).toHaveLength(sentCount);
   });
 
   it.each([
@@ -545,6 +704,7 @@ describe("RealtimeSessionController authoritative history persistence", () => {
       name: "failed ASR",
       event: {
         type: "conversation.item.input_audio_transcription.failed" as const,
+        item_id: "item_failed",
         error: { message: "ASR unavailable" },
       },
     },
@@ -561,6 +721,10 @@ describe("RealtimeSessionController authoritative history persistence", () => {
     harness.controller.handleControl({ type: "input.start" });
     harness.controller.appendAudio(Buffer.alloc(INPUT_CHUNK_BYTES));
     harness.controller.handleControl({ type: "input.commit" });
+    harness.controller.handleQwenEvent({
+      type: "input_audio_buffer.committed",
+      item_id: event.item_id,
+    });
     startResponse(harness.controller);
 
     harness.controller.handleQwenEvent(event);

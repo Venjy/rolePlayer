@@ -132,6 +132,11 @@ messages
 ├── id (INTEGER AUTOINCREMENT), conversation_id, position, role, text, interrupted
 ├── source_item_id, response_id
 └── created_at
+
+message_audio
+├── message_id → messages.id (PRIMARY KEY, ON DELETE CASCADE)
+├── sample_rate (16000 or 24000), pcm (PCM16 LE BLOB), duration_ms
+└── created_at
 ```
 
 ## Bilingual catalog storage
@@ -154,11 +159,11 @@ Personas and scenarios store preset IDs. `CatalogRepository` joins the relevant 
 
 `sessions` stores the exact compiled Instructions, voice, difficulty, locale, and timestamps needed to rebuild a realtime connection. Its immutable catalog snapshot is normalized into `persona_snapshots`, `scenario_snapshots`, `scenario_scoring_criteria`, and `scenario_personas`. Catalog edits therefore affect only future conversations without putting whole business objects into JSON columns.
 
-`messages` stores finalized text only. `(conversation_id, position)` preserves ordering. Partial unique indexes on `source_item_id` and `response_id` make user/assistant persistence idempotent. Audio and transient deltas are not stored.
+`messages` stores authoritative finalized text. `(conversation_id, position)` preserves ordering. Partial unique indexes on `source_item_id` and `response_id` make user/assistant persistence idempotent. `message_audio` is an optional one-to-one child inserted in the same transaction: user rows retain submitted PCM16 16 kHz microphone audio, normal assistant rows retain completed PCM16 24 kHz output, and interrupted assistant rows retain only the conservative `safePlayedMs` prefix associated with the repaired text. Streaming deltas, generated-but-unheard assistant suffixes, cancelled input, and empty interruption rollbacks are not stored. A conversation advertises audio download only when every finalized message has an audio row; this keeps older text-only history honest. Request-time MP3 loudness normalization operates on decoded copies and never rewrites these authoritative PCM blobs.
 
 ## Migrations, legacy splitting, and business initialization
 
-Migrations are append-only structural changes. The catalog chain currently has six entries: migration 4 moves both historical discriminator tables into nine independent domain tables, migration 5 replaces duplicated catalog text with preset foreign keys/ordered relations, and migration 6 creates the bilingual Qwen voice directory. The conversation chain has four entries: migration 4 removes the redundant `conversation_` prefix from business table and index names without changing their data. Neither file contains the other domain's business tables.
+Migrations are append-only structural changes. The catalog chain currently has six entries: migration 4 moves both historical discriminator tables into nine independent domain tables, migration 5 replaces duplicated catalog text with preset foreign keys/ordered relations, and migration 6 creates the bilingual Qwen voice directory. The conversation chain has five entries: migration 4 removes the redundant `conversation_` prefix from business table and index names without changing their data, and migration 5 adds the one-to-one finalized-message audio table. Neither file contains the other domain's business tables.
 
 The historical combined database uses migrations 1–15:
 
@@ -206,4 +211,4 @@ The resolved defaults are `data/catalog.sqlite` and `data/conversations.sqlite`;
 
 For a consistent local backup, stop the server and copy both `.sqlite` files. Under the current `DELETE` journal mode, a clean shutdown leaves no WAL/SHM sidecars. Do not discard a leftover `-journal` file after an abnormal shutdown before SQLite has had an opportunity to recover. For containers, mount the shared database directory as a persistent volume, run `catalog:init:prod` against that volume, and then start Fastify.
 
-SQLite is appropriate for the current single-process/private deployment. Revisit the choice if the product requires multiple write replicas, high concurrent write volume, external analytics over live data, or tenant isolation that should not share one file.
+SQLite is appropriate for the current single-process/private deployment. Raw PCM costs approximately 32 KiB/s for user audio and 48 KiB/s for assistant audio, so production storage and backup sizing must include audio history. Each captured message is capped at 32 MiB; an oversized turn remains usable as text but makes complete audio export unavailable for that conversation. Revisit SQLite or move message audio to owned object storage if the product requires long retention at scale, multiple write replicas, high concurrent write volume, external analytics over live data, or tenant isolation that should not share one file.

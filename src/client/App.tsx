@@ -2,6 +2,7 @@ import {
   AudioFilled,
   AudioMutedOutlined,
   CustomerServiceOutlined,
+  DownloadOutlined,
   HistoryOutlined,
   MoonOutlined,
   PoweroffOutlined,
@@ -16,6 +17,7 @@ import {
   Badge,
   Button,
   ConfigProvider,
+  Dropdown,
   Empty,
   Flex,
   message as antMessage,
@@ -38,6 +40,7 @@ import type {
 } from "../shared/role-play-catalog";
 import type {
   ConversationDetail,
+  ConversationDownloadFormat,
   PersonaSnapshot,
   ScenarioSnapshot,
 } from "../shared/conversation-history";
@@ -54,6 +57,7 @@ import { ConversationMessage } from "./components/ConversationMessage";
 import { VoiceWaveform } from "./components/VoiceWaveform";
 import {
   ConversationHistoryNavigation,
+  downloadConversation,
   useConversationHistory,
 } from "./conversations";
 import {
@@ -482,6 +486,7 @@ export function App() {
     number | null
   >(null);
   const [historyMobileOpen, setHistoryMobileOpen] = useState(false);
+  const [downloadInProgress, setDownloadInProgress] = useState(false);
 
   const realtimeRef = useRef<RealtimeClient | undefined>(undefined);
   const audioRef = useRef<BrowserAudioEngine | undefined>(undefined);
@@ -500,6 +505,7 @@ export function App() {
     undefined,
   );
   const userCommitPendingRef = useRef(false);
+  const acceptUserTranscriptRef = useRef(false);
   const transitionInProgressRef = useRef(false);
   const runtimeEpochRef = useRef(0);
   const componentMountedRef = useRef(true);
@@ -551,6 +557,26 @@ export function App() {
       });
     },
     [messageApi, t],
+  );
+  const downloadActiveConversation = useCallback(
+    async (format: ConversationDownloadFormat): Promise<void> => {
+      const conversationId = activeConversationIdRef.current;
+      if (!conversationId || downloadInProgress) return;
+      setDownloadInProgress(true);
+      try {
+        await downloadConversation(conversationId, format);
+      } catch (error) {
+        const detail = readableError(error);
+        showSessionError(
+          locale === "zh"
+            ? `下载会话失败：${detail}`
+            : `Conversation download failed: ${detail}`,
+        );
+      } finally {
+        if (componentMountedRef.current) setDownloadInProgress(false);
+      }
+    },
+    [downloadInProgress, locale, showSessionError],
   );
   const reportContextualError = useCallback(
     (error: UiError) => {
@@ -880,6 +906,7 @@ export function App() {
 
       recordingRef.current = false;
       submissionRef.current = false;
+      acceptUserTranscriptRef.current = false;
       playbackActiveRef.current = false;
       activeResponseIdRef.current = undefined;
       recordingStartedAtRef.current = 0;
@@ -932,10 +959,13 @@ export function App() {
           break;
 
         case "transcript.user.delta":
+          if (!acceptUserTranscriptRef.current) break;
           setUserDraft(message.text + message.stash);
           break;
 
         case "transcript.user.done":
+          if (!acceptUserTranscriptRef.current) break;
+          acceptUserTranscriptRef.current = false;
           if (message.transcript.trim()) {
             setTurns((current) => [
               ...current,
@@ -1119,8 +1149,11 @@ export function App() {
             );
           }
           if (message.code === "RECORDING_TOO_SHORT") {
+            acceptUserTranscriptRef.current = false;
+            setUserDraft("");
             completeUserCommitSettlement(SETTLEMENT_SUCCEEDED);
           } else if (message.code === "TRANSCRIPTION_FAILED") {
+            acceptUserTranscriptRef.current = false;
             completeUserCommitSettlement({
               ok: false,
               error: new Error(message.message),
@@ -1289,6 +1322,7 @@ export function App() {
     activeConversationIdRef.current = conversation.id;
     setActiveConversationId(conversation.id);
     setErrorMessage(null);
+    acceptUserTranscriptRef.current = false;
     setTurns(
       conversation.messages.map((message) => ({
         id: message.id,
@@ -1347,6 +1381,12 @@ export function App() {
       },
       onError: (error) => {
         if (isCurrentRuntime()) reportContextualError(readableError(error));
+      },
+      onCaptureSettings: (settings) => {
+        // This contains only effective processing flags/sample shape, never a
+        // device label or identifier. It makes browser-specific microphone
+        // behavior diagnosable without exposing private device metadata.
+        console.info("[role-player] Microphone capture settings", settings);
       },
     });
     audioRef.current = audio;
@@ -1719,13 +1759,14 @@ export function App() {
 
     let inputStarted = false;
     try {
+      acceptUserTranscriptRef.current = true;
       realtime.startInput();
       inputStarted = true;
       await audio.startCapture();
       if (!isCurrentRuntime()) {
         await audio.cancelCapture().catch(() => undefined);
         try {
-          realtime.clearInput();
+          void realtime.clearInput().catch(() => undefined);
         } catch {
           // A superseded realtime connection is usually already closed.
         }
@@ -1740,12 +1781,16 @@ export function App() {
     } catch (error) {
       if (inputStarted) {
         try {
-          realtime.clearInput();
+          await realtime.clearInput();
         } catch {
           // The realtime connection may close while microphone setup fails.
         }
       }
-      if (isCurrentRuntime()) reportContextualError(readableError(error));
+      if (isCurrentRuntime()) {
+        acceptUserTranscriptRef.current = false;
+        setUserDraft("");
+        reportContextualError(readableError(error));
+      }
       return false;
     }
   }, [interruptActivePlaybackAndWait, reportContextualError, sessionActive]);
@@ -1777,7 +1822,7 @@ export function App() {
       await audio.finishCapture();
       if (!isCurrentRuntime()) {
         try {
-          realtime.clearInput();
+          void realtime.clearInput().catch(() => undefined);
         } catch {
           // A superseded realtime connection is usually already closed.
         }
@@ -1791,6 +1836,8 @@ export function App() {
       try {
         realtime.commitInput();
       } catch (error) {
+        acceptUserTranscriptRef.current = false;
+        setUserDraft("");
         completeUserCommitSettlement(
           {
             ok: false,
@@ -1806,11 +1853,13 @@ export function App() {
       setSessionState("processing");
     } catch (error) {
       try {
-        realtime.clearInput();
+        await realtime.clearInput();
       } catch {
         // Cleanup is best effort if the realtime connection already failed.
       }
       if (isCurrentRuntime()) {
+        acceptUserTranscriptRef.current = false;
+        setUserDraft("");
         recordingRef.current = false;
         setIsRecording(false);
         setInputLevel(0);
@@ -1847,22 +1896,23 @@ export function App() {
     }
     submissionRef.current = true;
     setIsSubmitting(true);
+    acceptUserTranscriptRef.current = false;
+    setUserDraft("");
 
     try {
       await audio.cancelCapture();
       if (!isCurrentRuntime()) {
         try {
-          realtime.clearInput();
+          void realtime.clearInput().catch(() => undefined);
         } catch {
           // A superseded realtime connection is usually already closed.
         }
         return;
       }
-      realtime.clearInput();
+      await realtime.clearInput();
       recordingRef.current = false;
       setIsRecording(false);
       setRecordingDuration(0);
-      setUserDraft("");
       setInputLevel(0);
       setSessionState(isReconciling ? "processing" : "ready");
     } catch (error) {
@@ -2048,6 +2098,54 @@ export function App() {
     : t({ en: "Switch to dark theme", zh: "切换到深色主题" });
   const restoringConversationRoute =
     route.page === "chat" && !sessionActive && !sessionUiPreview;
+  const activeConversationSummary = conversationHistory.conversations.find(
+    ({ id }) => id === activeConversationId,
+  );
+  const activeConversationHasAudio =
+    activeConversationSummary?.audioAvailable === true;
+  const missingAudioMessageCount = activeConversationSummary
+    ? activeConversationSummary.messageCount -
+      activeConversationSummary.audioMessageCount
+    : 0;
+  const audioUnavailableReason =
+    activeConversationSummary?.messageCount === 0
+      ? t({ en: "no spoken messages yet", zh: "还没有已完成的语音消息" })
+      : missingAudioMessageCount > 0
+        ? t(
+            {
+              en: "{count} message(s) have no audio",
+              zh: "有 {count} 条消息缺少音频",
+            },
+            { count: missingAudioMessageCount },
+          )
+        : t({ en: "audio is not ready", zh: "音频尚未就绪" });
+  const downloadMenu = {
+    items: [
+      {
+        key: "audio",
+        label: activeConversationHasAudio
+          ? t({ en: "Download audio (.mp3)", zh: "下载音频（.mp3）" })
+          : `${t({ en: "Download audio", zh: "下载音频" })} — ${audioUnavailableReason}`,
+        disabled: !activeConversationHasAudio,
+      },
+      {
+        key: "text",
+        label: t({ en: "Download transcript (.txt)", zh: "下载文字（.txt）" }),
+      },
+      {
+        key: "both",
+        label: activeConversationHasAudio
+          ? t({ en: "Download both (.zip)", zh: "音频和文字（.zip）" })
+          : `${t({ en: "Download both", zh: "音频和文字" })} — ${audioUnavailableReason}`,
+        disabled: !activeConversationHasAudio,
+      },
+    ],
+    onClick: ({ key }: { key: string }) => {
+      if (key === "audio" || key === "text" || key === "both") {
+        void downloadActiveConversation(key);
+      }
+    },
+  };
 
   const playbackControls = (
     <div className="playback-popover">
@@ -2269,6 +2367,30 @@ export function App() {
                     />
                   </Tooltip>
                 </Popover>
+                <Tooltip
+                  title={t({
+                    en: "Download conversation",
+                    zh: "下载会话",
+                  })}
+                >
+                  <Dropdown
+                    menu={downloadMenu}
+                    trigger={["click"]}
+                    disabled={!activeConversationId || downloadInProgress}
+                    placement="bottomRight"
+                  >
+                    <Button
+                      type="text"
+                      shape="circle"
+                      loading={downloadInProgress}
+                      icon={<DownloadOutlined />}
+                      aria-label={t({
+                        en: "Download conversation",
+                        zh: "下载会话",
+                      })}
+                    />
+                  </Dropdown>
+                </Tooltip>
                 <Popconfirm
                   title={t({
                     en: "End this role-play?",

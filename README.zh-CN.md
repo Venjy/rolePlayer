@@ -2,7 +2,7 @@
 
 [English](README.md) | **简体中文**
 
-这是一个采用 React + Node.js/TypeScript、前后端位于同一仓库的可配置实时语音销售对练应用。学员可以选择存储在 SQLite 中的销售场景、兼容的客户角色和训练难度；浏览器随后通过服务端 WebSocket 网关将麦克风音频发送给 Qwen `qwen-audio-3.0-realtime-plus`，在聊天时间线中展示实时转写，并播放所选角色的语音。已经完成的文字对话和会话启动快照会保存在 SQLite 中，通过响应式历史记录导航展示，并可通过新的 Qwen 连接恢复文字上下文后继续交谈。项目还提供响应式管理控制台，用于维护角色和场景，并预览最终发送给模型的 Instructions。
+这是一个采用 React + Node.js/TypeScript、前后端位于同一仓库的可配置实时语音销售对练应用。学员可以选择存储在 SQLite 中的销售场景、兼容的客户角色和训练难度；浏览器随后通过服务端 WebSocket 网关将麦克风音频发送给 Qwen `qwen-audio-3.0-realtime-plus`，在聊天时间线中展示实时转写，并播放所选角色的语音。已经完成的对话文字、实际播放音频和会话启动快照会保存在 SQLite 中，通过响应式历史记录导航展示，并可通过新的 Qwen 连接恢复文字上下文后继续交谈。会话可下载为文字、一段双方轮流说话的 MP3，或同时包含两者的 ZIP。项目还提供响应式管理控制台，用于维护角色和场景，并预览最终发送给模型的 Instructions。
 
 移动端和桌面端共用同一套响应式 React 组件树。Ant Design 提供标准控件和主题算法，项目 CSS 负责聊天布局、消息气泡、录音浮层和随声音变化的波形效果。
 
@@ -168,9 +168,10 @@ pnpm smoke:realtime /absolute/path/to/input.pcm --interrupt
 - 通过新的 Qwen WebSocket 恢复文字上下文：Node.js 恢复已保存的 Instructions/voice，并等待最近历史的 `conversation.item.create` 确认后才宣布会话就绪
 - 切换会话、新建对练和结束会话会串行执行，并在断开前等待用户/助手的响应级持久化确认；保存失败会明确报错，不会静默丢弃最后一轮
 - 对话记录固定在底部，展示实时用户/助手草稿、时间戳和已中断标签
+- 当前会话可下载为 UTF-8 文字记录、按消息顺序合并且说话者之间带短暂间隔的一段 MP3，或同时包含两者的 ZIP；导出时通过语音感知的响度归一化平衡麦克风与模型音量，被打断的 AI 不会导出尚未说出的文字和音频后缀
 - 鼠标、触摸、触控笔、空格键和 Enter 键均支持按住录音；松开发送，向上滑动取消
 - 录音时展示随声音变化的麦克风波形、录音时长和松开操作说明
-- 浏览器麦克风采集请求开启回声消除、噪声抑制和自动增益控制
+- 浏览器麦克风采集请求开启回声消除和噪声抑制、关闭自动增益控制，并加入短暂初始化稳定期、80 Hz 高通滤波和不含设备身份信息的实际设置诊断
 - 将浏览器设备采样率流式降采样为 PCM16 16 kHz 单声道
 - 提交前等待 AudioWorklet 尾部缓冲区确认，避免末尾音节被截断
 - Node.js WebSocket 代理负责服务端 Qwen 鉴权，浏览器不会接触密钥
@@ -198,10 +199,11 @@ pnpm smoke:realtime /absolute/path/to/input.pcm --interrupt
 | `POST` | `/api/conversations` | 根据角色/场景 ID 读取权威数据、保存双语快照、编译 Instructions，并创建持久化会话 |
 | `GET` | `/api/conversations` | 按最新持久化活动时间列出全部会话 |
 | `GET` | `/api/conversations/:id` | 读取一个不可变启动快照及其有序最终消息 |
+| `GET` | `/api/conversations/:id/download?format=audio\|text\|both` | 下载单个 MP3、UTF-8 文字记录，或同时包含两者的 ZIP |
 
 业务默认值只定义在 `src/server/catalog/initial-data/*.json` 中。源码开发通过 `pnpm catalog:init` 安装，构建后通过 `pnpm catalog:init:prod` 安装。初始化器写入双语 Qwen 音色名称、双语预设、三个双语示例角色和三个双语场景；SQLite 自增 ID、稳定初始化键与事务化冲突容忍写入保证重复运行不产生重复数据，也不会覆盖已有记录。
 
-系统会在会话数据库中持久化会话快照、所选难度、编译后的 Instructions、音色和最终转写文字。流式草稿、麦克风/模型音频、用户和评估数据不会持久化。目前的私有单用户部署暴露一份全局历史记录，尚无会话删除 API 或保留期限任务。完整契约请参阅[目录与提示词编译](docs/CATALOG_AND_PROMPTS.md)和[数据库](docs/DATABASE.md)。
+系统会在会话数据库中持久化会话快照、所选难度、编译后的 Instructions、音色、最终转写文字，以及与最终消息对应的 PCM 音频。取消的录音、流式草稿和已生成但用户未听到的 AI 后缀不会保存。功能上线前的纯文字历史仍可下载文字，但无法还原出音频。目前的私有单用户部署暴露一份全局历史记录，尚无会话删除 API 或保留期限任务。完整契约请参阅[目录与提示词编译](docs/CATALOG_AND_PROMPTS.md)和[数据库](docs/DATABASE.md)。
 
 默认 `data/` 目录已被 Git 忽略。未来采用单容器部署时，必须将该目录挂载为持久化存储；如果将数据库文件放入临时镜像层，容器替换后会丢失目录编辑结果。
 

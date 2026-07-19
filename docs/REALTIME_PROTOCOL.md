@@ -150,7 +150,17 @@ audio frame has entered the WebSocket queue before `input.commit`.
 
 Node maps this to `input_audio_buffer.clear`. It is used when the user cancels a recording before submission.
 
-The browser must not follow a cleared turn with `input.commit`.
+Node waits for Qwen's `input_audio_buffer.cleared` acknowledgement, then sends:
+
+```json
+{ "type": "input.cleared" }
+```
+
+The browser hides the cancelled draft immediately but keeps input disabled until
+this acknowledgement arrives. It must not follow a cleared turn with
+`input.commit`. Node ignores transcription events for the cancelled turn, and
+accepts user transcription only after `input_audio_buffer.committed` has bound
+the pending turn to the same Qwen `item_id`.
 
 ### Cancel response fallback
 
@@ -300,26 +310,29 @@ does not move its draft into finalized history until it receives the matching:
 
 ### Authoritative persistence points
 
-SQLite stores finalized conversation text, not streaming drafts. Node performs
-the write synchronously at these boundaries:
+SQLite stores authoritative finalized conversation text and its matching spoken
+PCM, not streaming drafts. Node performs the write synchronously at these boundaries:
 
 - A user message is written when Qwen emits the final
   `conversation.item.input_audio_transcription.completed` event, before Node
-  publishes `transcript.user.done`. Empty or failed transcription is fatal for
+  publishes `transcript.user.done`; the submitted PCM16 16 kHz turn is attached
+  to that message in the same transaction. Empty or failed transcription is fatal for
   that realtime session because persisting a following assistant without its
   user turn would create unrecoverable ordering.
 - A normal assistant message is written only when Qwen generation has completed
   **and** the browser has sent `playback.completed`. Either event may arrive
   first; both are required. Node additionally holds that write until the user
-  transcript associated with the response has been persisted, then publishes
+  transcript associated with the response has been persisted, attaches the
+  completed PCM16 24 kHz response, then publishes
   `response.persisted`.
 - An interrupted assistant message is written only when reconciliation retains a
   non-empty prefix and Qwen has acknowledged the delete/recreate repair. The
   stored text is exactly the prefix reported by `response.reconciled`, with
-  `interrupted: true`.
+  `interrupted: true`; stored audio is independently cut to the conservative
+  browser receipt `safePlayedMs`, so queued/generated unheard PCM is discarded.
 
 Transient user/assistant deltas, generated-but-unplayed assistant suffixes,
-empty interruption rollbacks, PCM audio, and timing estimates are never stored.
+empty interruption rollbacks, and timing estimates are never stored.
 If an authoritative write fails, Node sends non-recoverable
 `HISTORY_PERSISTENCE_FAILED`, transitions to `ended`, and closes both sides. It
 must not continue with SQLite and Qwen holding divergent histories.
@@ -393,8 +406,8 @@ protocol messages is a contract:
 | Hold begins while a known response is playing | stop and snapshot local playback → `playback.interrupted` → `input.start` → binary microphone frames |
 | Hold begins during the response-ID race | `input.start`; Node performs fallback cancellation |
 | Normal release | request capture stop → final partial frame → Worklet stopped acknowledgement → `input.commit` |
-| Upward slide of at least 72 px, then release | cancel capture → `input.clear`; never `input.commit` |
-| `pointercancel`, unexpected lost capture, window blur, hidden document, disabled input, unmount, or session end | cancel capture → `input.clear`; never `input.commit` |
+| Upward slide of at least 72 px, then release | hide draft → cancel capture → `input.clear` → wait for `input.cleared`; never `input.commit` |
+| `pointercancel`, unexpected lost capture, window blur, hidden document, disabled input, unmount, or session end | hide draft → cancel capture → `input.clear` → wait for `input.cleared`; never `input.commit` |
 | Microphone startup fails after `input.start` | best-effort `input.clear`; no binary commit |
 | Switch/new/end after a commit | settle current assistant → wait for persisted `transcript.user.done` → settle any newly-created assistant → close |
 

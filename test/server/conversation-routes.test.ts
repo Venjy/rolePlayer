@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { strFromU8, unzipSync } from "fflate";
 import {
   conversationDetailSchema,
   conversationListSchema,
@@ -371,6 +372,7 @@ describe("conversation history routes", () => {
         .toBe(true);
       expect(detail.messages[1]?.interrupted).toBe(true);
       expect(detail.messageCount).toBe(2);
+      expect(detail.audioAvailable).toBe(false);
       expect(detail.lastMessagePreview).toBe(assistantMessage.text);
 
       app.conversationDatabase.raw
@@ -403,6 +405,119 @@ describe("conversation history routes", () => {
         messageCount: 0,
         lastMessagePreview: null,
       });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("downloads one MP3 timeline, a transcript, or both files in a ZIP", async () => {
+    const app = createApp();
+    try {
+      await app.ready();
+      const repository = new ConversationRepository(app.conversationDatabase);
+      const conversation = repository.createConversation(getCreateInput(app));
+      repository.appendMessage({
+        conversationId: conversation.id,
+        role: "user",
+        text: "Could this remove manual qualification work?",
+        interrupted: false,
+        sourceItemId: "download-user",
+        audio: {
+          sampleRate: 16_000,
+          pcm: createTonePcm(16_000, 140, 220),
+        },
+      });
+      repository.appendMessage({
+        conversationId: conversation.id,
+        role: "assistant",
+        text: "Possibly, but adoption is my main concern.",
+        interrupted: false,
+        sourceItemId: "download-assistant",
+        responseId: "download-response",
+        audio: {
+          sampleRate: 24_000,
+          pcm: createTonePcm(24_000, 180, 330),
+        },
+      });
+
+      expect(repository.getConversation(conversation.id)?.audioAvailable).toBe(true);
+      expect(repository.listConversations()).toContainEqual(
+        expect.objectContaining({
+          id: conversation.id,
+          audioAvailable: true,
+          messageCount: 2,
+        }),
+      );
+
+      const textResponse = await app.inject({
+        method: "GET",
+        url: `/api/conversations/${conversation.id}/download?format=text`,
+      });
+      expect(textResponse.statusCode).toBe(200);
+      expect(textResponse.headers["content-type"]).toContain("text/plain");
+      expect(textResponse.headers["content-disposition"]).toBe(
+        `attachment; filename="conversation-${conversation.id}.txt"`,
+      );
+      expect(textResponse.body).toContain("Could this remove manual qualification work?");
+      expect(textResponse.body).toContain(
+        "Possibly, but adoption is my main concern.",
+      );
+
+      const audioResponse = await app.inject({
+        method: "GET",
+        url: `/api/conversations/${conversation.id}/download?format=audio`,
+      });
+      expect(audioResponse.statusCode).toBe(200);
+      expect(audioResponse.headers["content-type"]).toContain("audio/mpeg");
+      expect(audioResponse.rawPayload.length).toBeGreaterThan(1_000);
+
+      const bothResponse = await app.inject({
+        method: "GET",
+        url: `/api/conversations/${conversation.id}/download?format=both`,
+      });
+      expect(bothResponse.statusCode).toBe(200);
+      expect(bothResponse.headers["content-type"]).toContain("application/zip");
+      const archive = unzipSync(new Uint8Array(bothResponse.rawPayload));
+      const transcript = archive[`conversation-${conversation.id}.txt`];
+      const mp3 = archive[`conversation-${conversation.id}.mp3`];
+      expect(transcript).toBeDefined();
+      expect(mp3).toBeDefined();
+      expect(strFromU8(transcript!)).toContain("Transcript");
+      expect(mp3!.length).toBe(audioResponse.rawPayload.length);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("keeps text export available when historical messages have no audio", async () => {
+    const app = createApp();
+    try {
+      await app.ready();
+      const repository = new ConversationRepository(app.conversationDatabase);
+      const conversation = repository.createConversation(getCreateInput(app));
+      repository.appendMessage({
+        conversationId: conversation.id,
+        role: "user",
+        text: "This old message has text only.",
+        interrupted: false,
+        sourceItemId: "text-only-user",
+      });
+
+      const audioResponse = await app.inject({
+        method: "GET",
+        url: `/api/conversations/${conversation.id}/download?format=audio`,
+      });
+      expect(audioResponse.statusCode).toBe(409);
+      expect(audioResponse.json()).toMatchObject({
+        error: { code: "conversation_audio_unavailable" },
+      });
+
+      const textResponse = await app.inject({
+        method: "GET",
+        url: `/api/conversations/${conversation.id}/download?format=text`,
+      });
+      expect(textResponse.statusCode).toBe(200);
+      expect(textResponse.body).toContain("This old message has text only.");
     } finally {
       await app.close();
     }
@@ -508,3 +623,19 @@ describe("conversation history routes", () => {
     }
   });
 });
+
+function createTonePcm(
+  sampleRate: 16_000 | 24_000,
+  durationMs: number,
+  frequency: number,
+): Buffer {
+  const sampleCount = Math.round((sampleRate * durationMs) / 1_000);
+  const pcm = Buffer.alloc(sampleCount * 2);
+  for (let index = 0; index < sampleCount; index += 1) {
+    const sample = Math.round(
+      Math.sin((2 * Math.PI * frequency * index) / sampleRate) * 8_000,
+    );
+    pcm.writeInt16LE(sample, index * 2);
+  }
+  return pcm;
+}

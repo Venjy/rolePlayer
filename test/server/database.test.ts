@@ -488,6 +488,18 @@ describe("ApplicationDatabase", () => {
       ).toEqual({ name: "remove_redundant_conversation_table_prefixes" });
       expect(
         upgraded.raw
+          .prepare("SELECT name FROM schema_migrations WHERE version = 5")
+          .get(),
+      ).toEqual({ name: "persist_finalized_message_audio" });
+      expect(
+        upgraded.raw
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'message_audio'",
+          )
+          .get(),
+      ).toEqual({ name: "message_audio" });
+      expect(
+        upgraded.raw
           .prepare(
             `SELECT name FROM sqlite_schema
              WHERE type = 'table'

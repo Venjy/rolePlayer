@@ -14,6 +14,14 @@ import {
 
 const REPAIR_TIMEOUT_MS = 10_000;
 const USER_TRANSCRIPTION_TIMEOUT_MS = 30_000;
+const INPUT_CLEAR_TIMEOUT_MS = 5_000;
+// Keep a single long turn from consuming the process indefinitely. A turn that
+// crosses this boundary remains usable in realtime, but its audio is omitted so
+// the conversation cannot be advertised as a complete audio download.
+const MAX_CAPTURED_MESSAGE_AUDIO_BYTES = 32 * 1024 * 1024;
+const USER_AUDIO_SAMPLE_RATE = 16_000 as const;
+const ASSISTANT_AUDIO_SAMPLE_RATE = 24_000 as const;
+const ASSISTANT_PCM_BYTES_PER_MILLISECOND = 48;
 
 type GenerationState =
   | "generating"
@@ -36,6 +44,8 @@ interface ResponseRecord {
   suppressOutput: boolean;
   transcript: string;
   audioBytes: number;
+  audioChunks: Buffer[];
+  audioCaptureComplete: boolean;
   assistantItemId?: string;
   previousItemId?: string;
   interruption?: InterruptionSnapshot;
@@ -45,6 +55,8 @@ interface ResponseRecord {
 
 interface UserTurnPersistence {
   status: "pending" | "persisted";
+  itemId?: string;
+  audio?: Buffer;
   timeout?: NodeJS.Timeout;
 }
 
@@ -76,6 +88,10 @@ export interface RealtimePersistedMessage {
   interrupted: boolean;
   sourceItemId?: string;
   responseId?: string;
+  audio?: {
+    sampleRate: 16_000 | 24_000;
+    pcm: Buffer;
+  };
 }
 
 function responseItemTranscript(item: QwenConversationItem): string | undefined {
@@ -103,6 +119,12 @@ export class RealtimeSessionController {
   private terminated = false;
   private inputActive = false;
   private inputBytes = 0;
+  private inputAudioChunks: Buffer[] = [];
+  private inputAudioCaptureComplete = true;
+  private inputTranscriptionItemId?: string;
+  private readonly cancelledInputItemIds = new Set<string>();
+  private inputClearPending = false;
+  private inputClearTimeout?: NodeJS.Timeout;
   private pendingCommit = false;
   private awaitingResponseCreation = false;
   private cancelWhenResponseCreated = false;
@@ -153,6 +175,18 @@ export class RealtimeSessionController {
     try {
       this.qwen.appendAudio(pcm);
       this.inputBytes += pcm.length;
+      if (this.inputAudioCaptureComplete) {
+        if (this.inputBytes <= MAX_CAPTURED_MESSAGE_AUDIO_BYTES) {
+          this.inputAudioChunks.push(Buffer.from(pcm));
+        } else {
+          this.inputAudioChunks = [];
+          this.inputAudioCaptureComplete = false;
+          this.handlers.warn(
+            undefined,
+            "Skipping persistence for an oversized user audio turn",
+          );
+        }
+      }
     } catch (error) {
       this.handlers.error(error, "Failed to forward browser audio");
       this.sendError("AUDIO_FORWARD_FAILED", "Could not forward microphone audio.", true);
@@ -163,12 +197,7 @@ export class RealtimeSessionController {
     if (this.terminated) return;
     switch (event.type) {
       case "conversation.item.input_audio_transcription.delta":
-        this.handlers.send({
-          type: "transcript.user.delta",
-          itemId: event.item_id ?? "unknown",
-          text: event.text ?? "",
-          stash: event.stash ?? "",
-        });
+        this.handleUserTranscriptionDelta(event);
         break;
 
       case "conversation.item.input_audio_transcription.completed":
@@ -176,9 +205,15 @@ export class RealtimeSessionController {
         break;
 
       case "conversation.item.input_audio_transcription.failed":
-        this.failUserTranscription(
-          event.error?.message ?? "The user audio could not be transcribed.",
-        );
+        this.handleUserTranscriptionFailure(event);
+        break;
+
+      case "input_audio_buffer.committed":
+        this.handleInputAudioCommitted(event);
+        break;
+
+      case "input_audio_buffer.cleared":
+        this.handleInputAudioCleared();
         break;
 
       case "response.created":
@@ -227,9 +262,20 @@ export class RealtimeSessionController {
     if (this.pendingUserTurn?.timeout) {
       clearTimeout(this.pendingUserTurn.timeout);
     }
+    if (this.inputClearTimeout) clearTimeout(this.inputClearTimeout);
+    this.resetInputAudioCapture();
+    for (const response of this.responses.values()) response.audioChunks = [];
   }
 
   private startInput(): void {
+    if (this.inputClearPending) {
+      this.sendError(
+        "INPUT_CLEAR_PENDING",
+        "Wait for the cancelled recording to be cleared before speaking again.",
+        true,
+      );
+      return;
+    }
     if (this.inputActive || this.pendingCommit) {
       this.sendError("INPUT_ALREADY_ACTIVE", "A user turn is already active.", true);
       return;
@@ -246,6 +292,9 @@ export class RealtimeSessionController {
     this.interruptLatestResponse();
     this.inputActive = true;
     this.inputBytes = 0;
+    this.inputAudioChunks = [];
+    this.inputAudioCaptureComplete = true;
+    this.inputTranscriptionItemId = undefined;
     this.sendState("listening");
   }
 
@@ -258,7 +307,7 @@ export class RealtimeSessionController {
     this.inputActive = false;
     if (this.inputBytes < INPUT_CHUNK_BYTES) {
       this.qwen.clearAudio();
-      this.inputBytes = 0;
+      this.resetInputAudioCapture();
       this.sendError(
         "RECORDING_TOO_SHORT",
         "Please speak for at least 100 ms before submitting.",
@@ -269,7 +318,6 @@ export class RealtimeSessionController {
     }
 
     this.pendingCommit = true;
-    this.inputBytes = 0;
     this.sendState("processing");
     this.maybeFlushCommit();
   }
@@ -277,9 +325,24 @@ export class RealtimeSessionController {
   private clearInput(): void {
     this.inputActive = false;
     this.pendingCommit = false;
-    this.inputBytes = 0;
-    this.qwen.clearAudio();
-    this.sendState(this.repair ? "processing" : "ready");
+    this.rememberCancelledInputItem(this.inputTranscriptionItemId);
+    this.inputTranscriptionItemId = undefined;
+    this.resetInputAudioCapture();
+    this.inputClearPending = true;
+    if (this.inputClearTimeout) clearTimeout(this.inputClearTimeout);
+    this.inputClearTimeout = setTimeout(() => {
+      this.failInputClear(
+        "Timed out while waiting for Qwen to confirm the cancelled recording was cleared.",
+      );
+    }, INPUT_CLEAR_TIMEOUT_MS);
+    try {
+      this.qwen.clearAudio();
+    } catch (error) {
+      this.handlers.error(error, "Failed to clear cancelled user audio");
+      this.failInputClear("Could not clear the cancelled recording.");
+      return;
+    }
+    this.sendState("processing");
   }
 
   private maybeFlushCommit(): void {
@@ -295,7 +358,14 @@ export class RealtimeSessionController {
 
     this.pendingCommit = false;
     this.awaitingResponseCreation = true;
-    const userTurn: UserTurnPersistence = { status: "pending" };
+    const userAudio = this.inputAudioCaptureComplete
+      ? concatenatePcmChunks(this.inputAudioChunks, this.inputBytes)
+      : undefined;
+    const userTurn: UserTurnPersistence = {
+      status: "pending",
+      ...(userAudio ? { audio: userAudio } : {}),
+    };
+    this.resetInputAudioCapture();
     userTurn.timeout = setTimeout(() => {
       this.failUserTranscription(
         "Timed out while waiting for the finalized user transcript.",
@@ -322,6 +392,8 @@ export class RealtimeSessionController {
       suppressOutput: false,
       transcript: "",
       audioBytes: 0,
+      audioChunks: [],
+      audioCaptureComplete: true,
       ...(this.responseUserTurnAwaitingCreation
         ? { userTurn: this.responseUserTurnAwaitingCreation }
         : {}),
@@ -459,6 +531,18 @@ export class RealtimeSessionController {
     if (event.item_id) this.rememberItem(record, event.item_id);
     const audio = Buffer.from(event.delta, "base64");
     record.audioBytes += audio.length;
+    if (record.audioCaptureComplete) {
+      if (record.audioBytes <= MAX_CAPTURED_MESSAGE_AUDIO_BYTES) {
+        record.audioChunks.push(audio);
+      } else {
+        record.audioChunks = [];
+        record.audioCaptureComplete = false;
+        this.handlers.warn(
+          undefined,
+          `Skipping persistence for oversized assistant audio ${record.responseId}`,
+        );
+      }
+    }
     if (record.suppressOutput) return;
 
     if (!this.handlers.sendAudio(audio)) {
@@ -530,6 +614,12 @@ export class RealtimeSessionController {
   }
 
   private handleQwenError(event: QwenServerEvent): void {
+    if (this.inputClearPending) {
+      this.failInputClear(
+        event.error?.message ?? "Qwen rejected the cancelled recording clear.",
+      );
+      return;
+    }
     if (
       this.repair?.stage === "waiting_terminal" &&
       isBenignCancellationRace(event)
@@ -577,6 +667,12 @@ export class RealtimeSessionController {
           ? { sourceItemId: record.assistantItemId }
           : {}),
         responseId: record.responseId,
+        ...(record.audioCaptureComplete
+          ? withPersistedAudio(
+              ASSISTANT_AUDIO_SAMPLE_RATE,
+              concatenatePcmChunks(record.audioChunks, record.audioBytes),
+            )
+          : {}),
       })
     ) {
       return;
@@ -720,6 +816,23 @@ export class RealtimeSessionController {
             ? { sourceItemId: repair.originalItemId }
             : {}),
         responseId: repair.responseId,
+        ...(record.audioCaptureComplete
+          ? withPersistedAudio(
+              ASSISTANT_AUDIO_SAMPLE_RATE,
+              concatenatePcmChunks(
+                record.audioChunks,
+                Math.min(
+                  record.audioBytes,
+                  evenPcmByteLength(
+                    Math.floor(
+                      (record.interruption?.safePlayedMs ?? 0) *
+                        ASSISTANT_PCM_BYTES_PER_MILLISECOND,
+                    ),
+                  ),
+                ),
+              ),
+            )
+          : {}),
       })
     ) {
       return;
@@ -784,7 +897,87 @@ export class RealtimeSessionController {
     if (this.repair) this.repair.timeout = undefined;
   }
 
+  private handleUserTranscriptionDelta(event: QwenServerEvent): void {
+    if (event.item_id && this.cancelledInputItemIds.has(event.item_id)) return;
+    const userTurn = this.pendingUserTurn;
+    if (userTurn?.itemId) {
+      if (event.item_id !== userTurn.itemId) return;
+    } else if (this.inputActive || this.pendingCommit) {
+      if (!event.item_id || this.inputClearPending) return;
+      if (
+        this.inputTranscriptionItemId &&
+        event.item_id !== this.inputTranscriptionItemId
+      ) {
+        return;
+      }
+      this.inputTranscriptionItemId = event.item_id;
+    } else {
+      return;
+    }
+    this.handlers.send({
+      type: "transcript.user.delta",
+      itemId: event.item_id ?? "unknown",
+      text: event.text ?? "",
+      stash: event.stash ?? "",
+    });
+  }
+
+  private handleUserTranscriptionFailure(event: QwenServerEvent): void {
+    const userTurn = this.pendingUserTurn;
+    if (!userTurn?.itemId || event.item_id !== userTurn.itemId) return;
+    this.failUserTranscription(
+      event.error?.message ?? "The user audio could not be transcribed.",
+    );
+  }
+
+  private handleInputAudioCommitted(event: QwenServerEvent): void {
+    const userTurn = this.pendingUserTurn;
+    if (!userTurn || !event.item_id) {
+      this.handlers.warn(
+        event,
+        "Ignoring an input commit acknowledgement with no pending user turn",
+      );
+      return;
+    }
+    if (
+      this.inputTranscriptionItemId &&
+      event.item_id !== this.inputTranscriptionItemId
+    ) {
+      this.handlers.warn(
+        event,
+        "The committed input item did not match its streaming transcription item",
+      );
+    }
+    userTurn.itemId = event.item_id;
+    this.inputTranscriptionItemId = undefined;
+  }
+
+  private handleInputAudioCleared(): void {
+    if (!this.inputClearPending) return;
+    if (this.inputClearTimeout) clearTimeout(this.inputClearTimeout);
+    this.inputClearTimeout = undefined;
+    this.inputClearPending = false;
+    this.handlers.send({ type: "input.cleared" });
+    this.sendState(this.repair ? "processing" : "ready");
+  }
+
   private completeUserTranscription(event: QwenServerEvent): void {
+    const userTurn = this.pendingUserTurn;
+    if (!userTurn) {
+      this.handlers.warn(
+        event,
+        "Ignoring finalized transcription for an uncommitted or cancelled user turn",
+      );
+      return;
+    }
+    if (!userTurn.itemId || event.item_id !== userTurn.itemId) {
+      this.handlers.warn(
+        event,
+        "Ignoring finalized transcription that does not match the committed user item",
+      );
+      return;
+    }
+
     const transcript = event.transcript?.trim();
     if (!transcript) {
       this.failUserTranscription(
@@ -793,7 +986,6 @@ export class RealtimeSessionController {
       return;
     }
 
-    const userTurn = this.pendingUserTurn;
     if (userTurn?.timeout) clearTimeout(userTurn.timeout);
     if (userTurn) userTurn.timeout = undefined;
     this.pendingUserTurn = undefined;
@@ -804,6 +996,9 @@ export class RealtimeSessionController {
         text: transcript,
         interrupted: false,
         ...(event.item_id ? { sourceItemId: event.item_id } : {}),
+        ...(userTurn?.audio
+          ? withPersistedAudio(USER_AUDIO_SAMPLE_RATE, userTurn.audio)
+          : {}),
       })
     ) {
       return;
@@ -842,9 +1037,21 @@ export class RealtimeSessionController {
     }
     this.pendingUserTurn = undefined;
     this.responseUserTurnAwaitingCreation = undefined;
+    this.resetInputAudioCapture();
     this.clearRepairTimeout();
     this.terminated = true;
     this.sendError("TRANSCRIPTION_FAILED", message, false);
+    this.sendState("ended");
+    this.handlers.closeWithError(message);
+  }
+
+  private failInputClear(message: string): void {
+    if (this.terminated) return;
+    if (this.inputClearTimeout) clearTimeout(this.inputClearTimeout);
+    this.inputClearTimeout = undefined;
+    this.inputClearPending = false;
+    this.terminated = true;
+    this.sendError("INPUT_CLEAR_FAILED", message, false);
     this.sendState("ended");
     this.handlers.closeWithError(message);
   }
@@ -866,6 +1073,23 @@ export class RealtimeSessionController {
     }
   }
 
+  private resetInputAudioCapture(): void {
+    this.inputBytes = 0;
+    this.inputAudioChunks = [];
+    this.inputAudioCaptureComplete = true;
+  }
+
+  private rememberCancelledInputItem(itemId: string | undefined): void {
+    if (!itemId) return;
+    this.cancelledInputItemIds.add(itemId);
+    // A realtime session is short-lived, but keep the defensive tombstone set
+    // bounded in case a deployment raises the session-duration limit.
+    if (this.cancelledInputItemIds.size > 32) {
+      const oldest = this.cancelledInputItemIds.values().next().value;
+      if (oldest) this.cancelledInputItemIds.delete(oldest);
+    }
+  }
+
   private sendState(state: SessionState): void {
     if (state === this.lastSentState) return;
     this.lastSentState = state;
@@ -875,4 +1099,26 @@ export class RealtimeSessionController {
   private sendError(code: string, message: string, recoverable: boolean): void {
     this.handlers.send({ type: "error", code, message, recoverable });
   }
+}
+
+function evenPcmByteLength(byteLength: number): number {
+  return Math.max(0, byteLength - (byteLength % 2));
+}
+
+function concatenatePcmChunks(
+  chunks: readonly Buffer[],
+  requestedBytes: number,
+): Buffer | undefined {
+  const byteLength = evenPcmByteLength(requestedBytes);
+  if (byteLength === 0) return undefined;
+  const pcm = Buffer.concat(chunks);
+  if (pcm.length < byteLength) return undefined;
+  return pcm.subarray(0, byteLength);
+}
+
+function withPersistedAudio(
+  sampleRate: 16_000 | 24_000,
+  pcm: Buffer | undefined,
+): Pick<RealtimePersistedMessage, "audio"> {
+  return pcm ? { audio: { sampleRate, pcm } } : {};
 }

@@ -3,6 +3,8 @@ import { calculateSafePlayedMs } from "./playback-timing";
 
 const STOP_ACK_TIMEOUT_MS = 2_000;
 const PLAYBACK_LEAD_SECONDS = 0.08;
+const MICROPHONE_SETTLE_MS = 350;
+const CAPTURE_HIGH_PASS_HZ = 80;
 
 interface WorkletAudioMessage {
   type: "audio";
@@ -30,6 +32,15 @@ export interface BrowserAudioEngineHandlers {
   onPlaybackStarted: (responseId: string) => void;
   onPlaybackDrained: (responseId: string) => void;
   onError: (error: Error) => void;
+  onCaptureSettings?: (settings: BrowserCaptureSettings) => void;
+}
+
+export interface BrowserCaptureSettings {
+  sampleRate?: number;
+  channelCount?: number;
+  echoCancellation?: boolean;
+  noiseSuppression?: boolean;
+  autoGainControl?: boolean;
 }
 
 interface ScheduledPlaybackSource {
@@ -56,6 +67,8 @@ export interface PlaybackInterruption {
 export class BrowserAudioEngine {
   private context?: AudioContext;
   private stream?: MediaStream;
+  private captureSource?: MediaStreamAudioSourceNode;
+  private captureFilter?: BiquadFilterNode;
   private captureNode?: AudioWorkletNode;
   private monitorGain?: GainNode;
   private playbackGain?: GainNode;
@@ -68,6 +81,7 @@ export class BrowserAudioEngine {
     { resolve: () => void; reject: (error: Error) => void; timeout: number }
   >();
   private prepared = false;
+  private captureReadyAt = 0;
   private capturing = false;
   private playbackActive = false;
 
@@ -92,13 +106,20 @@ export class BrowserAudioEngine {
           channelCount: { ideal: 1 },
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true,
+          // Browser AGC can change gain substantially while its estimator is
+          // settling. Keep capture deterministic and normalize persisted
+          // speech offline when producing a downloadable conversation.
+          autoGainControl: false,
           sampleRate: { ideal: 16_000 },
         },
       });
 
       await context.audioWorklet.addModule("/audio-recorder-worklet.js");
-      const source = context.createMediaStreamSource(this.stream);
+      this.captureSource = context.createMediaStreamSource(this.stream);
+      this.captureFilter = context.createBiquadFilter();
+      this.captureFilter.type = "highpass";
+      this.captureFilter.frequency.value = CAPTURE_HIGH_PASS_HZ;
+      this.captureFilter.Q.value = Math.SQRT1_2;
       this.captureNode = new AudioWorkletNode(context, "pcm16-recorder", {
         numberOfInputs: 1,
         numberOfOutputs: 1,
@@ -115,10 +136,14 @@ export class BrowserAudioEngine {
         this.handlers.onError(new Error("The microphone audio processor stopped."));
       };
 
-      source.connect(this.captureNode);
+      this.captureSource.connect(this.captureFilter).connect(this.captureNode);
       this.captureNode.connect(this.monitorGain).connect(context.destination);
       this.playbackGain.connect(context.destination);
       await context.resume();
+      this.captureReadyAt = performance.now() + MICROPHONE_SETTLE_MS;
+      this.handlers.onCaptureSettings?.(
+        sanitizeCaptureSettings(this.stream.getAudioTracks()[0]?.getSettings()),
+      );
       this.prepared = true;
     } catch (error) {
       await this.dispose();
@@ -131,6 +156,15 @@ export class BrowserAudioEngine {
       throw new Error("Audio engine is not prepared.");
     }
     await this.context.resume();
+    const settleRemaining = this.captureReadyAt - performance.now();
+    if (settleRemaining > 0) {
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, settleRemaining);
+      });
+    }
+    if (!this.captureNode || !this.context || !this.prepared) {
+      throw new Error("Audio engine was disposed while the microphone settled.");
+    }
     this.capturing = true;
     this.captureNode.port.postMessage({ type: "start" });
   }
@@ -307,9 +341,13 @@ export class BrowserAudioEngine {
     }
     this.stopRequests.clear();
 
+    this.captureSource?.disconnect();
+    this.captureFilter?.disconnect();
     this.captureNode?.disconnect();
     this.monitorGain?.disconnect();
     this.playbackGain?.disconnect();
+    this.captureSource = undefined;
+    this.captureFilter = undefined;
     this.captureNode = undefined;
     this.monitorGain = undefined;
     this.playbackGain = undefined;
@@ -322,6 +360,7 @@ export class BrowserAudioEngine {
     }
     this.context = undefined;
     this.prepared = false;
+    this.captureReadyAt = 0;
     this.discardedResponseIds.clear();
   }
 
@@ -382,4 +421,27 @@ export class BrowserAudioEngine {
     }
     playback.sources.clear();
   }
+}
+
+function sanitizeCaptureSettings(
+  settings: MediaTrackSettings | undefined,
+): BrowserCaptureSettings {
+  if (!settings) return {};
+  return {
+    ...(typeof settings.sampleRate === "number"
+      ? { sampleRate: settings.sampleRate }
+      : {}),
+    ...(typeof settings.channelCount === "number"
+      ? { channelCount: settings.channelCount }
+      : {}),
+    ...(typeof settings.echoCancellation === "boolean"
+      ? { echoCancellation: settings.echoCancellation }
+      : {}),
+    ...(typeof settings.noiseSuppression === "boolean"
+      ? { noiseSuppression: settings.noiseSuppression }
+      : {}),
+    ...(typeof settings.autoGainControl === "boolean"
+      ? { autoGainControl: settings.autoGainControl }
+      : {}),
+  };
 }

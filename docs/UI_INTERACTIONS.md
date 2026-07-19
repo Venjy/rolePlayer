@@ -68,7 +68,7 @@ A persona referenced by one or more scenarios cannot be deleted. The admin disab
 
 Inside the learner workspace, the active session uses a three-row CSS grid:
 
-1. Header — selected persona occupation, realtime state, playback controls, end-session confirmation, language control, and theme toggle.
+1. Header — selected persona occupation, realtime state, playback controls, conversation download, end-session confirmation, language control, and theme toggle.
 2. Conversation — the only vertically scrolling region.
 3. Voice composer — the hold-to-talk control, its hint, and the recording overlay anchor.
 
@@ -100,6 +100,8 @@ Auto-follow is conditional. When new transcript text or state arrives, the UI sc
 The conversation container uses `role="log"`, `aria-live="polite"`, and an accessible label. Avoid introducing rapidly changing assertive announcements for streaming deltas.
 
 Persistence follows audible conversation truth: the final user transcript is durable before it becomes a completed UI turn; a normal assistant turn is durable only after generation and browser playback both complete; an interrupted assistant turn stores only the reconciled retained prefix. Reloading or selecting history reconstructs `turns` from those records. Older messages remain visible in the UI even when only the most recent bounded window is restored into Qwen context.
+
+The active-session header uses an Ant Design dropdown for three download choices: audio (`.mp3`), transcript (`.txt`), or both (`.zip`). The MP3 is one mono timeline in chronological message order, with a short silence between speakers; it is not a collection of turn fragments. Each turn is speech-aware loudness-normalized with bounded gain and peak protection so microphone and model speech have comparable perceived volume without aggressively amplifying silence. Text remains available for all conversations. Audio and combined download are disabled unless every finalized message owns persisted audio, which means pre-audio-feature history and any oversized uncaptured turn remain text-only; the disabled menu label reports how many messages lack audio. A download never includes current streaming drafts. Interrupted assistant text is the repaired conservative prefix and its audio is cut to `safePlayedMs`; generated-but-unheard suffixes are excluded from both artifacts.
 
 ## Session states
 
@@ -160,7 +162,9 @@ Cancellation has the highest label priority, then an active gesture, then AI-spe
 
 1. Primary-button pointer down prevents the default click behavior, stores the origin Y coordinate, captures the pointer, and begins asynchronous input startup.
 2. Pointer move compares the current Y position with the origin. Moving upward by at least 72 px enters cancellation state; moving back below the threshold returns to send state.
-3. Pointer up releases exactly once. Normal state submits; cancellation state clears.
+3. Pointer up releases exactly once. Normal state submits. Cancellation state
+   removes the visible draft immediately, clears the upstream buffer, and keeps
+   input disabled until the realtime clear acknowledgement arrives.
 4. `pointercancel` and unexpected lost pointer capture force cancellation.
 
 `touch-action: none`, disabled text selection, and suppressed context menu prevent the browser's normal long-press gestures from competing with recording.
@@ -256,7 +260,9 @@ For layout-only work, `?preview=session` and `?preview=recording` provide develo
 2. Confirm the latest message and waveform do not hide behind the composer or mobile safe area.
 3. Switch theme and language on learner, admin, drawer, and active-session screens; reload after each language choice to confirm persistence, and confirm the current session remains connected.
 4. Hold and release normally with pointer input; verify one submitted turn.
-5. Hold, move upward beyond 72 px, and release; verify the captured turn is cleared and not sent.
+5. Hold, move upward beyond 72 px, and release; verify the draft disappears
+   immediately, the captured turn is not sent or restored by a late transcript,
+   and a new hold works after clearing finishes.
 6. Release quickly during microphone startup; verify the UI returns to idle after the deterministic outcome.
 7. Repeat with Space or Enter.
 8. While the selected persona is playing audio, hold the barge-in control and confirm playback stops immediately before recording begins.
@@ -273,3 +279,4 @@ For layout-only work, `?preview=session` and `?preview=recording` provide develo
 18. Release immediately after pressing or submit silence; confirm the active chat remains visible, an Ant Design error message appears at the top and disappears after five seconds, and input becomes available again—directly for a recoverable short-input error or after the same-conversation rebuild for failed transcription.
 19. Force a pre-`session.ready` configuration failure and confirm the partial chat never opens: the app returns to the launcher and shows the startup error there.
 20. After a session has become ready, force both its runtime connection and the automatic replacement connection to fail; confirm the chat remains visible, the top error message disappears after five seconds, and the composer becomes **Retry voice connection** and can restore the same conversation. Confirm the header's end-session action still requires confirmation.
+21. Complete at least two spoken turns and download audio, text, and both. Confirm the MP3 is a single alternating-speaker timeline, the ZIP contains one MP3 and one TXT, and a text-only historical conversation disables audio choices. Interrupt an assistant mid-sentence and confirm neither export contains its unheard text or audio suffix.

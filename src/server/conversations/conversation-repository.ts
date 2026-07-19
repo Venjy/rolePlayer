@@ -56,6 +56,7 @@ interface ConversationSummaryRow extends ConversationSessionRow {
   scenario_name: string;
   scenario_name_zh_cn: string;
   message_count: number;
+  audio_message_count: number;
   last_message_text: string | null;
 }
 
@@ -125,6 +126,42 @@ interface ConversationMessageRow {
   created_at: string;
 }
 
+interface ConversationAudioSegmentRow {
+  message_id: number;
+  position: number;
+  role: string;
+  sample_rate: number;
+  pcm: Uint8Array;
+  duration_ms: number;
+}
+
+export const MAX_PERSISTED_MESSAGE_AUDIO_BYTES = 32 * 1024 * 1024;
+
+const conversationMessageAudioSchema = z
+  .object({
+    sampleRate: z.union([z.literal(16_000), z.literal(24_000)]),
+    pcm: z.custom<Buffer>(
+      (value) => Buffer.isBuffer(value),
+      "PCM audio must be provided as a Buffer.",
+    ),
+  })
+  .superRefine((audio, context) => {
+    if (audio.pcm.length === 0 || audio.pcm.length % 2 !== 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["pcm"],
+        message: "PCM16 audio must contain a non-empty, even number of bytes.",
+      });
+    }
+    if (audio.pcm.length > MAX_PERSISTED_MESSAGE_AUDIO_BYTES) {
+      context.addIssue({
+        code: "custom",
+        path: ["pcm"],
+        message: `PCM audio cannot exceed ${MAX_PERSISTED_MESSAGE_AUDIO_BYTES} bytes per message.`,
+      });
+    }
+  });
+
 const appendMessageInputSchema = z.object({
   conversationId: databaseIdSchema,
   role: conversationMessageRoleSchema,
@@ -132,6 +169,7 @@ const appendMessageInputSchema = z.object({
   interrupted: z.boolean(),
   sourceItemId: z.string().trim().min(1).max(200).optional(),
   responseId: z.string().trim().min(1).max(200).optional(),
+  audio: conversationMessageAudioSchema.optional(),
 });
 
 export interface AppendConversationMessageInput {
@@ -141,6 +179,19 @@ export interface AppendConversationMessageInput {
   interrupted: boolean;
   sourceItemId?: string;
   responseId?: string;
+  audio?: {
+    sampleRate: 16_000 | 24_000;
+    pcm: Buffer;
+  };
+}
+
+export interface ConversationAudioSegment {
+  messageId: number;
+  position: number;
+  role: ConversationMessage["role"];
+  sampleRate: 16_000 | 24_000;
+  pcm: Buffer;
+  durationMs: number;
 }
 
 export interface RuntimeConversation {
@@ -206,7 +257,7 @@ export class ConversationMessageIdentityConflictError extends Error {
   }
 }
 
-/** Owns durable conversation snapshots and finalized text messages. */
+/** Owns durable conversation snapshots plus finalized text and spoken audio. */
 export class ConversationRepository {
   public constructor(private readonly database: ApplicationDatabase) {}
 
@@ -263,6 +314,7 @@ export class ConversationRepository {
           scenario.name AS scenario_name,
           scenario.name_zh_cn AS scenario_name_zh_cn,
           COUNT(messages.id) AS message_count,
+          COUNT(message_audio.message_id) AS audio_message_count,
           (
             SELECT latest.text
             FROM messages AS latest
@@ -277,6 +329,8 @@ export class ConversationRepository {
           ON scenario.conversation_id = sessions.id
         LEFT JOIN messages
           ON messages.conversation_id = sessions.id
+        LEFT JOIN message_audio
+          ON message_audio.message_id = messages.id
         GROUP BY sessions.id
         ORDER BY sessions.updated_at DESC, sessions.id DESC`,
       )
@@ -290,7 +344,13 @@ export class ConversationRepository {
     if (!row) return null;
     const { persona, scenario } = this.requireSnapshots(id);
     const messages = this.listMessages(id);
-    return mapConversationDetail(row, persona, scenario, messages);
+    return mapConversationDetail(
+      row,
+      persona,
+      scenario,
+      messages,
+      this.countAudioMessages(id),
+    );
   }
 
   public getRuntimeConversation(
@@ -366,6 +426,9 @@ export class ConversationRepository {
               duplicate.id,
             );
         }
+        if (parsed.audio) {
+          this.insertMessageAudio(duplicate.id, parsed.audio, duplicate.created_at);
+        }
         const result = mapConversationMessageRow(duplicate);
         this.connection.exec("COMMIT");
         return result;
@@ -405,6 +468,9 @@ export class ConversationRepository {
         )
         .run(timestamp, parsed.conversationId);
       const result = this.requireMessage(toDatabaseId(write.lastInsertRowid));
+      if (parsed.audio) {
+        this.insertMessageAudio(result.id, parsed.audio, timestamp);
+      }
       this.connection.exec("COMMIT");
 
       return result;
@@ -412,6 +478,36 @@ export class ConversationRepository {
       this.connection.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  public listConversationAudioSegments(
+    conversationId: number,
+  ): ConversationAudioSegment[] {
+    const id = databaseIdSchema.parse(conversationId);
+    const rows = this.connection
+      .prepare(
+        `SELECT
+           messages.id AS message_id,
+           messages.position,
+           messages.role,
+           message_audio.sample_rate,
+           message_audio.pcm,
+           message_audio.duration_ms
+         FROM messages
+         JOIN message_audio ON message_audio.message_id = messages.id
+         WHERE messages.conversation_id = ?
+         ORDER BY messages.position`,
+      )
+      .all(id) as unknown as ConversationAudioSegmentRow[];
+
+    return rows.map((row) => ({
+      messageId: row.message_id,
+      position: row.position,
+      role: conversationMessageRoleSchema.parse(row.role),
+      sampleRate: parseAudioSampleRate(row.sample_rate),
+      pcm: Buffer.from(row.pcm),
+      durationMs: row.duration_ms,
+    }));
   }
 
   private insertPersonaSnapshot(
@@ -593,6 +689,36 @@ export class ConversationRepository {
     return rows.map(mapConversationMessageRow);
   }
 
+  private countAudioMessages(conversationId: number): number {
+    const row = this.connection
+      .prepare(
+        `SELECT COUNT(message_audio.message_id) AS count
+         FROM messages
+         JOIN message_audio ON message_audio.message_id = messages.id
+         WHERE messages.conversation_id = ?`,
+      )
+      .get(conversationId) as unknown as { count: number };
+    return row.count;
+  }
+
+  private insertMessageAudio(
+    messageId: number,
+    audio: z.infer<typeof conversationMessageAudioSchema>,
+    timestamp: string,
+  ): void {
+    const durationMs = Math.max(
+      1,
+      Math.round((audio.pcm.length / 2 / audio.sampleRate) * 1_000),
+    );
+    this.connection
+      .prepare(
+        `INSERT OR IGNORE INTO message_audio (
+           message_id, sample_rate, pcm, duration_ms, created_at
+         ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(messageId, audio.sampleRate, audio.pcm, durationMs, timestamp);
+  }
+
   private listRecentMessages(
     conversationId: number,
     maximumUserTurns: number,
@@ -687,6 +813,9 @@ function mapConversationSummaryRow(
     difficulty: row.difficulty,
     locale: row.locale,
     messageCount: row.message_count,
+    audioMessageCount: row.audio_message_count,
+    audioAvailable:
+      row.message_count > 0 && row.audio_message_count === row.message_count,
     lastMessagePreview: row.last_message_text?.slice(0, 240) ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -698,6 +827,7 @@ function mapConversationDetail(
   persona: PersonaSnapshot,
   scenario: ScenarioSnapshot,
   messages: ConversationMessage[],
+  audioMessageCount: number,
 ): ConversationDetail {
   const locale = parseLocale(row.locale);
   const localizedPersona = localizePersona(persona, locale);
@@ -709,6 +839,9 @@ function mapConversationDetail(
     difficulty: row.difficulty,
     locale: row.locale,
     messageCount: messages.length,
+    audioMessageCount,
+    audioAvailable:
+      messages.length > 0 && audioMessageCount === messages.length,
     lastMessagePreview: messages.at(-1)?.text.slice(0, 240) ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -716,6 +849,11 @@ function mapConversationDetail(
     scenario: localizedScenario,
     messages,
   });
+}
+
+function parseAudioSampleRate(value: number): 16_000 | 24_000 {
+  if (value === 16_000 || value === 24_000) return value;
+  throw new Error(`Unsupported stored PCM sample rate "${value}".`);
 }
 
 function mapPersonaSnapshotRow(row: PersonaSnapshotRow): PersonaSnapshot {

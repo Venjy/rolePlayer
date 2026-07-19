@@ -18,6 +18,8 @@ function toSummary(conversation: ConversationDetail): ConversationSummary {
     difficulty: conversation.difficulty,
     locale: conversation.locale,
     messageCount: conversation.messageCount,
+    audioMessageCount: conversation.audioMessageCount,
+    audioAvailable: conversation.audioAvailable,
     lastMessagePreview: conversation.lastMessagePreview,
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt,
