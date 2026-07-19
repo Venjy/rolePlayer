@@ -93,8 +93,6 @@ function toPersonaSnapshot(persona: Persona): PersonaSnapshot {
     personalityTraitsZhCn: persona.personalityTraitsZhCn,
     communicationStyle: persona.communicationStyle,
     communicationStyleZhCn: persona.communicationStyleZhCn,
-    toneStyle: persona.toneStyle,
-    toneStyleZhCn: persona.toneStyleZhCn,
     behaviorNotes: persona.behaviorNotes,
     behaviorNotesZhCn: persona.behaviorNotesZhCn,
     motivations: persona.motivations,
@@ -102,7 +100,6 @@ function toPersonaSnapshot(persona: Persona): PersonaSnapshot {
     concerns: persona.concerns,
     concernsZhCn: persona.concernsZhCn,
     voice: persona.voice,
-    voiceBehavior: persona.voiceBehavior,
     createdAt: persona.createdAt,
     updatedAt: persona.updatedAt,
   };
@@ -121,6 +118,9 @@ function toScenarioSnapshot(scenario: Scenario): ScenarioSnapshot {
     suggestedSkillFocusZhCn: scenario.suggestedSkillFocusZhCn,
     successCriteria: scenario.successCriteria,
     successCriteriaZhCn: scenario.successCriteriaZhCn,
+    toneStyle: scenario.toneStyle,
+    toneStyleZhCn: scenario.toneStyleZhCn,
+    voiceBehavior: scenario.voiceBehavior,
     scoringCriteria: scenario.scoringCriteria.map((criterion) => ({
       name: criterion.name,
       nameZhCn: criterion.nameZhCn,

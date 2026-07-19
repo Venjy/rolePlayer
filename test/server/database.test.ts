@@ -130,6 +130,11 @@ describe("ApplicationDatabase", () => {
         name: "reference_catalog_presets_by_id",
         applied_at: expect.any(String),
       }),
+      expect.objectContaining({
+        version: 16,
+        name: "move_voice_behavior_to_scenarios",
+        applied_at: expect.any(String),
+      }),
     ]);
     expect(
       database.raw
@@ -153,7 +158,7 @@ describe("ApplicationDatabase", () => {
              'persona_occupation_presets',
              'persona_personality_trait_presets',
              'persona_communication_style_presets',
-             'persona_tone_style_presets',
+             'scenario_tone_style_presets',
              'persona_motivation_presets',
              'persona_concern_presets',
              'scenario_training_goal_presets',
@@ -183,13 +188,13 @@ describe("ApplicationDatabase", () => {
       { name: "persona_occupation_presets", strict: 1 },
       { name: "persona_personality_trait_presets", strict: 1 },
       { name: "persona_personality_traits", strict: 1 },
-      { name: "persona_tone_style_presets", strict: 1 },
       { name: "personas", strict: 1 },
       { name: "scenario_personas", strict: 1 },
       { name: "scenario_skill_focus_presets", strict: 1 },
       { name: "scenario_skill_focuses", strict: 1 },
       { name: "scenario_success_criteria", strict: 1 },
       { name: "scenario_success_criterion_presets", strict: 1 },
+      { name: "scenario_tone_style_presets", strict: 1 },
       { name: "scenario_training_goal_presets", strict: 1 },
       { name: "scenario_training_goals", strict: 1 },
       { name: "scenarios", strict: 1 },
@@ -219,7 +224,7 @@ describe("ApplicationDatabase", () => {
       second.raw
         .prepare("SELECT COUNT(*) AS count FROM schema_migrations")
         .get(),
-    ).toMatchObject({ count: 15 });
+    ).toMatchObject({ count: 16 });
     expect(
       second.raw
         .prepare("SELECT applied_at FROM schema_migrations WHERE version = 1")
@@ -243,13 +248,12 @@ describe("ApplicationDatabase", () => {
         "occupation_preset_id",
         "background", "background_zh_cn",
         "communication_style_preset_id",
-        "tone_style_preset_id",
         "behavior_notes", "behavior_notes_zh_cn",
-        "interrupt_frequency", "speaking_pace",
       ]));
       expect(columnNames("scenarios")).toEqual(expect.arrayContaining([
         "name", "name_zh_cn",
         "description", "description_zh_cn",
+        "tone_style_preset_id", "interrupt_frequency", "speaking_pace",
       ]));
       expect(columnNames("persona_personality_traits")).toEqual(expect.arrayContaining([
         "persona_id", "personality_trait_preset_id", "position",
@@ -342,11 +346,11 @@ describe("ApplicationDatabase", () => {
     try {
       expect(upgraded.raw.prepare(
         `SELECT name, name_zh_cn, interrupt_frequency, speaking_pace
-         FROM conversation_persona_snapshots
+         FROM conversation_scenario_snapshots
          WHERE conversation_id = ?`,
       ).get(conversationId)).toEqual({
-        name: "Ada",
-        name_zh_cn: "艾达",
+        name: "Renewal negotiation",
+        name_zh_cn: "续约谈判",
         interrupt_frequency: "high",
         speaking_pace: "fast",
       });
@@ -698,6 +702,7 @@ describe("ApplicationDatabase", () => {
       { version: 13, name: "normalize_bilingual_catalog_and_snapshots" },
       { version: 14, name: "split_preset_categories_into_tables" },
       { version: 15, name: "reference_catalog_presets_by_id" },
+      { version: 16, name: "move_voice_behavior_to_scenarios" },
     ]);
     expect(
       first.raw.prepare("SELECT COUNT(*) AS count FROM personas").get(),

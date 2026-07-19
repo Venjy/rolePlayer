@@ -14,16 +14,11 @@ const minimalPersona = {
   backgroundZhCn: "",
   personalityTraitPresetIds: [2],
   communicationStylePresetId: 3,
-  toneStylePresetId: 4,
   behaviorNotes: "",
   behaviorNotesZhCn: "",
   motivationPresetIds: [],
   concernPresetIds: [],
   voice: "longanqian" as const,
-  voiceBehavior: {
-    interruptFrequency: "medium" as const,
-    speakingPace: "normal" as const,
-  },
 };
 
 const minimalScenario = {
@@ -34,6 +29,11 @@ const minimalScenario = {
   trainingGoalPresetIds: [1],
   skillFocusPresetIds: [2],
   successCriterionPresetIds: [3],
+  toneStylePresetId: 4,
+  voiceBehavior: {
+    interruptFrequency: "medium" as const,
+    speakingPace: "normal" as const,
+  },
   scoringCriteria: [
     { successCriterionPresetId: 3, weight: 100 },
   ],
@@ -50,7 +50,6 @@ describe("role-play catalog field requirements", () => {
     ["occupation", { occupationPresetId: 0 }],
     ["personality traits", { personalityTraitPresetIds: [] }],
     ["communication style", { communicationStylePresetId: 0 }],
-    ["tone style", { toneStylePresetId: 0 }],
   ])("rejects a persona without required %s", (_label, update) => {
     expect(
       personaInputSchema.safeParse({ ...minimalPersona, ...update }).success,
@@ -59,6 +58,18 @@ describe("role-play catalog field requirements", () => {
 
   it("accepts a scenario with empty compatibility", () => {
     expect(scenarioInputSchema.safeParse(minimalScenario).success).toBe(true);
+  });
+
+  it("accepts a scenario without optional voice behavior", () => {
+    expect(
+      scenarioInputSchema.parse({
+        ...minimalScenario,
+        toneStylePresetId: undefined,
+        voiceBehavior: undefined,
+      }),
+    ).toMatchObject({
+      voiceBehavior: {},
+    });
   });
 
   it.each([

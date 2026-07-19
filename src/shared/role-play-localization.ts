@@ -52,7 +52,6 @@ export function localizePersonaInput(
       persona.communicationStyleZhCn,
       locale,
     ),
-    toneStyle: localizedText(persona.toneStyle, persona.toneStyleZhCn, locale),
     behaviorNotes: localizedText(
       persona.behaviorNotes,
       persona.behaviorNotesZhCn,
@@ -95,6 +94,11 @@ export function localizeScenarioInput(
     successCriteria: localizedList(
       scenario.successCriteria,
       scenario.successCriteriaZhCn,
+      locale,
+    ),
+    toneStyle: localizedText(
+      scenario.toneStyle,
+      scenario.toneStyleZhCn,
       locale,
     ),
     scoringCriteria: scenario.scoringCriteria.map((criterion) => ({

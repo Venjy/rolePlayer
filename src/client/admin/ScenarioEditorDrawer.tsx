@@ -18,7 +18,11 @@ import type {
 } from "../../shared/role-play-catalog";
 import { compileScenarioInstructions } from "../../shared/role-play-instructions";
 import { resolveScenarioPresetReferences } from "../../shared/role-play-preset-resolution";
-import { getScenarioPresetOptions } from "./admin-options";
+import {
+  getInterruptFrequencyOptions,
+  getScenarioPresetOptions,
+  getSpeakingPaceOptions,
+} from "./admin-options";
 import { useI18n, type AppLocale } from "../i18n";
 import { translate } from "../i18n/locale";
 import { localizeScenario, localizeScenarioInput } from "../catalog/catalog-localization";
@@ -352,6 +356,60 @@ export function ScenarioEditorDrawer({
             </Space>
           )}
         </Form.List>
+
+        <Divider titlePlacement="start">
+          {t({ en: "Voice behavior", zh: "语音行为" })}
+        </Divider>
+        <Typography.Paragraph type="secondary">
+          {t({
+            en: "Optional scenario-level guidance for how the selected role should speak.",
+            zh: "可选的场景级配置，用于指导所选角色在本场景中的说话方式。",
+          })}
+        </Typography.Paragraph>
+        <div className={styles.formGrid}>
+          <Form.Item
+            label={t({ en: "Tone style", zh: "语气风格" })}
+            name="toneStylePresetId"
+          >
+            <Select
+              allowClear
+              optionFilterProp="label"
+              options={getScenarioPresetOptions(
+                scenarioPresets,
+                "tone_style",
+                locale,
+              )}
+              placeholder={t({
+                en: "Use the model default",
+                zh: "使用模型默认风格",
+              })}
+              showSearch
+            />
+          </Form.Item>
+          <Form.Item
+            label={t({
+              en: "Interjection / challenge tendency",
+              zh: "插话 / 挑战倾向",
+            })}
+            name={["voiceBehavior", "interruptFrequency"]}
+          >
+            <Select
+              allowClear
+              options={getInterruptFrequencyOptions(locale)}
+              placeholder={t({ en: "Use the default", zh: "使用默认设置" })}
+            />
+          </Form.Item>
+          <Form.Item
+            label={t({ en: "Speaking pace", zh: "说话节奏" })}
+            name={["voiceBehavior", "speakingPace"]}
+          >
+            <Select
+              allowClear
+              options={getSpeakingPaceOptions(locale)}
+              placeholder={t({ en: "Use the default", zh: "使用默认设置" })}
+            />
+          </Form.Item>
+        </div>
 
         <Divider titlePlacement="start">
           {t({ en: "Instructions check", zh: "提示词检查" })}

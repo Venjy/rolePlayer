@@ -25,6 +25,8 @@ function chineseValues(): ScenarioFormValues {
     trainingGoalPresetIds: [4],
     skillFocusPresetIds: [5],
     successCriterionPresetIds: [1],
+    toneStylePresetId: 6,
+    voiceBehavior: { interruptFrequency: "medium", speakingPace: "normal" },
     scoringCriteria: [
       { successCriterionPresetId: 1, displayName: "标准 1", weight: 100 },
     ],
@@ -38,6 +40,8 @@ const chineseScenario: Scenario = {
   suggestedSkillFocusZhCn: ["异议处理"],
   successCriteria: ["Criterion 1"],
   successCriteriaZhCn: ["标准 1"],
+  toneStyle: "Professional and composed",
+  toneStyleZhCn: "专业沉稳",
   scoringCriteria: [{
     successCriterionPresetId: 1,
     name: "Criterion 1",

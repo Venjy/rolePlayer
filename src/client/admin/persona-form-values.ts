@@ -16,12 +16,10 @@ export interface PersonaFormValues {
   background?: string;
   personalityTraitPresetIds?: number[];
   communicationStylePresetId?: number;
-  toneStylePresetId?: number;
   behaviorNotes?: string;
   motivationPresetIds?: number[];
   concernPresetIds?: number[];
   voice: PersonaInput["voice"];
-  voiceBehavior: PersonaInput["voiceBehavior"];
 }
 
 function mergeText(
@@ -72,13 +70,11 @@ export function normalizePersonaFormValues(
     backgroundZhCn: background.zhCn,
     personalityTraitPresetIds: values.personalityTraitPresetIds ?? [],
     communicationStylePresetId: values.communicationStylePresetId ?? 0,
-    toneStylePresetId: values.toneStylePresetId ?? 0,
     behaviorNotes: behaviorNotes.en,
     behaviorNotesZhCn: behaviorNotes.zhCn,
     motivationPresetIds: values.motivationPresetIds ?? [],
     concernPresetIds: values.concernPresetIds ?? [],
     voice: values.voice,
-    voiceBehavior: values.voiceBehavior,
   };
 }
 
@@ -103,14 +99,9 @@ export function getPersonaFormInitialValues(
       (firstId("personality_trait") ? [firstId("personality_trait")!] : []),
     communicationStylePresetId:
       persona?.communicationStylePresetId ?? firstId("communication_style"),
-    toneStylePresetId: persona?.toneStylePresetId ?? firstId("tone_style"),
     behaviorNotes: display?.behaviorNotes ?? "",
     motivationPresetIds: persona?.motivationPresetIds ?? [],
     concernPresetIds: persona?.concernPresetIds ?? [],
     voice: persona?.voice ?? "longanqian",
-    voiceBehavior: persona?.voiceBehavior ?? {
-      interruptFrequency: "medium",
-      speakingPace: "normal",
-    },
   };
 }

@@ -12,11 +12,10 @@ function persona(id: number): Persona {
     personalityTraitPresetIds: [2],
     communicationStyle: "Concise", communicationStyleZhCn: "",
     communicationStylePresetId: 3,
-    toneStyle: "Neutral", toneStyleZhCn: "", behaviorNotes: "", behaviorNotesZhCn: "",
-    toneStylePresetId: 4,
+    behaviorNotes: "", behaviorNotesZhCn: "",
     motivations: [], motivationsZhCn: [], motivationPresetIds: [],
     concerns: [], concernsZhCn: [], concernPresetIds: [],
-    voice: "longanqian", voiceBehavior: { interruptFrequency: "low", speakingPace: "normal" },
+    voice: "longanqian",
     createdAt: timestamp, updatedAt: timestamp,
   };
 }
@@ -28,6 +27,8 @@ function scenario(id: number, allowedPersonaIds: number[]): Scenario {
     skillFocusPresetIds: [2],
     successCriterionPresetIds: [3],
     successCriteria: ["Ask a question"], successCriteriaZhCn: [],
+    toneStyle: "Neutral", toneStyleZhCn: "", toneStylePresetId: 4,
+    voiceBehavior: { interruptFrequency: "low", speakingPace: "normal" },
     scoringCriteria: [{ successCriterionPresetId: 3, name: "Ask a question", nameZhCn: "", weight: 100 }],
     allowedPersonaIds, createdAt: timestamp, updatedAt: timestamp,
   };

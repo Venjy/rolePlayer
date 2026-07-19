@@ -18,6 +18,8 @@ export interface ScenarioFormValues {
   trainingGoalPresetIds: number[];
   skillFocusPresetIds: number[];
   successCriterionPresetIds: number[];
+  toneStylePresetId?: number;
+  voiceBehavior: ScenarioInput["voiceBehavior"];
   scoringCriteria: ScoringCriterionFormValue[];
 }
 
@@ -78,6 +80,8 @@ export function getScenarioFormInitialValues(
     trainingGoalPresetIds: scenario?.trainingGoalPresetIds ?? [],
     skillFocusPresetIds: scenario?.skillFocusPresetIds ?? [],
     successCriterionPresetIds: scenario?.successCriterionPresetIds ?? [],
+    toneStylePresetId: scenario?.toneStylePresetId,
+    voiceBehavior: scenario?.voiceBehavior ?? {},
     scoringCriteria:
       scenario?.scoringCriteria.map((criterion) => ({
         successCriterionPresetId: criterion.successCriterionPresetId,
@@ -116,6 +120,8 @@ export function normalizeScenarioFormValues(
     trainingGoalPresetIds: values.trainingGoalPresetIds,
     skillFocusPresetIds: values.skillFocusPresetIds,
     successCriterionPresetIds: values.successCriterionPresetIds,
+    toneStylePresetId: values.toneStylePresetId,
+    voiceBehavior: values.voiceBehavior ?? {},
     scoringCriteria: values.scoringCriteria.map((criterion) => ({
       successCriterionPresetId: criterion.successCriterionPresetId,
       weight: criterion.weight,

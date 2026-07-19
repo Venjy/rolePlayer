@@ -40,11 +40,6 @@ export function resolvePersonaPresetReferences(
     "communication_style",
     persona.communicationStylePresetId,
   );
-  const toneStyle = requirePersonaPreset(
-    presets,
-    "tone_style",
-    persona.toneStylePresetId,
-  );
   const motivations = persona.motivationPresetIds.map((id) =>
     requirePersonaPreset(presets, "motivation", id),
   );
@@ -60,8 +55,6 @@ export function resolvePersonaPresetReferences(
     personalityTraitsZhCn: traits.map(({ valueZhCn }) => valueZhCn),
     communicationStyle: communicationStyle.value,
     communicationStyleZhCn: communicationStyle.valueZhCn,
-    toneStyle: toneStyle.value,
-    toneStyleZhCn: toneStyle.valueZhCn,
     motivations: motivations.map(({ value }) => value),
     motivationsZhCn: motivations.map(({ valueZhCn }) => valueZhCn),
     concerns: concerns.map(({ value }) => value),
@@ -83,6 +76,9 @@ export function resolveScenarioPresetReferences(
   const successCriteria = scenario.successCriterionPresetIds.map((id) =>
     requireScenarioPreset(presets, "success_criterion", id),
   );
+  const toneStyle = scenario.toneStylePresetId === undefined
+    ? undefined
+    : requireScenarioPreset(presets, "tone_style", scenario.toneStylePresetId);
 
   return {
     ...scenario,
@@ -92,6 +88,8 @@ export function resolveScenarioPresetReferences(
     suggestedSkillFocusZhCn: skills.map(({ valueZhCn }) => valueZhCn),
     successCriteria: successCriteria.map(({ value }) => value),
     successCriteriaZhCn: successCriteria.map(({ valueZhCn }) => valueZhCn),
+    toneStyle: toneStyle?.value ?? "",
+    toneStyleZhCn: toneStyle?.valueZhCn ?? "",
     scoringCriteria: scenario.scoringCriteria.map((criterion) => {
       const preset = requireScenarioPreset(
         presets,

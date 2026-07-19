@@ -155,11 +155,11 @@ Use `--interrupt-during-generation` to exercise the cancellation path. With no t
 - Light and dark themes, initialized from the saved choice or OS preference and switchable from the upper-right control
 - Learner launcher with searchable scenario/persona selectors, compatibility filtering, Ant Design easy/medium/hard Radio buttons, and summaries of goals, skill focus, persona voice behavior, and traits
 - Responsive admin console with independent persona/scenario editors, separate compatibility management, derived scoring weights, and standalone Instructions previews
-- Database-backed bilingual persona presets plus scenario presets for training goals, skill focus, and success criteria; no persona/scenario business options are authored in the client
+- Database-backed bilingual persona presets plus scenario presets for training goals, skill focus, success criteria, and tone style; no persona/scenario business options are authored in the client
 - Independent Chinese/English fields for every localized persona/scenario value; the current language is displayed first with fallback to the other, while admin saves update only the language being edited and never persist fallback text as a translation
 - Fully bilingual JSON-defined starter personas/scenarios loaded into SQLite; user-authored content is never machine-translated
 - Free-form persona name, age, background, and behavior notes, with existing non-preset values preserved when editing older/custom personas
-- Persona owns occupation, tone, voice, speaking pace, and interjection tendency. Scenario owns situation, goals, skills, success criteria, and derived scoring weights
+- Persona owns reusable character attributes and the Qwen voice. Scenario owns situation, goals, skills, success criteria, derived scoring weights, and optional tone/pace/interjection behavior
 - Deterministic `compileRolePlayInstructions` template; no extra LLM is called to turn structured catalog fields into the Qwen system prompt
 - Shared 12,000-character Instructions budget, checked across every compatible persona and all three difficulty levels before an association can be saved
 - Session-start snapshot sends the selected persona's `voice` and the compiled persona/scenario/difficulty Instructions to Qwen, so later catalog edits affect only future sessions
@@ -182,7 +182,7 @@ Use `--interrupt-during-generation` to exercise the cancellation path. With no t
 
 ## Persistence status
 
-Fresh catalog and conversation files have independent migration histories and contain only their own domain tables. Every preset domain has its own physical table, and catalog records reference preset IDs instead of copying localized labels. The historical combined file retains migrations 1–15 so `pnpm database:split` can upgrade and copy old data safely. Schema migrations own structure only; current business defaults are installed explicitly. The catalog REST API is:
+Fresh catalog and conversation files have independent migration histories and contain only their own domain tables. Every preset domain has its own physical table, and catalog records reference preset IDs instead of copying localized labels. The historical combined file retains migrations 1–16 so `pnpm database:split` can upgrade and copy old data safely. Schema migrations own structure only; current business defaults are installed explicitly. The catalog REST API is:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -211,7 +211,7 @@ The default `data/` directory is ignored by Git. A future single-container deplo
 
 Interrupted-response truncation is an estimate because Qwen does not provide word-level audio timestamps and browsers cannot prove what reached the user's physical output device. The application prefers deleting the entire interrupted assistant turn when evidence is weak.
 
-Persona `voiceBehavior.interruptFrequency` changes prompt-level conversational patience/interjection/challenge behavior only. Because the demo uses manual push-to-talk (`turn_detection: null`), it cannot make Qwen autonomously interrupt a learner in the middle of an utterance. Learner barge-in while the persona speaks is the separate playback-interruption feature.
+Scenario `voiceBehavior.interruptFrequency` changes prompt-level conversational patience/interjection/challenge behavior only. Because the demo uses manual push-to-talk (`turn_detection: null`), it cannot make Qwen autonomously interrupt a learner in the middle of an utterance. Learner barge-in while the persona speaks is the separate playback-interruption feature.
 
 History continuation is text-level context reconstruction, not revival of the old Qwen session or replay of original audio. It restores semantic transcript context but not acoustic details such as the learner's tone or emotion. The model currently receives the most recent 20 user turns while the UI keeps the complete stored transcript.
 

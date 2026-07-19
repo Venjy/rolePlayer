@@ -15,10 +15,8 @@ function formValues(name: string): PersonaFormValues {
     occupationPresetId: 1,
     personalityTraitPresetIds: [2],
     communicationStylePresetId: 3,
-    toneStylePresetId: 4,
     concernPresetIds: [5],
     voice: "longanqian",
-    voiceBehavior: { interruptFrequency: "medium", speakingPace: "normal" },
   };
 }
 const chinesePersona: Persona = {
@@ -29,8 +27,6 @@ const chinesePersona: Persona = {
   personalityTraitsZhCn: ["务实"],
   communicationStyle: "Direct and concise",
   communicationStyleZhCn: "直接简洁",
-  toneStyle: "Professional and composed",
-  toneStyleZhCn: "专业沉稳",
   motivations: [],
   motivationsZhCn: [],
   concerns: ["Price and budget"],

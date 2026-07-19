@@ -145,7 +145,7 @@ See `docs/UI_INTERACTIONS.md` for the UI state and accessibility contract.
 
 ## Catalog and session-configuration flow
 
-The current catalog database ends with strict, normalized catalog tables. Each of the six persona preset domains and three scenario preset domains has its own physical table and domain-named bilingual columns; API categories are derived rather than stored as discriminator columns. Persona/scenario records reference those rows by ID, with ordered relation tables for multi-select fields. `CatalogRepository` joins and maps them to a shared contract containing both stable IDs and resolved bilingual values. `GET /api/catalog` returns both preset collections alongside personas and scenarios. The separate conversation database starts with normalized immutable snapshot and message tables. Historical combined databases retain their append-only migrations 1–15 and are upgraded through migration 15 before the one-time splitter copies their two domains.
+The current catalog database ends with strict, normalized catalog tables. Each of the five persona preset domains and four scenario preset domains has its own physical table and domain-named bilingual columns; API categories are derived rather than stored as discriminator columns. Persona/scenario records reference those rows by ID, with ordered relation tables for multi-select fields. `CatalogRepository` joins and maps them to a shared contract containing both stable IDs and resolved bilingual values. `GET /api/catalog` returns both preset collections alongside personas and scenarios. The separate conversation database starts with normalized immutable snapshot and message tables. Historical combined databases retain their append-only migrations 1–16 and are upgraded through migration 16 before the one-time splitter copies their two domains.
 
 Schema evolution and business initialization are separate. All business defaults live in `src/server/catalog/initial-data/*.json`. `pnpm catalog:init` uses source TypeScript and `pnpm catalog:init:prod` uses the built initializer; both apply migrations and transactionally insert missing rows/links without overwriting existing rows. JSON seed keys provide idempotency, while SQLite assigns every public database ID. Neither command starts Fastify or needs Qwen credentials.
 
@@ -159,7 +159,7 @@ When the learner starts a session, `App.tsx` sends only `personaId`, `scenarioId
 compileRolePlayInstructions({ persona, scenario, difficulty })
 ```
 
-The compiler is deterministic, not an additional LLM request. Persona and scenario drawers preview their own independent sections; `ConversationRepository` alone combines both sections with difficulty at conversation creation. Persona owns occupation, voice, pace, and interjection behavior; scenario owns context and hidden success/scoring criteria.
+The compiler is deterministic, not an additional LLM request. Persona and scenario drawers preview their own independent sections; `ConversationRepository` alone combines both sections with difficulty at conversation creation. Persona owns reusable character attributes and the Qwen voice; scenario owns context, hidden success/scoring criteria, and optional tone/pace/interjection behavior.
 
 The application protocol caps Instructions at 12,000 characters. `CatalogRepository` checks compatible combinations and conversation creation performs the authoritative final check. A pre-ready realtime error rejects connection immediately instead of waiting for the startup timeout.
 
@@ -175,7 +175,7 @@ never been ready returns to the launcher.
 
 The conversation repository stores the exact snapshot in normalized snapshot tables together with compiled text and selected voice. Browser `session.configure` sends only the durable conversation ID and a bounded history-turn limit. Node selects that recent user-turn window in SQLite, reloads the stored Instructions/voice, opens a new Qwen WebSocket, and injects the finalized user/assistant text with `conversation.item.create`. It emits `session.ready` only after Qwen acknowledges every injected item. This is semantic text-context restoration, not revival of an expired Qwen session; original audio tone/emotion is not restored. The active snapshot also supplies the persona name shown in chat, and later catalog edits affect only new conversations.
 
-Persona `voiceBehavior.interruptFrequency` is prompt-level conversational behavior. With manual push-to-talk it cannot make Qwen seize the microphone while the learner is still speaking. Learner barge-in is the separate playback interruption/reconciliation mechanism.
+Scenario `voiceBehavior.interruptFrequency` is prompt-level conversational behavior. With manual push-to-talk it cannot make Qwen seize the microphone while the learner is still speaking. Learner barge-in is the separate playback interruption/reconciliation mechanism.
 
 See `docs/CATALOG_AND_PROMPTS.md` for the field, API, and compiler contracts.
 

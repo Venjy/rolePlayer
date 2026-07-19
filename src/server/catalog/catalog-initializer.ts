@@ -37,11 +37,11 @@ import personaConcernData from "./initial-data/persona-concerns.json";
 import personaMotivationData from "./initial-data/persona-motivations.json";
 import personaOccupationData from "./initial-data/persona-occupations.json";
 import personaPersonalityTraitData from "./initial-data/persona-personality-traits.json";
-import personaToneStyleData from "./initial-data/persona-tone-styles.json";
 import personaData from "./initial-data/personas.json";
 import qwenVoiceData from "./initial-data/qwen-voices.json";
 import scenarioSkillFocusData from "./initial-data/scenario-skill-focuses.json";
 import scenarioSuccessCriterionData from "./initial-data/scenario-success-criteria.json";
+import scenarioToneStyleData from "./initial-data/scenario-tone-styles.json";
 import scenarioTrainingGoalData from "./initial-data/scenario-training-goals.json";
 import scenarioData from "./initial-data/scenarios.json";
 
@@ -104,13 +104,11 @@ const starterPersonaInputSchema = z.object({
   backgroundZhCn: localizedOptionalText(2_000),
   personalityTraitPresetKeys: z.array(starterKeySchema).min(1).max(12),
   communicationStylePresetKey: starterKeySchema,
-  toneStylePresetKey: starterKeySchema,
   behaviorNotes: localizedOptionalText(2_000),
   behaviorNotesZhCn: localizedOptionalText(2_000),
   motivationPresetKeys: z.array(starterKeySchema).max(10),
   concernPresetKeys: z.array(starterKeySchema).max(10),
   voice: qwenVoiceSchema,
-  voiceBehavior: voiceBehaviorSchema,
 });
 
 const starterScenarioInputSchema = z.object({
@@ -120,6 +118,8 @@ const starterScenarioInputSchema = z.object({
   descriptionZhCn: localizedOptionalText(2_000),
   trainingGoalPresetKeys: z.array(starterKeySchema).min(1).max(10),
   skillFocusPresetKeys: z.array(starterKeySchema).min(1).max(10),
+  toneStylePresetKey: starterKeySchema.optional(),
+  voiceBehavior: voiceBehaviorSchema.partial().default({}),
   successCriteria: z.array(z.object({
     presetKey: starterKeySchema,
     weight: z.number().int().min(0).max(100),
@@ -173,7 +173,6 @@ export const INITIAL_PERSONA_PRESETS: StarterPreset[] = [
   ...parsePresetDefinitions(personaOccupationData, "occupation", "persona"),
   ...parsePresetDefinitions(personaPersonalityTraitData, "personality_trait", "persona"),
   ...parsePresetDefinitions(personaCommunicationStyleData, "communication_style", "persona"),
-  ...parsePresetDefinitions(personaToneStyleData, "tone_style", "persona"),
   ...parsePresetDefinitions(personaMotivationData, "motivation", "persona"),
   ...parsePresetDefinitions(personaConcernData, "concern", "persona"),
 ];
@@ -181,6 +180,7 @@ export const INITIAL_SCENARIO_PRESETS: StarterPreset[] = [
   ...parsePresetDefinitions(scenarioTrainingGoalData, "training_goal", "scenario"),
   ...parsePresetDefinitions(scenarioSkillFocusData, "skill_focus", "scenario"),
   ...parsePresetDefinitions(scenarioSuccessCriterionData, "success_criterion", "scenario"),
+  ...parsePresetDefinitions(scenarioToneStyleData, "tone_style", "scenario"),
 ];
 export const INITIAL_CATALOG_PERSONAS: StarterPersona[] = personaData.map((definition) => ({
   key: starterKeySchema.parse(definition.key),
@@ -375,11 +375,6 @@ function resolveStarterPersonas(connection: DatabaseSync) {
         PERSONA_PRESET_TABLE_BY_CATEGORY.communication_style,
         input.communicationStylePresetKey,
       ),
-      toneStylePresetId: readPresetSeedId(
-        connection,
-        PERSONA_PRESET_TABLE_BY_CATEGORY.tone_style,
-        input.toneStylePresetKey,
-      ),
       behaviorNotes: input.behaviorNotes,
       behaviorNotesZhCn: input.behaviorNotesZhCn,
       motivationPresetIds: input.motivationPresetKeys.map((presetKey) =>
@@ -397,7 +392,6 @@ function resolveStarterPersonas(connection: DatabaseSync) {
         ),
       ),
       voice: input.voice,
-      voiceBehavior: input.voiceBehavior,
     }),
   }));
 }
@@ -432,6 +426,14 @@ function resolveStarterScenarios(connection: DatabaseSync) {
             presetKey,
           ),
         ),
+        toneStylePresetId: input.toneStylePresetKey
+          ? readPresetSeedId(
+              connection,
+              SCENARIO_PRESET_TABLE_BY_CATEGORY.tone_style,
+              input.toneStylePresetKey,
+            )
+          : undefined,
+        voiceBehavior: input.voiceBehavior,
         successCriterionPresetIds,
         scoringCriteria: input.successCriteria.map((criterion, index) => ({
           successCriterionPresetId: successCriterionPresetIds[index],
@@ -455,9 +457,8 @@ function insertPersonas(
     INSERT INTO personas (
       seed_key, name, name_zh_cn, gender, age, occupation_preset_id,
       background, background_zh_cn, communication_style_preset_id,
-      tone_style_preset_id, behavior_notes, behavior_notes_zh_cn, voice,
-      interrupt_frequency, speaking_pace, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      behavior_notes, behavior_notes_zh_cn, voice, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(seed_key) DO NOTHING
   `);
   for (const { key, input } of personas) {
@@ -469,9 +470,8 @@ function insertPersonas(
     const write = insert.run(
       key, input.name, input.nameZhCn, input.gender, input.age,
       input.occupationPresetId, input.background, input.backgroundZhCn,
-      input.communicationStylePresetId, input.toneStylePresetId,
+      input.communicationStylePresetId,
       input.behaviorNotes, input.behaviorNotesZhCn, input.voice,
-      input.voiceBehavior.interruptFrequency, input.voiceBehavior.speakingPace,
       timestamp, timestamp,
     );
     if (!write.changes) {
@@ -509,8 +509,9 @@ function insertScenarios(
   const insert = connection.prepare(`
     INSERT INTO scenarios (
       seed_key, name, name_zh_cn, description, description_zh_cn,
+      tone_style_preset_id, interrupt_frequency, speaking_pace,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(seed_key) DO NOTHING
   `);
   for (const { key, input } of scenarios) {
@@ -521,7 +522,10 @@ function insertScenarios(
     }
     const write = insert.run(
       key, input.name, input.nameZhCn, input.description,
-      input.descriptionZhCn, timestamp, timestamp,
+      input.descriptionZhCn, input.toneStylePresetId ?? null,
+      input.voiceBehavior.interruptFrequency ?? null,
+      input.voiceBehavior.speakingPace ?? null,
+      timestamp, timestamp,
     );
     if (!write.changes) {
       result.scenarioRowsSkipped += 1;

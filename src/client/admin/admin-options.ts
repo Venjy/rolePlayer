@@ -46,7 +46,7 @@ export function getInterruptFrequencyOptions(locale: AppLocale) {
       }),
     },
   ] satisfies Array<{
-    value: PersonaInput["voiceBehavior"]["interruptFrequency"];
+    value: NonNullable<ScenarioInput["voiceBehavior"]["interruptFrequency"]>;
     label: string;
   }>;
 }
@@ -60,7 +60,7 @@ export function getSpeakingPaceOptions(locale: AppLocale) {
     },
     { value: "fast", label: translate(locale, { en: "Fast", zh: "快" }) },
   ] satisfies Array<{
-    value: PersonaInput["voiceBehavior"]["speakingPace"];
+    value: NonNullable<ScenarioInput["voiceBehavior"]["speakingPace"]>;
     label: string;
   }>;
 }
@@ -91,6 +91,8 @@ export function getFallbackScenario(): ScenarioInput {
     trainingGoalPresetIds: [],
     skillFocusPresetIds: [],
     successCriterionPresetIds: [],
+    toneStylePresetId: undefined,
+    voiceBehavior: {},
     scoringCriteria: [],
     allowedPersonaIds: [1],
   };
@@ -107,16 +109,11 @@ export function getFallbackPersona(): PersonaInput {
     backgroundZhCn: "",
     personalityTraitPresetIds: [],
     communicationStylePresetId: 1,
-    toneStylePresetId: 1,
     behaviorNotes: "",
     behaviorNotesZhCn: "",
     motivationPresetIds: [],
     concernPresetIds: [],
     voice: "longanqian",
-    voiceBehavior: {
-      interruptFrequency: "medium",
-      speakingPace: "normal",
-    },
   };
 }
 

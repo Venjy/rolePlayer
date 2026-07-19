@@ -41,7 +41,6 @@ export const personaPresetCategorySchema = z.enum([
   "occupation",
   "personality_trait",
   "communication_style",
-  "tone_style",
   "motivation",
   "concern",
 ]);
@@ -74,6 +73,7 @@ export const scenarioPresetCategorySchema = z.enum([
   "training_goal",
   "skill_focus",
   "success_criterion",
+  "tone_style",
 ]);
 
 export type ScenarioPresetCategory = z.infer<
@@ -129,13 +129,11 @@ const personaInputObjectSchema = z.object({
   backgroundZhCn: optionalText(2_000),
   personalityTraitPresetIds: uniqueIdList(12, 1),
   communicationStylePresetId: databaseIdSchema,
-  toneStylePresetId: databaseIdSchema,
   behaviorNotes: optionalText(2_000),
   behaviorNotesZhCn: optionalText(2_000),
   motivationPresetIds: uniqueIdList(10),
   concernPresetIds: uniqueIdList(10),
   voice: qwenVoiceSchema,
-  voiceBehavior: voiceBehaviorSchema,
 });
 
 function addRequiredPersonaInputIssues(
@@ -163,8 +161,6 @@ const resolvedPersonaPresetFieldsSchema = z.object({
   personalityTraitsZhCn: shortTextList(12),
   communicationStyle: optionalText(500),
   communicationStyleZhCn: optionalText(500),
-  toneStyle: optionalText(500),
-  toneStyleZhCn: optionalText(500),
   motivations: shortTextList(10),
   motivationsZhCn: shortTextList(10),
   concerns: shortTextList(10),
@@ -176,7 +172,6 @@ export const resolvedPersonaInputSchema = personaInputObjectSchema
     occupationPresetId: true,
     personalityTraitPresetIds: true,
     communicationStylePresetId: true,
-    toneStylePresetId: true,
     motivationPresetIds: true,
     concernPresetIds: true,
   })
@@ -208,7 +203,6 @@ export const personaSchema = personaInputObjectSchema
         value.communicationStyle,
         value.communicationStyleZhCn,
       ],
-      ["toneStyle", value.toneStyle, value.toneStyleZhCn],
     ] as const) {
       if (!english && !chinese) {
         context.addIssue({
@@ -253,6 +247,8 @@ export const scenarioInputSchema = z
     trainingGoalPresetIds: uniqueIdList(10, 1),
     skillFocusPresetIds: uniqueIdList(10, 1),
     successCriterionPresetIds: uniqueIdList(12, 1),
+    toneStylePresetId: databaseIdSchema.optional(),
+    voiceBehavior: voiceBehaviorSchema.partial().default({}),
     scoringCriteria: z.array(scoringCriterionInputSchema).min(1).max(12),
     // Compatibility is managed separately from scenario content editing.
     allowedPersonaIds: z.array(databaseIdSchema).max(MAX_SCENARIO_PERSONAS),
@@ -322,6 +318,8 @@ export const scenarioSchema = scenarioInputSchema.safeExtend({
   suggestedSkillFocusZhCn: shortTextList(10),
   successCriteria: shortTextList(12),
   successCriteriaZhCn: shortTextList(12),
+  toneStyle: optionalText(500),
+  toneStyleZhCn: optionalText(500),
   scoringCriteria: z.array(scoringCriterionSchema).min(1).max(12),
   id: databaseIdSchema,
   createdAt: z.string().datetime({ offset: true }),
@@ -340,6 +338,9 @@ export const resolvedScenarioInputSchema = z.object({
   suggestedSkillFocusZhCn: shortTextList(10),
   successCriteria: shortTextList(12),
   successCriteriaZhCn: shortTextList(12),
+  toneStyle: optionalText(500),
+  toneStyleZhCn: optionalText(500),
+  voiceBehavior: voiceBehaviorSchema.partial(),
   scoringCriteria: z.array(localizedScoringCriterionSchema).min(1).max(12),
   allowedPersonaIds: z.array(databaseIdSchema).max(MAX_SCENARIO_PERSONAS),
 });

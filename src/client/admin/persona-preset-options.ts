@@ -18,7 +18,6 @@ const PRESET_CATEGORIES: PersonaPresetCategory[] = [
   "occupation",
   "personality_trait",
   "communication_style",
-  "tone_style",
   "motivation",
   "concern",
 ];

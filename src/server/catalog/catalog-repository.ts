@@ -55,14 +55,9 @@ interface PersonaRow {
   communication_style_preset_id: number;
   communication_style: string;
   communication_style_zh_cn: string;
-  tone_style_preset_id: number;
-  tone_style: string;
-  tone_style_zh_cn: string;
   behavior_notes: string;
   behavior_notes_zh_cn: string;
   voice: string;
-  interrupt_frequency: string;
-  speaking_pace: string;
   created_at: string;
   updated_at: string;
 }
@@ -73,6 +68,11 @@ interface ScenarioRow {
   name_zh_cn: string;
   description: string;
   description_zh_cn: string;
+  tone_style_preset_id: number | null;
+  tone_style: string | null;
+  tone_style_zh_cn: string | null;
+  interrupt_frequency: string | null;
+  speaking_pace: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -162,10 +162,7 @@ export class CatalogRepository {
     const scenarioPresets = this.listScenarioPresets();
     const personaRows = this.connection.prepare(PERSONA_SELECT).all() as unknown as PersonaRow[];
     const scenarioRows = this.connection
-      .prepare(
-        `SELECT * FROM scenarios
-         ORDER BY COALESCE(NULLIF(name, ''), name_zh_cn) COLLATE NOCASE, id`,
-      )
+      .prepare(SCENARIO_SELECT)
       .all() as unknown as ScenarioRow[];
     const traits = readReferences(
       this.connection,
@@ -264,17 +261,15 @@ export class CatalogRepository {
           `INSERT INTO personas (
             name, name_zh_cn, gender, age, occupation_preset_id,
             background, background_zh_cn, communication_style_preset_id,
-            tone_style_preset_id, behavior_notes, behavior_notes_zh_cn,
-            voice, interrupt_frequency, speaking_pace, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            behavior_notes, behavior_notes_zh_cn, voice, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.name, input.nameZhCn, input.gender, input.age,
           input.occupationPresetId, input.background, input.backgroundZhCn,
-          input.communicationStylePresetId, input.toneStylePresetId,
+          input.communicationStylePresetId,
           input.behaviorNotes, input.behaviorNotesZhCn, input.voice,
-          input.voiceBehavior.interruptFrequency,
-          input.voiceBehavior.speakingPace, timestamp, timestamp,
+          timestamp, timestamp,
         );
       const generatedId = toDatabaseId(write.lastInsertRowid);
       this.replacePersonaReferences(generatedId, input);
@@ -297,18 +292,16 @@ export class CatalogRepository {
           `UPDATE personas SET
             name = ?, name_zh_cn = ?, gender = ?, age = ?,
             occupation_preset_id = ?, background = ?, background_zh_cn = ?,
-            communication_style_preset_id = ?, tone_style_preset_id = ?,
-            behavior_notes = ?, behavior_notes_zh_cn = ?, voice = ?,
-            interrupt_frequency = ?, speaking_pace = ?, updated_at = ?
+            communication_style_preset_id = ?, behavior_notes = ?,
+            behavior_notes_zh_cn = ?, voice = ?, updated_at = ?
            WHERE id = ?`,
         )
         .run(
           input.name, input.nameZhCn, input.gender, input.age,
           input.occupationPresetId, input.background, input.backgroundZhCn,
-          input.communicationStylePresetId, input.toneStylePresetId,
+          input.communicationStylePresetId,
           input.behaviorNotes, input.behaviorNotesZhCn, input.voice,
-          input.voiceBehavior.interruptFrequency,
-          input.voiceBehavior.speakingPace, timestamp, id,
+          timestamp, id,
         );
       this.replacePersonaReferences(id, input);
     });
@@ -341,12 +334,17 @@ export class CatalogRepository {
       const write = this.connection
         .prepare(
           `INSERT INTO scenarios (
-            name, name_zh_cn, description, description_zh_cn, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?)`,
+            name, name_zh_cn, description, description_zh_cn,
+            tone_style_preset_id, interrupt_frequency, speaking_pace,
+            created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.name, input.nameZhCn, input.description,
-          input.descriptionZhCn, timestamp, timestamp,
+          input.descriptionZhCn, input.toneStylePresetId ?? null,
+          input.voiceBehavior.interruptFrequency ?? null,
+          input.voiceBehavior.speakingPace ?? null,
+          timestamp, timestamp,
         );
       const generatedId = toDatabaseId(write.lastInsertRowid);
       this.replaceScenarioReferences(generatedId, input);
@@ -368,11 +366,15 @@ export class CatalogRepository {
       this.connection
         .prepare(
           `UPDATE scenarios SET name = ?, name_zh_cn = ?,
-            description = ?, description_zh_cn = ?, updated_at = ? WHERE id = ?`,
+            description = ?, description_zh_cn = ?, tone_style_preset_id = ?,
+            interrupt_frequency = ?, speaking_pace = ?, updated_at = ? WHERE id = ?`,
         )
         .run(
           input.name, input.nameZhCn, input.description,
-          input.descriptionZhCn, timestamp, id,
+          input.descriptionZhCn, input.toneStylePresetId ?? null,
+          input.voiceBehavior.interruptFrequency ?? null,
+          input.voiceBehavior.speakingPace ?? null,
+          timestamp, id,
         );
       this.replaceScenarioReferences(id, input);
       this.replaceScenarioPersonas(id, input.allowedPersonaIds, timestamp);
@@ -602,16 +604,23 @@ export class CatalogRepository {
 const PERSONA_SELECT = `
   SELECT p.*,
     occupation.occupation, occupation.occupation_zh_cn,
-    communication.communication_style, communication.communication_style_zh_cn,
-    tone.tone_style, tone.tone_style_zh_cn
+    communication.communication_style, communication.communication_style_zh_cn
   FROM personas AS p
   JOIN persona_occupation_presets AS occupation
     ON occupation.id = p.occupation_preset_id
   JOIN persona_communication_style_presets AS communication
     ON communication.id = p.communication_style_preset_id
-  JOIN persona_tone_style_presets AS tone
-    ON tone.id = p.tone_style_preset_id
   ORDER BY COALESCE(NULLIF(p.name, ''), p.name_zh_cn) COLLATE NOCASE, p.id
+`;
+
+const SCENARIO_SELECT = `
+  SELECT scenario.*,
+    tone.tone_style, tone.tone_style_zh_cn
+  FROM scenarios AS scenario
+  LEFT JOIN scenario_tone_style_presets AS tone
+    ON tone.id = scenario.tone_style_preset_id
+  ORDER BY COALESCE(NULLIF(scenario.name, ''), scenario.name_zh_cn)
+    COLLATE NOCASE, scenario.id
 `;
 
 function readPresetRows(
@@ -701,9 +710,6 @@ function mapPersonaRow(
     communicationStylePresetId: row.communication_style_preset_id,
     communicationStyle: row.communication_style,
     communicationStyleZhCn: row.communication_style_zh_cn,
-    toneStylePresetId: row.tone_style_preset_id,
-    toneStyle: row.tone_style,
-    toneStyleZhCn: row.tone_style_zh_cn,
     behaviorNotes: row.behavior_notes,
     behaviorNotesZhCn: row.behavior_notes_zh_cn,
     motivationPresetIds: motivations.map(({ preset_id }) => preset_id),
@@ -713,10 +719,6 @@ function mapPersonaRow(
     concerns: concerns.map(({ value }) => value),
     concernsZhCn: concerns.map(({ value_zh_cn }) => value_zh_cn),
     voice: row.voice,
-    voiceBehavior: {
-      interruptFrequency: row.interrupt_frequency,
-      speakingPace: row.speaking_pace,
-    },
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   });
@@ -735,6 +737,13 @@ function mapScenarioRow(
     nameZhCn: row.name_zh_cn,
     description: row.description,
     descriptionZhCn: row.description_zh_cn,
+    toneStylePresetId: row.tone_style_preset_id ?? undefined,
+    toneStyle: row.tone_style ?? "",
+    toneStyleZhCn: row.tone_style_zh_cn ?? "",
+    voiceBehavior: {
+      interruptFrequency: row.interrupt_frequency ?? undefined,
+      speakingPace: row.speaking_pace ?? undefined,
+    },
     trainingGoalPresetIds: goals.map(({ preset_id }) => preset_id),
     goals: goals.map(({ value }) => value),
     goalsZhCn: goals.map(({ value_zh_cn }) => value_zh_cn),

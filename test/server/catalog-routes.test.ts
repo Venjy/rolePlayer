@@ -29,12 +29,10 @@ function personaInput(catalog: RolePlayCatalog): PersonaInput {
   background: "", backgroundZhCn: "每天长时间骑行。",
   personalityTraitPresetIds: [presetId(catalog, "务实")],
   communicationStylePresetId: presetId(catalog, "直接简洁"),
-  toneStylePresetId: presetId(catalog, "专业沉稳"),
   behaviorNotes: "", behaviorNotesZhCn: "追问价格。",
   motivationPresetIds: [presetId(catalog, "节省成本")],
   concernPresetIds: [presetId(catalog, "价格与预算")],
   voice: "longanlingxin",
-  voiceBehavior: { interruptFrequency: "medium", speakingPace: "fast" },
   };
 }
 function scenarioInput(catalog: RolePlayCatalog, allowedPersonaIds: number[]): ScenarioInput {
@@ -47,6 +45,8 @@ function scenarioInput(catalog: RolePlayCatalog, allowedPersonaIds: number[]): S
     trainingGoalPresetIds: [goalId],
     skillFocusPresetIds: [skillId],
     successCriterionPresetIds: [successId],
+    toneStylePresetId: presetId(catalog, "专业沉稳"),
+    voiceBehavior: { interruptFrequency: "medium", speakingPace: "fast" },
     scoringCriteria: [{ successCriterionPresetId: successId, weight: 100 }],
     allowedPersonaIds,
   };

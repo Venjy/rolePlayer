@@ -1,6 +1,10 @@
 import type { DatabaseMigration } from "./migrations";
 import { migrateCatalogRecordsToPresetReferences } from "./catalog-preset-reference-migration";
 import { SPLIT_PRESET_TABLES_MIGRATION_SQL } from "./preset-storage";
+import {
+  moveCatalogVoiceBehaviorToScenarios,
+  moveConversationVoiceBehaviorToScenarioSnapshots,
+} from "./scenario-voice-behavior-migration";
 
 const createMigrationTable = `
   CREATE TABLE schema_migrations (
@@ -237,6 +241,11 @@ export const CATALOG_DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 7,
+    name: "move_voice_behavior_to_scenarios",
+    up: moveCatalogVoiceBehaviorToScenarios,
+  },
 ];
 
 /** Fresh-schema migrations for immutable session snapshots and messages only. */
@@ -414,5 +423,10 @@ export const CONVERSATION_DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
         FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
       ) STRICT;
     `,
+  },
+  {
+    version: 6,
+    name: "move_voice_behavior_to_scenario_snapshots",
+    up: moveConversationVoiceBehaviorToScenarioSnapshots,
   },
 ];

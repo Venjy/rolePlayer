@@ -35,12 +35,6 @@ export const PERSONA_PRESET_TABLES = [
     legacyTable: "persona_presets",
   },
   {
-    category: "tone_style",
-    table: "persona_tone_style_presets",
-    valueColumn: "tone_style",
-    legacyTable: "persona_presets",
-  },
-  {
     category: "motivation",
     table: "persona_motivation_presets",
     valueColumn: "motivation",
@@ -73,7 +67,31 @@ export const SCENARIO_PRESET_TABLES = [
     valueColumn: "success_criterion",
     legacyTable: "scenario_presets",
   },
+  {
+    category: "tone_style",
+    table: "scenario_tone_style_presets",
+    valueColumn: "tone_style",
+    legacyTable: "persona_presets",
+  },
 ] as const satisfies readonly PresetTableDefinition<ScenarioPresetCategory>[];
+
+// Frozen storage layout used by the already-shipped split-preset migration.
+// Later migrations move tone style into the scenario domain; changing the
+// historical SQL would break databases upgrading from older versions.
+export const LEGACY_PERSONA_TONE_STYLE_PRESET_TABLE = {
+  category: "tone_style",
+  table: "persona_tone_style_presets",
+  valueColumn: "tone_style",
+  legacyTable: "persona_presets",
+} as const satisfies PresetTableDefinition;
+
+const LEGACY_PERSONA_PRESET_TABLES: readonly PresetTableDefinition[] = [
+  ...PERSONA_PRESET_TABLES,
+  LEGACY_PERSONA_TONE_STYLE_PRESET_TABLE,
+];
+const LEGACY_SCENARIO_PRESET_TABLES = SCENARIO_PRESET_TABLES.filter(
+  ({ category }) => category !== "tone_style",
+);
 
 export const ALL_PRESET_TABLES: readonly PresetTableDefinition[] = [
   ...PERSONA_PRESET_TABLES,
@@ -100,7 +118,10 @@ export const SCENARIO_PRESET_TABLE_BY_CATEGORY = Object.fromEntries(
  * tables from the current schema.
  */
 export const SPLIT_PRESET_TABLES_MIGRATION_SQL = `
-  ${ALL_PRESET_TABLES.map(createPresetTableAndCopySql).join("\n")}
+  ${[
+    ...LEGACY_PERSONA_PRESET_TABLES,
+    ...LEGACY_SCENARIO_PRESET_TABLES,
+  ].map(createPresetTableAndCopySql).join("\n")}
 
   DROP TABLE persona_presets;
   DROP TABLE scenario_presets;

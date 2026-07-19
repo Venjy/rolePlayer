@@ -75,8 +75,6 @@ interface PersonaSnapshotRow {
   personality_traits_zh_cn_json: string;
   communication_style: string;
   communication_style_zh_cn: string;
-  tone_style: string;
-  tone_style_zh_cn: string;
   behavior_notes: string;
   behavior_notes_zh_cn: string;
   motivations_json: string;
@@ -84,8 +82,6 @@ interface PersonaSnapshotRow {
   concerns_json: string;
   concerns_zh_cn_json: string;
   voice: string;
-  interrupt_frequency: string;
-  speaking_pace: string;
   source_created_at: string;
   source_updated_at: string;
 }
@@ -103,6 +99,10 @@ interface ScenarioSnapshotRow {
   suggested_skill_focus_zh_cn_json: string;
   success_criteria_json: string;
   success_criteria_zh_cn_json: string;
+  tone_style: string;
+  tone_style_zh_cn: string;
+  interrupt_frequency: string | null;
+  speaking_pace: string | null;
   source_created_at: string;
   source_updated_at: string;
 }
@@ -521,11 +521,11 @@ export class ConversationRepository {
           occupation, occupation_zh_cn, background, background_zh_cn,
           personality_traits_json, personality_traits_zh_cn_json,
           communication_style, communication_style_zh_cn,
-          tone_style, tone_style_zh_cn, behavior_notes, behavior_notes_zh_cn,
+          behavior_notes, behavior_notes_zh_cn,
           motivations_json, motivations_zh_cn_json,
-          concerns_json, concerns_zh_cn_json, voice,
-          interrupt_frequency, speaking_pace, source_created_at, source_updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          concerns_json, concerns_zh_cn_json, voice, source_created_at,
+          source_updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         conversationId,
@@ -542,8 +542,6 @@ export class ConversationRepository {
         JSON.stringify(persona.personalityTraitsZhCn),
         persona.communicationStyle,
         persona.communicationStyleZhCn,
-        persona.toneStyle,
-        persona.toneStyleZhCn,
         persona.behaviorNotes,
         persona.behaviorNotesZhCn,
         JSON.stringify(persona.motivations),
@@ -551,8 +549,6 @@ export class ConversationRepository {
         JSON.stringify(persona.concerns),
         JSON.stringify(persona.concernsZhCn),
         persona.voice,
-        persona.voiceBehavior.interruptFrequency,
-        persona.voiceBehavior.speakingPace,
         persona.createdAt,
         persona.updatedAt,
       );
@@ -569,8 +565,9 @@ export class ConversationRepository {
           description, description_zh_cn, goals_json, goals_zh_cn_json,
           suggested_skill_focus_json, suggested_skill_focus_zh_cn_json,
           success_criteria_json, success_criteria_zh_cn_json,
+          tone_style, tone_style_zh_cn, interrupt_frequency, speaking_pace,
           source_created_at, source_updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         conversationId,
@@ -585,6 +582,10 @@ export class ConversationRepository {
         JSON.stringify(scenario.suggestedSkillFocusZhCn),
         JSON.stringify(scenario.successCriteria),
         JSON.stringify(scenario.successCriteriaZhCn),
+        scenario.toneStyle,
+        scenario.toneStyleZhCn,
+        scenario.voiceBehavior.interruptFrequency ?? null,
+        scenario.voiceBehavior.speakingPace ?? null,
         scenario.createdAt,
         scenario.updatedAt,
       );
@@ -871,8 +872,6 @@ function mapPersonaSnapshotRow(row: PersonaSnapshotRow): PersonaSnapshot {
     personalityTraitsZhCn: parseJsonList(row.personality_traits_zh_cn_json),
     communicationStyle: row.communication_style,
     communicationStyleZhCn: row.communication_style_zh_cn,
-    toneStyle: row.tone_style,
-    toneStyleZhCn: row.tone_style_zh_cn,
     behaviorNotes: row.behavior_notes,
     behaviorNotesZhCn: row.behavior_notes_zh_cn,
     motivations: parseJsonList(row.motivations_json),
@@ -880,10 +879,6 @@ function mapPersonaSnapshotRow(row: PersonaSnapshotRow): PersonaSnapshot {
     concerns: parseJsonList(row.concerns_json),
     concernsZhCn: parseJsonList(row.concerns_zh_cn_json),
     voice: row.voice,
-    voiceBehavior: {
-      interruptFrequency: row.interrupt_frequency,
-      speakingPace: row.speaking_pace,
-    },
     createdAt: row.source_created_at,
     updatedAt: row.source_updated_at,
   });
@@ -908,6 +903,12 @@ function mapScenarioSnapshotRow(
     ),
     successCriteria: parseJsonList(row.success_criteria_json),
     successCriteriaZhCn: parseJsonList(row.success_criteria_zh_cn_json),
+    toneStyle: row.tone_style,
+    toneStyleZhCn: row.tone_style_zh_cn,
+    voiceBehavior: {
+      interruptFrequency: row.interrupt_frequency ?? undefined,
+      speakingPace: row.speaking_pace ?? undefined,
+    },
     scoringCriteria: criteria.map((criterion) => ({
       name: criterion.name,
       nameZhCn: criterion.name_zh_cn,

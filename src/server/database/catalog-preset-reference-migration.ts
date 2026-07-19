@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { formatDatabaseTimestamp } from "./database-time";
 import {
+  LEGACY_PERSONA_TONE_STYLE_PRESET_TABLE,
   PERSONA_PRESET_TABLE_BY_CATEGORY,
   SCENARIO_PRESET_TABLE_BY_CATEGORY,
   type PresetTableDefinition,
@@ -139,7 +140,7 @@ export function migrateCatalogRecordsToPresetReferences(
       ),
       toneStylePresetId: resolveOrCreatePreset(
         database,
-        PERSONA_PRESET_TABLE_BY_CATEGORY.tone_style,
+        LEGACY_PERSONA_TONE_STYLE_PRESET_TABLE,
         persona.tone_style,
         persona.tone_style_zh_cn,
       ),

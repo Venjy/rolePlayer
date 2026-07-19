@@ -60,11 +60,11 @@ describe("splitLegacyDatabase", () => {
           occupation, occupation_zh_cn, background, background_zh_cn,
           personality_traits_json, personality_traits_zh_cn_json,
           communication_style, communication_style_zh_cn,
-          tone_style, tone_style_zh_cn, behavior_notes, behavior_notes_zh_cn,
+          behavior_notes, behavior_notes_zh_cn,
           motivations_json, motivations_zh_cn_json,
-          concerns_json, concerns_zh_cn_json, voice,
-          interrupt_frequency, speaking_pace, source_created_at, source_updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          concerns_json, concerns_zh_cn_json, voice, source_created_at,
+          source_updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         conversationId,
@@ -81,8 +81,6 @@ describe("splitLegacyDatabase", () => {
         JSON.stringify(persona.personalityTraitsZhCn),
         persona.communicationStyle,
         persona.communicationStyleZhCn,
-        persona.toneStyle,
-        persona.toneStyleZhCn,
         persona.behaviorNotes,
         persona.behaviorNotesZhCn,
         JSON.stringify(persona.motivations),
@@ -90,8 +88,6 @@ describe("splitLegacyDatabase", () => {
         JSON.stringify(persona.concerns),
         JSON.stringify(persona.concernsZhCn),
         persona.voice,
-        persona.voiceBehavior.interruptFrequency,
-        persona.voiceBehavior.speakingPace,
         persona.createdAt,
         persona.updatedAt,
       );
@@ -102,8 +98,9 @@ describe("splitLegacyDatabase", () => {
           description, description_zh_cn, goals_json, goals_zh_cn_json,
           suggested_skill_focus_json, suggested_skill_focus_zh_cn_json,
           success_criteria_json, success_criteria_zh_cn_json,
+          tone_style, tone_style_zh_cn, interrupt_frequency, speaking_pace,
           source_created_at, source_updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         conversationId,
@@ -118,6 +115,10 @@ describe("splitLegacyDatabase", () => {
         JSON.stringify(scenario.suggestedSkillFocusZhCn),
         JSON.stringify(scenario.successCriteria),
         JSON.stringify(scenario.successCriteriaZhCn),
+        scenario.toneStyle,
+        scenario.toneStyleZhCn,
+        scenario.voiceBehavior.interruptFrequency ?? null,
+        scenario.voiceBehavior.speakingPace ?? null,
         scenario.createdAt,
         scenario.updatedAt,
       );

@@ -51,7 +51,7 @@ session. The browser settles that rejection with the server's structured error
 before the App tears down the partial socket, so a synchronous disconnect cannot
 replace the localized cause with a generic close message.
 
-Persona `voiceBehavior.interruptFrequency` does not change protocol turn
+Scenario `voiceBehavior.interruptFrequency` does not change protocol turn
 detection. With manual push-to-talk (`turn_detection: null`), it can guide brief
 interjections or quicker challenges inside the model's response, but it cannot
 make Qwen autonomously talk over an in-progress learner recording. The learner's

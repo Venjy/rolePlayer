@@ -13,15 +13,12 @@ const persona: Persona = {
   personalityTraitPresetIds: [2],
   communicationStyle: "Concise", communicationStyleZhCn: "简洁",
   communicationStylePresetId: 3,
-  toneStyle: "Professional", toneStyleZhCn: "专业",
-  toneStylePresetId: 4,
   behaviorNotes: "Asks for data.", behaviorNotesZhCn: "追问数据。",
   motivations: ["Growth"], motivationsZhCn: ["增长"],
   motivationPresetIds: [5],
   concerns: ["ROI"], concernsZhCn: ["投入产出比"],
   concernPresetIds: [6],
   voice: "longanqian",
-  voiceBehavior: { interruptFrequency: "low", speakingPace: "normal" },
   createdAt: timestamp, updatedAt: timestamp,
 };
 const scenario: Scenario = {
@@ -34,6 +31,9 @@ const scenario: Scenario = {
   suggestedSkillFocus: ["Discovery"], suggestedSkillFocusZhCn: ["需求发现"],
   successCriterionPresetIds: [3],
   successCriteria: ["Agree on a next step"], successCriteriaZhCn: ["确认下一步"],
+  toneStyle: "Professional", toneStyleZhCn: "专业",
+  toneStylePresetId: 4,
+  voiceBehavior: { interruptFrequency: "low", speakingPace: "normal" },
   scoringCriteria: [{ successCriterionPresetId: 3, name: "Agree on a next step", nameZhCn: "确认下一步", weight: 100 }],
   allowedPersonaIds: [persona.id], createdAt: timestamp, updatedAt: timestamp,
 };

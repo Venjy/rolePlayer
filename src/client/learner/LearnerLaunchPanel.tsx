@@ -70,7 +70,7 @@ const GENDER_LABELS: Record<Persona["gender"], LocalizedText> = {
 };
 
 const PACE_LABELS: Record<
-  Persona["voiceBehavior"]["speakingPace"],
+  NonNullable<Scenario["voiceBehavior"]["speakingPace"]>,
   LocalizedText
 > = {
   slow: { en: "Slower", zh: "偏慢" },
@@ -79,7 +79,7 @@ const PACE_LABELS: Record<
 };
 
 const INTERRUPT_LABELS: Record<
-  Persona["voiceBehavior"]["interruptFrequency"],
+  NonNullable<Scenario["voiceBehavior"]["interruptFrequency"]>,
   LocalizedText
 > = {
   low: { en: "Patient, with few challenges", zh: "耐心，较少挑战" },
@@ -173,7 +173,36 @@ function ScenarioSummary({ scenario }: ScenarioSummaryProps) {
         values={scenario.suggestedSkillFocus}
         color="blue"
       />
-
+      <Descriptions
+        className={styles.compactDescriptions}
+        column={1}
+        size="small"
+        items={[
+          ...(scenario.toneStyle
+            ? [{
+                key: "tone",
+                label: t({ en: "Tone", zh: "语气" }),
+                children: scenario.toneStyle,
+              }]
+            : []),
+          ...(scenario.voiceBehavior.speakingPace
+            ? [{
+                key: "pace",
+                label: t({ en: "Pace", zh: "语速" }),
+                children: t(PACE_LABELS[scenario.voiceBehavior.speakingPace]),
+              }]
+            : []),
+          ...(scenario.voiceBehavior.interruptFrequency
+            ? [{
+                key: "interruptions",
+                label: t({ en: "Challenges", zh: "插话 / 挑战" }),
+                children: t(
+                  INTERRUPT_LABELS[scenario.voiceBehavior.interruptFrequency],
+                ),
+              }]
+            : []),
+        ]}
+      />
     </Card>
   );
 }
@@ -229,26 +258,6 @@ function PersonaSummary({ persona, qwenVoices }: PersonaSummaryProps) {
             key: "communication",
             label: t({ en: "Communication", zh: "沟通方式" }),
             children: persona.communicationStyle,
-          },
-          {
-            key: "tone",
-            label: t({ en: "Tone", zh: "语气" }),
-            children: persona.toneStyle,
-          },
-          {
-            key: "pace",
-            label: t({ en: "Pace", zh: "语速" }),
-            children: t(PACE_LABELS[persona.voiceBehavior.speakingPace]),
-          },
-          {
-            key: "interruptions",
-            label: t({
-              en: "Challenges",
-              zh: "插话 / 挑战",
-            }),
-            children: t(
-              INTERRUPT_LABELS[persona.voiceBehavior.interruptFrequency],
-            ),
           },
           ...(persona.behaviorNotes
             ? [

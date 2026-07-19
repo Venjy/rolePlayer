@@ -38,9 +38,7 @@ personas
 ├── occupation_preset_id → persona_occupation_presets.id
 ├── background / background_zh_cn
 ├── communication_style_preset_id → persona_communication_style_presets.id
-├── tone_style_preset_id → persona_tone_style_presets.id
 ├── behavior_notes / behavior_notes_zh_cn
-├── interrupt_frequency, speaking_pace
 └── created_at, updated_at
 
 persona_personality_traits
@@ -55,6 +53,8 @@ persona_concerns
 scenarios
 ├── id (INTEGER AUTOINCREMENT), seed_key
 ├── name / name_zh_cn, description / description_zh_cn
+├── tone_style_preset_id → scenario_tone_style_presets.id (optional)
+├── interrupt_frequency, speaking_pace (optional)
 └── created_at, updated_at
 
 scenario_training_goals
@@ -81,9 +81,6 @@ persona_personality_trait_presets
 persona_communication_style_presets
 └── id, seed_key, communication_style / communication_style_zh_cn, position, timestamps
 
-persona_tone_style_presets
-└── id, seed_key, tone_style / tone_style_zh_cn, position, timestamps
-
 persona_motivation_presets
 └── id, seed_key, motivation / motivation_zh_cn, position, timestamps
 
@@ -98,6 +95,9 @@ scenario_skill_focus_presets
 
 scenario_success_criterion_presets
 └── id, seed_key, success_criterion / success_criterion_zh_cn, position, timestamps
+
+scenario_tone_style_presets
+└── id, seed_key, tone_style / tone_style_zh_cn, position, timestamps
 
 ```
 
@@ -143,7 +143,7 @@ message_audio
 
 Unsuffixed database columns represent English and `_zh_cn` columns represent Simplified Chinese. The API maps those columns to unsuffixed English fields and `*ZhCn` Chinese fields. Either language may be empty; fallback remains presentation-only.
 
-Free-text business fields have explicit English/Chinese columns. Preset-backed fields do not duplicate localized text on personas or scenarios: single selections are foreign-key columns and multi-selections are ordered relation rows. `qwen_voices.voice` and `personas.voice` retain the provider-owned Qwen ID needed by the realtime API; localized display names live only in `qwen_voices.name` / `name_zh_cn`. Persona voice behavior remains split into `interrupt_frequency` and `speaking_pace`; scenario success-standard weights live on `scenario_success_criteria`.
+Free-text business fields have explicit English/Chinese columns. Preset-backed fields do not duplicate localized text on personas or scenarios: single selections are foreign-key columns and multi-selections are ordered relation rows. `qwen_voices.voice` and `personas.voice` retain the provider-owned Qwen ID needed by the realtime API; localized display names live only in `qwen_voices.name` / `name_zh_cn`. Scenario voice behavior uses nullable `interrupt_frequency` and `speaking_pace` columns; scenario success-standard weights live on `scenario_success_criteria`.
 
 ## Presets
 
@@ -163,9 +163,9 @@ Personas and scenarios store preset IDs. `CatalogRepository` joins the relevant 
 
 ## Migrations, legacy splitting, and business initialization
 
-Migrations are append-only structural changes. The catalog chain currently has six entries: migration 4 moves both historical discriminator tables into nine independent domain tables, migration 5 replaces duplicated catalog text with preset foreign keys/ordered relations, and migration 6 creates the bilingual Qwen voice directory. The conversation chain has five entries: migration 4 removes the redundant `conversation_` prefix from business table and index names without changing their data, and migration 5 adds the one-to-one finalized-message audio table. Neither file contains the other domain's business tables.
+Migrations are append-only structural changes. The catalog chain currently has seven entries: migration 4 moves both historical discriminator tables into nine independent domain tables, migration 5 replaces duplicated catalog text with preset foreign keys/ordered relations, migration 6 creates the bilingual Qwen voice directory, and migration 7 moves tone/pace/interjection configuration from personas to scenarios. The conversation chain has six entries: migration 4 removes the redundant `conversation_` prefix from business table and index names, migration 5 adds finalized-message audio, and migration 6 moves the resolved voice-behavior values from persona snapshots to scenario snapshots. Neither file contains the other domain's business tables.
 
-The historical combined database uses migrations 1–15:
+The historical combined database uses migrations 1–16:
 
 - migration 2: core catalog tables;
 - migration 3: compatibility ordering;
@@ -180,6 +180,7 @@ The historical combined database uses migrations 1–15:
 - migration 13: replace aggregate bilingual/object JSON storage with explicit localized columns and normalized scoring/snapshot tables while preserving existing data.
 - migration 14: split role and scenario preset categories into nine physical tables with domain-specific bilingual columns while preserving IDs and initializer keys.
 - migration 15: replace preset-backed persona/scenario text with preset IDs, promote unmatched historical custom text to custom preset rows, and preserve scoring weights.
+- migration 16: move tone style, speaking pace, and interjection/challenge tendency to scenario records and scenario snapshots while preserving compatibility and history.
 
 Business data is not seeded by normal schema creation. Run the explicit, transactional initializer:
 
@@ -201,7 +202,7 @@ To preserve an existing combined `data/role-player.sqlite`, stop the server and 
 pnpm database:split
 ```
 
-`LEGACY_DATABASE_PATH` selects the source, while `CATALOG_DATABASE_PATH` and `CONVERSATION_DATABASE_PATH` select the destinations. For compatibility, an old `DATABASE_PATH` value is also accepted as the legacy source only. The command upgrades the source through historical migration 15, creates both fresh destination schemas, copies every row with its ID, validates column shapes, row counts, and foreign keys, and leaves the source untouched afterward. It refuses to run while legacy WAL sidecars exist and never merges into or overwrites an existing target file.
+`LEGACY_DATABASE_PATH` selects the source, while `CATALOG_DATABASE_PATH` and `CONVERSATION_DATABASE_PATH` select the destinations. For compatibility, an old `DATABASE_PATH` value is also accepted as the legacy source only. The command upgrades the source through historical migration 16, creates both fresh destination schemas, copies every row with its ID, validates column shapes, row counts, and foreign keys, and leaves the source untouched afterward. It refuses to run while legacy WAL sidecars exist and never merges into or overwrites an existing target file.
 
 Node currently labels its built-in `node:sqlite` API as experimental even though the project supports it on the enforced Node version. That warning does not mean initialization failed. The catalog scripts suppress this single warning code so successful initializer output is not mistaken for an error.
 

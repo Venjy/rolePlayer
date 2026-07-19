@@ -15,7 +15,6 @@ const presets: PersonaPreset[] = [
   [1, "occupation", "Delivery Rider", "外卖员"],
   [2, "personality_trait", "Impatient", "缺乏耐心"],
   [3, "communication_style", "Direct and concise", "直接简洁"],
-  [4, "tone_style", "Professional and composed", "专业沉稳"],
 ].map(([id, category, value, valueZhCn], position) => ({
   id: id as number,
   category: category as PersonaPreset["category"],
@@ -36,13 +35,11 @@ const persona: PersonaInput = {
   backgroundZhCn: "",
   personalityTraitPresetIds: [2],
   communicationStylePresetId: 3,
-  toneStylePresetId: 4,
   behaviorNotes: "",
   behaviorNotesZhCn: "",
   motivationPresetIds: [],
   concernPresetIds: [],
   voice: "longanqian",
-  voiceBehavior: { interruptFrequency: "medium", speakingPace: "normal" },
 };
 
 describe("preset reference resolution", () => {

@@ -72,14 +72,10 @@ export function compilePersonaInstructions(persona: ResolvedPersonaInput): strin
     line("Occupation", persona.occupation),
     line("Background", persona.background),
     line("Communication style", persona.communicationStyle),
-    line("Tone style", persona.toneStyle),
     line("Behavior notes", persona.behaviorNotes),
     listSection("Personality traits", persona.personalityTraits),
     listSection("Motivations", persona.motivations),
     listSection("Concerns and likely objections", persona.concerns),
-    "[PERSONA VOICE BEHAVIOR]",
-    PACE_RULES[persona.voiceBehavior.speakingPace],
-    INTERRUPT_RULES[persona.voiceBehavior.interruptFrequency],
   ]);
 }
 
@@ -97,6 +93,18 @@ export function compileScenarioInstructions(scenario: ResolvedScenarioInput): st
     listSection("Suggested skill focus", scenario.suggestedSkillFocus),
     listSection("Hidden success criteria", scenario.successCriteria),
     listSection("Hidden scoring weights", scoring),
+    scenario.toneStyle ||
+    scenario.voiceBehavior.speakingPace ||
+    scenario.voiceBehavior.interruptFrequency
+      ? "[SCENARIO VOICE BEHAVIOR]"
+      : undefined,
+    line("Tone style", scenario.toneStyle),
+    scenario.voiceBehavior.speakingPace
+      ? PACE_RULES[scenario.voiceBehavior.speakingPace]
+      : undefined,
+    scenario.voiceBehavior.interruptFrequency
+      ? INTERRUPT_RULES[scenario.voiceBehavior.interruptFrequency]
+      : undefined,
   ]);
 }
 

@@ -21,8 +21,6 @@ import { compilePersonaInstructions } from "../../shared/role-play-instructions"
 import { resolvePersonaPresetReferences } from "../../shared/role-play-preset-resolution";
 import {
   getGenderOptions,
-  getInterruptFrequencyOptions,
-  getSpeakingPaceOptions,
   getVoiceOptions,
 } from "./admin-options";
 import { useI18n, type AppLocale } from "../i18n";
@@ -110,7 +108,6 @@ export function PersonaEditorDrawer({
     occupation: t({ en: "occupation", zh: "职业" }),
     personality_trait: t({ en: "personality traits", zh: "性格特征" }),
     communication_style: t({ en: "communication style", zh: "沟通风格" }),
-    tone_style: t({ en: "tone style", zh: "语气风格" }),
   };
   const missingRequiredPresets = Object.entries(requiredPresetLabels)
         .filter(
@@ -318,28 +315,6 @@ export function PersonaEditorDrawer({
           <Form.Item
             className={styles.fullSpan}
             extra={t({
-              en: "Controls the emotional tone used by this persona across scenarios",
-              zh: "控制该角色在不同场景中保持的情绪与语气倾向",
-            })}
-            label={t({ en: "Tone style", zh: "语气风格" })}
-            name="toneStylePresetId"
-            rules={[{ required: true }]}
-          >
-            <Select
-              className={styles.fullWidth}
-              notFoundContent={t({
-                en: "No tone style presets available",
-                zh: "暂无可用语气风格预设",
-              })}
-              optionFilterProp="label"
-              options={presetOptions.tone_style}
-              placeholder={t({ en: "Select a tone style", zh: "选择语气风格" })}
-              showSearch
-            />
-          </Form.Item>
-          <Form.Item
-            className={styles.fullSpan}
-            extra={t({
               en: "Choose 1–12 presets; search and multiple selection are supported",
               zh: "从预设中选择 1–12 项，可搜索和多选",
             })}
@@ -496,23 +471,6 @@ export function PersonaEditorDrawer({
             rules={[{ required: true }]}
           >
             <Select options={voiceOptions} />
-          </Form.Item>
-          <Form.Item
-            label={t({
-              en: "Interjection / challenge tendency",
-              zh: "插话 / 挑战倾向",
-            })}
-            name={["voiceBehavior", "interruptFrequency"]}
-            rules={[{ required: true }]}
-          >
-            <Select options={getInterruptFrequencyOptions(locale)} />
-          </Form.Item>
-          <Form.Item
-            label={t({ en: "Speaking pace", zh: "说话节奏" })}
-            name={["voiceBehavior", "speakingPace"]}
-            rules={[{ required: true }]}
-          >
-            <Select options={getSpeakingPaceOptions(locale)} />
           </Form.Item>
         </div>
 

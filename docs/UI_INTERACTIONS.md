@@ -44,7 +44,7 @@ The default surface contains the brand header, compact-history entry below the d
 2. a searchable persona selector containing only the selected scenario's compatible personas;
 3. an Ant Design solid button-style Radio group for easy/medium/hard.
 
-Changing the scenario keeps the selected persona only when it remains compatible; otherwise the first compatible persona is selected. The screen summarizes scenario description/goals/skill focus plus persona occupation, demographics, traits, communication style, tone, voice, speaking pace, and challenge tendency.
+Changing the scenario keeps the selected persona only when it remains compatible; otherwise the first compatible persona is selected. The screen summarizes scenario description/goals/skill focus/tone/pace/challenge tendency plus persona occupation, demographics, traits, communication style, and voice.
 
 Difficulty and the primary start action appear immediately after the two selectors, before the longer scenario/persona summaries, so the entry point remains discoverable without reading every detail first. The start action is disabled until catalog loading has finished, `/api/health` reports configured Qwen credentials, and a valid compatible scenario/persona pair exists. On start, the app snapshots the persona, scenario, and difficulty; later catalog changes cannot rename or reconfigure that active session.
 
@@ -54,11 +54,11 @@ Difficulty and the primary start action appear immediately after the two selecto
 
 The admin console contains responsive persona and scenario tabs. The Back to practice control is immediately left of the upper-left title; language/theme actions remain upper-right. Each tab has search, count, responsive cards, create/edit drawers, deletion confirmation, and global/form error feedback.
 
-Persona editing covers name, gender, age, occupation, background, personality traits, communication style, tone style, behavior notes, motivations, concerns, Qwen voice, speaking pace, and interjection/challenge tendency. Occupation, communication style, tone style, traits, motivations, and concerns come from `catalog.personaPresets`; voice labels come from `catalog.qwenVoices` and retain the official Qwen ID in the visible option. Name, gender, age, and occupation share one responsive grid: four columns on wide drawers, two at tablet width, and one per row on narrow screens. There is no identity field.
+Persona editing covers name, gender, age, occupation, background, personality traits, communication style, behavior notes, motivations, concerns, and Qwen voice. Occupation, communication style, traits, motivations, and concerns come from `catalog.personaPresets`; voice labels come from `catalog.qwenVoices` and retain the official Qwen ID in the visible option. Name, gender, age, and occupation share one responsive grid: four columns on wide drawers, two at tablet width, and one per row on narrow screens. There is no identity field.
 
-New roles cannot invent arbitrary values in preset-backed persona fields. If required occupation, personality-trait, communication-style, or tone-style options are absent, the drawer disables save and directs the operator to run the initializer. Existing values absent from the current preset list remain visible and savable.
+New roles cannot invent arbitrary values in preset-backed persona fields. If required occupation, personality-trait, or communication-style options are absent, the drawer disables save and directs the operator to run the initializer. Existing values absent from the current preset list remain visible and savable.
 
-Scenario editing covers name/description, learner goals, suggested skill focus, success criteria, and weights. Selecting success criteria regenerates fixed, read-only scoring item names and evenly distributed integer weights totaling 100. Users can change only percentages. Persona compatibility is a separate card action, not part of scenario creation/editing.
+Scenario editing covers name/description, learner goals, suggested skill focus, success criteria, weights, and optional tone style/speaking pace/interjection tendency. Selecting success criteria regenerates fixed, read-only scoring item names and evenly distributed integer weights totaling 100. Users can change only percentages. Persona compatibility is a separate card action, not part of scenario creation/editing.
 
 Each drawer compiles only its own deterministic Instructions section and never asks for a counterpart. The server combines persona, scenario, and difficulty only when creating the conversation. A successful mutation reloads the authoritative catalog.
 
@@ -191,7 +191,7 @@ Holding **Hold to interrupt and talk** / **按住打断并说话** performs this
 
 The user can record while Node repairs Qwen's conversation item. Node blocks only the next response creation until repair is acknowledged. See `docs/REALTIME_PROTOCOL.md` for wire ordering and `docs/ARCHITECTURE.md` for the best-effort prefix estimator.
 
-Persona `voiceBehavior.interruptFrequency` is not this mechanism. It influences whether the role is patient or uses brief interjections/challenges inside its own model turns. Manual push-to-talk means the model cannot detect and interrupt the learner mid-recording; only the learner can barge in on model playback.
+Scenario `voiceBehavior.interruptFrequency` is not this mechanism. It influences whether the role is patient or uses brief interjections/challenges inside its own model turns for that scenario. Manual push-to-talk means the model cannot detect and interrupt the learner mid-recording; only the learner can barge in on model playback.
 
 ## Waveform feedback
 

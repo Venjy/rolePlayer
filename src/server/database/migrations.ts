@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { migrateCatalogRecordsToPresetReferences } from "./catalog-preset-reference-migration";
 import { SPLIT_PRESET_TABLES_MIGRATION_SQL } from "./preset-storage";
+import {
+  moveCatalogVoiceBehaviorToScenarios,
+  moveCombinedConversationVoiceBehaviorToScenarioSnapshots,
+} from "./scenario-voice-behavior-migration";
 
 /**
  * A migration is immutable after it has reached a deployed environment.
@@ -1492,6 +1496,14 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
     version: 15,
     name: "reference_catalog_presets_by_id",
     up: migrateCatalogRecordsToPresetReferences,
+  },
+  {
+    version: 16,
+    name: "move_voice_behavior_to_scenarios",
+    up: (database) => {
+      moveCatalogVoiceBehaviorToScenarios(database);
+      moveCombinedConversationVoiceBehaviorToScenarioSnapshots(database);
+    },
   },
 ];
 

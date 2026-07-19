@@ -18,8 +18,6 @@ const persona = {
   personalityTraitsZhCn: ["务实"],
   communicationStyle: "Direct and concise",
   communicationStyleZhCn: "直接简洁",
-  toneStyle: "Firm but respectful",
-  toneStyleZhCn: "坚定但尊重",
   behaviorNotes: "Ask for concrete prices.",
   behaviorNotesZhCn: "追问具体价格。",
   motivations: ["Save costs"],
@@ -27,10 +25,6 @@ const persona = {
   concerns: ["Hidden fees"],
   concernsZhCn: ["隐藏费用"],
   voice: "longanlingxin" as const,
-  voiceBehavior: {
-    interruptFrequency: "medium" as const,
-    speakingPace: "fast" as const,
-  },
 };
 
 const scenario = {
@@ -44,6 +38,12 @@ const scenario = {
   suggestedSkillFocusZhCn: ["需求发现", "异议处理"],
   successCriteria: ["Confirm the objection", "Agree on a next step"],
   successCriteriaZhCn: ["确认异议", "明确下一步"],
+  toneStyle: "Firm but respectful",
+  toneStyleZhCn: "坚定但尊重",
+  voiceBehavior: {
+    interruptFrequency: "medium" as const,
+    speakingPace: "fast" as const,
+  },
   scoringCriteria: [
     { name: "Confirm the objection", nameZhCn: "确认异议", weight: 50 },
     { name: "Agree on a next step", nameZhCn: "明确下一步", weight: 50 },
@@ -61,12 +61,27 @@ describe("role-play Instructions", () => {
     expect(first).toContain("Occupation: Delivery Rider");
     expect(first).toContain("Scenario: Price objection");
     expect(first).toContain("Confirm the objection: 50%");
+    expect(first).toContain("Tone style: Firm but respectful");
+    expect(first).toContain("Speak briskly");
     expect(first).toContain("Difficulty: hard");
   });
 
   it("keeps editor previews independent", () => {
     expect(compilePersonaInstructions(persona)).not.toContain("Price objection");
+    expect(compilePersonaInstructions(persona)).not.toContain("Tone style:");
     expect(compileScenarioInstructions(scenario)).not.toContain("Xiao Zhang");
+    expect(compileScenarioInstructions(scenario)).toContain("Tone style:");
+  });
+
+  it("omits the optional scenario voice section when it is not configured", () => {
+    expect(
+      compileScenarioInstructions({
+        ...scenario,
+        toneStyle: "",
+        toneStyleZhCn: "",
+        voiceBehavior: {},
+      }),
+    ).not.toContain("SCENARIO VOICE BEHAVIOR");
   });
 
   it("omits empty optional persona fields instead of emitting empty labels", () => {
