@@ -1,45 +1,17 @@
 .root {
   width: min(1180px, 100%);
-  min-height: 100dvh;
+  min-height: 100%;
   margin: 0 auto;
   padding: 20px clamp(16px, 4vw, 42px) 40px;
 }
 
-.header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.brand {
-  min-width: 0;
-}
-
-.brand :global(.ant-avatar) {
-  flex: none;
-  color: #ffffff;
-  background: linear-gradient(145deg, #20bc89, #12835f);
-  box-shadow: 0 6px 18px rgba(24, 167, 121, 0.2);
-}
-
-.brand > div:last-child {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-}
-
-.brandSubtitle {
-  font-size: 12px;
-}
-
-.languageToggle {
-  display: inline-flex;
-}
-
 .content {
   width: min(980px, 100%);
-  margin: clamp(42px, 8vh, 84px) auto 0;
+  margin: clamp(28px, 6vh, 64px) auto 0;
+}
+
+.mobileHistoryRow {
+  display: none;
 }
 
 .introduction {
@@ -143,7 +115,8 @@
 }
 
 .description,
-.identity {
+.identity,
+.summaryValue {
   margin: 0 !important;
   line-height: 1.65;
 }
@@ -178,17 +151,50 @@
   font-size: 13px;
 }
 
-.compactDescriptions {
-  margin-top: auto;
+.summaryValue {
+  color: var(--text-color);
 }
 
-.compactDescriptions :global(.ant-descriptions-item-label) {
-  width: 78px;
-  color: var(--message-meta);
+.summaryList {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-.compactDescriptions :global(.ant-descriptions-item-content) {
+.summaryList li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  line-height: 1.5;
   overflow-wrap: anywhere;
+}
+
+.summaryList li > :global(.anticon) {
+  margin-top: 4px;
+  color: #18a779;
+}
+
+.instructionsSection {
+  margin-top: 24px;
+}
+
+.instructionsAlert {
+  margin-bottom: 12px;
+}
+
+.instructionsPreview.ant-typography,
+.instructionsPreview {
+  max-height: 420px;
+  margin-bottom: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.65;
 }
 
 .difficultySection {
@@ -227,7 +233,7 @@
   }
 
   .content {
-    margin-top: 42px;
+    margin-top: 18px;
   }
 
   .selectionGrid,
@@ -240,44 +246,22 @@
   }
 }
 
+@media (max-width: 1199px) {
+  .mobileHistoryRow {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 12px;
+  }
+}
+
 @media (max-width: 480px) {
   .root {
     padding-right: 12px;
     padding-left: 12px;
   }
 
-  .header {
-    gap: 8px;
-  }
-
-  .brandSubtitle {
-    display: none;
-  }
-
-  .header :global(.ant-btn) {
-    padding-inline: 10px;
-  }
-
-  .languageToggle :global(.ant-btn),
-  .adminButton {
-    width: 32px;
-    padding-inline: 0 !important;
-  }
-
-  .languageToggle :global(.ant-btn) {
-    font-size: 0;
-  }
-
-  .languageToggle :global(.anticon) {
-    font-size: 14px;
-  }
-
-  .buttonLabel {
-    display: none;
-  }
-
   .content {
-    margin-top: 34px;
+    margin-top: 12px;
   }
 
   .introduction {

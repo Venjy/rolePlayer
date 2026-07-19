@@ -53,8 +53,18 @@ const scenario = {
 
 describe("role-play Instructions", () => {
   it("deterministically combines standalone persona and scenario sections", () => {
-    const first = compileRolePlayInstructions({ persona, scenario, difficulty: "hard" });
-    const second = compileRolePlayInstructions({ persona, scenario, difficulty: "hard" });
+    const first = compileRolePlayInstructions({
+      persona,
+      scenario,
+      difficulty: "hard",
+      locale: "en",
+    });
+    const second = compileRolePlayInstructions({
+      persona,
+      scenario,
+      difficulty: "hard",
+      locale: "en",
+    });
 
     expect(first).toBe(second);
     expect(first).toContain("Name: Xiao Zhang");
@@ -67,10 +77,51 @@ describe("role-play Instructions", () => {
   });
 
   it("keeps editor previews independent", () => {
-    expect(compilePersonaInstructions(persona)).not.toContain("Price objection");
-    expect(compilePersonaInstructions(persona)).not.toContain("Tone style:");
-    expect(compileScenarioInstructions(scenario)).not.toContain("Xiao Zhang");
-    expect(compileScenarioInstructions(scenario)).toContain("Tone style:");
+    expect(compilePersonaInstructions(persona, "en")).not.toContain("Price objection");
+    expect(compilePersonaInstructions(persona, "en")).not.toContain("Tone style:");
+    expect(compileScenarioInstructions(scenario, "en")).not.toContain("Xiao Zhang");
+    expect(compileScenarioInstructions(scenario, "en")).toContain("Tone style:");
+  });
+
+  it("uses the selected locale for every template label and rule", () => {
+    const instructions = compileRolePlayInstructions({
+      persona: {
+        ...persona,
+        name: persona.nameZhCn,
+        occupation: persona.occupationZhCn,
+        background: persona.backgroundZhCn,
+        personalityTraits: persona.personalityTraitsZhCn,
+        communicationStyle: persona.communicationStyleZhCn,
+        behaviorNotes: persona.behaviorNotesZhCn,
+        motivations: persona.motivationsZhCn,
+        concerns: persona.concernsZhCn,
+      },
+      scenario: {
+        ...scenario,
+        name: scenario.nameZhCn,
+        description: scenario.descriptionZhCn,
+        goals: scenario.goalsZhCn,
+        suggestedSkillFocus: scenario.suggestedSkillFocusZhCn,
+        successCriteria: scenario.successCriteriaZhCn,
+        toneStyle: scenario.toneStyleZhCn,
+        scoringCriteria: scenario.scoringCriteria.map((criterion) => ({
+          ...criterion,
+          name: criterion.nameZhCn,
+        })),
+      },
+      difficulty: "hard",
+      locale: "zh",
+    });
+
+    expect(instructions).toContain("[客户角色]");
+    expect(instructions).toContain("姓名: 小张");
+    expect(instructions).toContain("性别: 女");
+    expect(instructions).toContain("[销售训练场景]");
+    expect(instructions).toContain("隐藏的评分权重:\n- 确认异议: 50%\n- 明确下一步: 50%");
+    expect(instructions).toContain("难度: 困难");
+    expect(instructions).toContain("[不可违反的规则]");
+    expect(instructions).not.toContain("[CUSTOMER PERSONA]");
+    expect(instructions).not.toContain("Difficulty:");
   });
 
   it("omits the optional scenario voice section when it is not configured", () => {
@@ -80,7 +131,7 @@ describe("role-play Instructions", () => {
         toneStyle: "",
         toneStyleZhCn: "",
         voiceBehavior: {},
-      }),
+      }, "en"),
     ).not.toContain("SCENARIO VOICE BEHAVIOR");
   });
 
@@ -92,7 +143,7 @@ describe("role-play Instructions", () => {
       behaviorNotes: "",
       motivations: ["", "   "],
       concerns: [],
-    });
+    }, "en");
 
     expect(instructions).not.toContain("Age:");
     expect(instructions).not.toContain("Background:");
@@ -109,7 +160,7 @@ describe("role-play Instructions", () => {
         { name: "", nameZhCn: "", weight: 50 },
         { name: "  Agree on a next step  ", nameZhCn: "", weight: 50 },
       ],
-    });
+    }, "en");
 
     expect(instructions).toContain("Suggested skill focus:\n- Discovery");
     expect(instructions).toContain("Hidden scoring weights:\n- Agree on a next step: 50%");

@@ -5,6 +5,7 @@ import {
   moveCatalogVoiceBehaviorToScenarios,
   moveConversationVoiceBehaviorToScenarioSnapshots,
 } from "./scenario-voice-behavior-migration";
+import { createConversationFeedbackSchema } from "./conversation-feedback-migration";
 
 const createMigrationTable = `
   CREATE TABLE schema_migrations (
@@ -428,5 +429,10 @@ export const CONVERSATION_DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
     version: 6,
     name: "move_voice_behavior_to_scenario_snapshots",
     up: moveConversationVoiceBehaviorToScenarioSnapshots,
+  },
+  {
+    version: 7,
+    name: "create_conversation_feedback",
+    up: createConversationFeedbackSchema,
   },
 ];

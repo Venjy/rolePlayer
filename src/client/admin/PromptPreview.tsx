@@ -1,4 +1,4 @@
-import { Alert, Collapse, Space, Tag, Typography } from "antd";
+import { Alert, Card, Typography } from "antd";
 import { MAX_REALTIME_INSTRUCTIONS_LENGTH } from "../../shared/realtime-protocol";
 import type { RolePlayInstructionsLengthIssue } from "../../shared/role-play-instructions";
 import { useI18n } from "../i18n";
@@ -20,7 +20,6 @@ export function PromptPreview({
     lengthIssue !== null && lengthIssue !== undefined
       ? true
       : prompt.length > MAX_REALTIME_INSTRUCTIONS_LENGTH;
-  const displayedLength = lengthIssue?.actualLength ?? prompt.length;
 
   return (
     <section
@@ -61,36 +60,21 @@ export function PromptPreview({
           type="error"
         />
       ) : null}
-      <Collapse
-        defaultActiveKey={["instructions"]}
-        items={[
-          {
-            key: "instructions",
-            label: (
-              <Space size="small">
-                <span>
-                  {t({
-                    en: "Model Instructions preview",
-                    zh: "模型 Instructions 预览",
-                  })}
-                </span>
-                <Tag color={tooLong ? "error" : "default"}>
-                  {displayedLength}/{MAX_REALTIME_INSTRUCTIONS_LENGTH}
-                </Tag>
-              </Space>
-            ),
-            children: (
-              <Typography.Paragraph
-                className={styles.promptPreview}
-                copyable={{ text: prompt }}
-              >
-                {prompt}
-              </Typography.Paragraph>
-            ),
-          },
-        ]}
+      <Card
         size="small"
-      />
+        title={(
+          <Typography.Text strong copyable={{ text: prompt }}>
+            {t({
+              en: "Model Instructions preview",
+              zh: "模型 Instructions 预览",
+            })}
+          </Typography.Text>
+        )}
+      >
+        <Typography.Paragraph className={styles.promptPreview}>
+          {prompt}
+        </Typography.Paragraph>
+      </Card>
     </section>
   );
 }

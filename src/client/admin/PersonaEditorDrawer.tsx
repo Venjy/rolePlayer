@@ -137,7 +137,7 @@ export function PersonaEditorDrawer({
       locale,
     );
     return {
-      prompt: compilePersonaInstructions(previewPersona),
+      prompt: compilePersonaInstructions(previewPersona, locale),
       lengthIssue: null,
     };
   }, [draft, locale, persona, personaPresets]);

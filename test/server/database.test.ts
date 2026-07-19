@@ -135,6 +135,11 @@ describe("ApplicationDatabase", () => {
         name: "move_voice_behavior_to_scenarios",
         applied_at: expect.any(String),
       }),
+      expect.objectContaining({
+        version: 17,
+        name: "create_conversation_feedback",
+        applied_at: expect.any(String),
+      }),
     ]);
     expect(
       database.raw
@@ -150,6 +155,12 @@ describe("ApplicationDatabase", () => {
           `SELECT name, strict
            FROM pragma_table_list
            WHERE name IN (
+             'conversation_feedback_reports',
+             'conversation_feedback_strengths',
+             'conversation_feedback_improvement_areas',
+             'conversation_feedback_coaching_tips',
+             'conversation_feedback_criterion_scores',
+             'conversation_feedback_moments',
              'conversation_messages', 'conversation_sessions',
              'conversation_persona_snapshots',
              'conversation_scenario_snapshots',
@@ -174,6 +185,12 @@ describe("ApplicationDatabase", () => {
         )
         .all(),
     ).toEqual([
+      { name: "conversation_feedback_coaching_tips", strict: 1 },
+      { name: "conversation_feedback_criterion_scores", strict: 1 },
+      { name: "conversation_feedback_improvement_areas", strict: 1 },
+      { name: "conversation_feedback_moments", strict: 1 },
+      { name: "conversation_feedback_reports", strict: 1 },
+      { name: "conversation_feedback_strengths", strict: 1 },
       { name: "conversation_messages", strict: 1 },
       { name: "conversation_persona_snapshots", strict: 1 },
       { name: "conversation_scenario_personas", strict: 1 },
@@ -224,7 +241,7 @@ describe("ApplicationDatabase", () => {
       second.raw
         .prepare("SELECT COUNT(*) AS count FROM schema_migrations")
         .get(),
-    ).toMatchObject({ count: 16 });
+    ).toMatchObject({ count: 17 });
     expect(
       second.raw
         .prepare("SELECT applied_at FROM schema_migrations WHERE version = 1")
@@ -703,6 +720,7 @@ describe("ApplicationDatabase", () => {
       { version: 14, name: "split_preset_categories_into_tables" },
       { version: 15, name: "reference_catalog_presets_by_id" },
       { version: 16, name: "move_voice_behavior_to_scenarios" },
+      { version: 17, name: "create_conversation_feedback" },
     ]);
     expect(
       first.raw.prepare("SELECT COUNT(*) AS count FROM personas").get(),
@@ -961,6 +979,9 @@ describe("ApplicationDatabase", () => {
         )
         .all(),
     ).toEqual([
+      { name: "conversation_feedback_moments_message_id_idx" },
+      { name: "conversation_feedback_reports_status_idx" },
+      { name: "conversation_messages_feedback_owner_idx" },
       { name: "conversation_messages_response_idx" },
       { name: "conversation_messages_source_item_idx" },
       { name: "conversation_sessions_updated_at_idx" },

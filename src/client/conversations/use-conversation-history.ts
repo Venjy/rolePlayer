@@ -6,6 +6,7 @@ import type {
 } from "../../shared/conversation-history";
 import {
   createConversation as createConversationRequest,
+  deleteConversation as deleteConversationRequest,
   fetchConversation,
   fetchConversations,
 } from "./conversation-api";
@@ -17,6 +18,9 @@ function toSummary(conversation: ConversationDetail): ConversationSummary {
     scenarioName: conversation.scenario.name,
     difficulty: conversation.difficulty,
     locale: conversation.locale,
+    status: conversation.status,
+    endedAt: conversation.endedAt,
+    feedbackStatus: conversation.feedbackStatus,
     messageCount: conversation.messageCount,
     audioMessageCount: conversation.audioMessageCount,
     audioAvailable: conversation.audioAvailable,
@@ -194,6 +198,22 @@ export function useConversationHistory() {
     }
   }, []);
 
+  const remove = useCallback(async (id: number): Promise<void> => {
+    if (mountedRef.current) setBusy(true);
+    try {
+      await deleteConversationRequest(id);
+      if (!mountedRef.current) return;
+      listRequestGenerationRef.current += 1;
+      visibleRequestGenerationRef.current += 1;
+      setConversations((current) =>
+        current.filter((conversation) => conversation.id !== id),
+      );
+      setError(null);
+    } finally {
+      if (mountedRef.current) setBusy(false);
+    }
+  }, []);
+
   return {
     conversations,
     loading,
@@ -203,5 +223,6 @@ export function useConversationHistory() {
     refreshSilently,
     create,
     load,
+    remove,
   };
 }

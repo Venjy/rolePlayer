@@ -65,11 +65,11 @@ The original requirement document explicitly asks for “Persona compatibility (
 
 Prompt generation is deterministic and does not call another model:
 
-- `compilePersonaInstructions(persona)` powers the persona-only editor preview.
-- `compileScenarioInstructions(scenario)` powers the scenario-only editor preview.
-- `compileRolePlayInstructions({ persona, scenario, difficulty })` combines both sections with difficulty and safety rules.
+- `compilePersonaInstructions(persona, locale)` powers the persona-only editor preview.
+- `compileScenarioInstructions(scenario, locale)` powers the scenario-only editor preview.
+- `compileRolePlayInstructions({ persona, scenario, difficulty, locale })` combines both sections with difficulty and safety rules.
 
-The final combination happens in `ConversationRepository` on the server when a conversation is created. The browser sends persona/scenario IDs only; it does not compose or supply the final prompt data. The server reloads the catalog, resolves preset IDs, persists the exact compiled Instructions with an immutable bilingual snapshot, then the realtime gateway loads that stored value.
+Every compiler has complete English and Chinese template labels, section headings, difficulty/voice-behavior rules, and hidden safety rules. The current interface locale selects the template as well as the already-localized catalog values. The learner launcher calls the shared compiler to preview the expected final combination and enforce the same length budget before enabling start. It still sends persona/scenario IDs and locale only and never supplies prompt data to the server. `ConversationRepository` reloads the authoritative catalog, resolves preset IDs, independently compiles and validates the final Instructions in that submitted locale, persists them with an immutable bilingual snapshot, then the realtime gateway loads that exact stored value. Persona/scenario editor previews show only their independent sections and intentionally omit character counts. All three previews use a non-collapsible card and place the copy control directly after the title.
 
 Compiled Instructions are limited to 12,000 characters. The repository validates affected compatible combinations across locales/difficulties when saving, and conversation creation performs the final limit check.
 

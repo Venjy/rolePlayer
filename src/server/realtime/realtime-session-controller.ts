@@ -51,6 +51,7 @@ interface ResponseRecord {
   interruption?: InterruptionSnapshot;
   userTurn?: UserTurnPersistence;
   waitingForUserPersistence?: boolean;
+  successAssessmentRequested?: boolean;
 }
 
 interface UserTurnPersistence {
@@ -77,6 +78,10 @@ export interface RealtimeSessionControllerHandlers {
   send: (message: ServerMessage) => void;
   sendAudio: (audio: Buffer) => boolean;
   persistMessage: (message: RealtimePersistedMessage) => void;
+  assessScenarioSuccess?: (response: {
+    responseId: string;
+    transcript: string;
+  }) => void;
   closeWithError: (reason: string) => void;
   warn: (error: unknown, message: string) => void;
   error: (error: unknown, message: string) => void;
@@ -606,6 +611,8 @@ export class RealtimeSessionController {
       this.finalizeCompletedPlayback(record);
     }
 
+    if (status === "completed") this.maybeAssessScenarioSuccess(record);
+
     if (status !== "completed") {
       this.removeResponse(record);
     }
@@ -641,6 +648,22 @@ export class RealtimeSessionController {
       event.error?.message ?? "Qwen returned an unknown error.",
       recoverable,
     );
+  }
+
+  private maybeAssessScenarioSuccess(record: ResponseRecord): void {
+    if (
+      record.successAssessmentRequested ||
+      record.generation !== "completed" ||
+      record.userTurn?.status === "pending" ||
+      !record.transcript.trim()
+    ) {
+      return;
+    }
+    record.successAssessmentRequested = true;
+    this.handlers.assessScenarioSuccess?.({
+      responseId: record.responseId,
+      transcript: record.transcript,
+    });
   }
 
   private completePlayback(responseId: string): void {
@@ -1004,6 +1027,10 @@ export class RealtimeSessionController {
       return;
     }
     if (userTurn) userTurn.status = "persisted";
+
+    for (const response of this.responses.values()) {
+      if (response.userTurn === userTurn) this.maybeAssessScenarioSuccess(response);
+    }
 
     this.handlers.send({
       type: "transcript.user.done",

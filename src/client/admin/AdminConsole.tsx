@@ -7,7 +7,7 @@ import {
   SearchOutlined,
   UserOutlined,
 } from "@ant-design/icons";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import {
   Alert,
   Badge,
@@ -36,7 +36,7 @@ import {
   localizePersona,
   localizeScenario,
 } from "../catalog/catalog-localization";
-import { LanguageToggleButton, useI18n } from "../i18n";
+import { useI18n } from "../i18n";
 import { includesSearchText } from "./admin-options";
 import { PersonaEditorDrawer } from "./PersonaEditorDrawer";
 import { ScenarioEditorDrawer } from "./ScenarioEditorDrawer";
@@ -46,7 +46,6 @@ export interface AdminConsoleProps {
   catalog: RolePlayCatalog;
   busy: boolean;
   error?: string;
-  themeButton: ReactNode;
   onExit: () => void;
   onCreatePersona: (input: PersonaInput) => Promise<void>;
   onUpdatePersona: (id: number, input: PersonaInput) => Promise<void>;
@@ -366,7 +365,6 @@ export function AdminConsole({
   catalog,
   busy,
   error,
-  themeButton,
   onExit,
   onCreatePersona,
   onUpdatePersona,
@@ -648,10 +646,6 @@ export function AdminConsole({
           </Typography.Text>
           </div>
         </div>
-        <Space className={styles.headerActions} wrap>
-          <LanguageToggleButton />
-          {themeButton}
-        </Space>
       </header>
 
       {error ? (

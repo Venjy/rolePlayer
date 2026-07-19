@@ -5,8 +5,16 @@ import {
   clientControlMessageSchema,
   type ServerMessage,
 } from "../../shared/realtime-protocol";
-import { getQwenConfig } from "../config";
-import { ConversationRepository } from "../conversations/conversation-repository";
+import { getFeedbackConfig, getQwenConfig } from "../config";
+import {
+  ConversationEndedError,
+  ConversationRepository,
+} from "../conversations/conversation-repository";
+import {
+  QwenConversationSuccessEvaluator,
+  type ConversationSuccessEvaluator,
+  type SuccessEvaluationInput,
+} from "../conversations/conversation-success-evaluator";
 import { QwenRealtimeClient } from "./qwen-realtime-client";
 import { RealtimeSessionController } from "./realtime-session-controller";
 import type { QwenConversationHistoryItem } from "./qwen-types";
@@ -50,10 +58,16 @@ export function selectRealtimeHistory(
 
 export async function registerRealtimeGateway(
   app: FastifyInstance,
-  options: { clientOrigin: string },
+  options: {
+    clientOrigin: string;
+    successEvaluator?: ConversationSuccessEvaluator | null;
+  },
 ): Promise<void> {
   await app.register(websocket);
   const conversations = new ConversationRepository(app.conversationDatabase);
+  const successEvaluator = options.successEvaluator === undefined
+    ? createDefaultSuccessEvaluator()
+    : options.successEvaluator ?? undefined;
 
   app.get("/ws/realtime", { websocket: true }, (browser, request) => {
     const origin = request.headers.origin;
@@ -66,6 +80,9 @@ export async function registerRealtimeGateway(
     let controller: RealtimeSessionController | undefined;
     let browserClosed = false;
     let configureStarted = false;
+    let successDetected = false;
+    let successAssessmentQueue = Promise.resolve();
+    const successAssessmentAbort = new AbortController();
 
     const send = (message: ServerMessage) => {
       if (browser.readyState === WebSocket.OPEN) {
@@ -166,6 +183,46 @@ export async function registerRealtimeGateway(
               ...persisted,
             });
           },
+          assessScenarioSuccess: ({ responseId, transcript }) => {
+            if (!successEvaluator || successDetected) return;
+            successAssessmentQueue = successAssessmentQueue
+              .then(async () => {
+                if (
+                  browserClosed ||
+                  successDetected ||
+                  successAssessmentAbort.signal.aborted
+                ) {
+                  return;
+                }
+                const current = conversations.getConversation(conversation.id);
+                if (!current || current.status !== "active") return;
+                const input = buildSuccessEvaluationInput(
+                  current,
+                  transcript,
+                );
+                if (input.criteria.length === 0) return;
+                const assessment = await successEvaluator.evaluate(
+                  input,
+                  successAssessmentAbort.signal,
+                );
+                if (
+                  !assessment.allCriteriaCompleted ||
+                  browserClosed ||
+                  successDetected
+                ) {
+                  return;
+                }
+                successDetected = true;
+                send({ type: "scenario.success.detected", responseId });
+              })
+              .catch((error: unknown) => {
+                if (successAssessmentAbort.signal.aborted) return;
+                request.log.warn(
+                  { error, conversationId: conversation.id, responseId },
+                  "Scenario success assessment failed; continuing the conversation",
+                );
+              });
+          },
           closeWithError: () => {
             qwen?.close();
             if (browser.readyState === WebSocket.OPEN) {
@@ -187,6 +244,19 @@ export async function registerRealtimeGateway(
         });
         send({ type: "session.state", state: "ready" });
       } catch (error) {
+        if (error instanceof ConversationEndedError) {
+          sendError(
+            "CONVERSATION_ENDED",
+            "The conversation has ended and cannot be resumed.",
+            false,
+          );
+          send({ type: "session.state", state: "ended" });
+          browserClosed = true;
+          if (browser.readyState === WebSocket.OPEN) {
+            browser.close(1008, "Conversation ended");
+          }
+          return;
+        }
         const errorMessage =
           error instanceof Error ? error.message : "Unknown error";
         request.log.error({ error }, "Failed to configure realtime session");
@@ -258,6 +328,7 @@ export async function registerRealtimeGateway(
 
     browser.on("close", () => {
       browserClosed = true;
+      successAssessmentAbort.abort();
       controller?.dispose();
       qwen?.close();
     });
@@ -266,4 +337,42 @@ export async function registerRealtimeGateway(
       request.log.warn({ error }, "Browser WebSocket error");
     });
   });
+}
+
+function createDefaultSuccessEvaluator(): ConversationSuccessEvaluator | undefined {
+  try {
+    return new QwenConversationSuccessEvaluator(getFeedbackConfig());
+  } catch {
+    // Voice conversations remain available when the optional text evaluator is
+    // not configured. In that case the app simply never suggests auto-ending.
+    return undefined;
+  }
+}
+
+function buildSuccessEvaluationInput(
+  conversation: NonNullable<ReturnType<ConversationRepository["getConversation"]>>,
+  pendingAssistantTranscript: string,
+): SuccessEvaluationInput {
+  const messages = conversation.messages.map((message, turnIndex) => ({
+    turnIndex,
+    role: message.role,
+    text: message.text,
+  }));
+  const lastMessage = conversation.messages.at(-1);
+  if (
+    lastMessage?.role !== "assistant" ||
+    lastMessage.text !== pendingAssistantTranscript
+  ) {
+    messages.push({
+      turnIndex: messages.length,
+      role: "assistant",
+      text: pendingAssistantTranscript,
+    });
+  }
+  return {
+    locale: conversation.locale,
+    scenarioName: conversation.scenarioName,
+    criteria: conversation.scenario.successCriteria,
+    messages,
+  };
 }

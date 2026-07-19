@@ -2,7 +2,7 @@
 
 [English](README.md) | **简体中文**
 
-这是一个采用 React + Node.js/TypeScript、前后端位于同一仓库的可配置实时语音销售对练应用。学员可以选择存储在 SQLite 中的销售场景、兼容的客户角色和训练难度；浏览器随后通过服务端 WebSocket 网关将麦克风音频发送给 Qwen `qwen-audio-3.0-realtime-plus`，在聊天时间线中展示实时转写，并播放所选角色的语音。已经完成的对话文字、实际播放音频和会话启动快照会保存在 SQLite 中，通过响应式历史记录导航展示，并可通过新的 Qwen 连接恢复文字上下文后继续交谈。会话可下载为文字、一段双方轮流说话的 MP3，或同时包含两者的 ZIP。项目还提供响应式管理控制台，用于维护角色和场景，并预览最终发送给模型的 Instructions。
+这是一个采用 React + Node.js/TypeScript、前后端位于同一仓库的可配置实时语音销售对练应用。学员可以选择存储在 SQLite 中的销售场景、兼容的客户角色和训练难度；浏览器随后通过服务端 WebSocket 网关将麦克风音频发送给 Qwen `qwen-audio-3.0-realtime-plus`，在聊天时间线中展示实时转写，并播放所选角色的语音。已经完成的对话文字、实际播放音频和会话启动快照会保存在 SQLite 中。未结束会话可通过新的 Qwen 连接恢复文字上下文后继续交谈；结束后的会话会被锁定，并由 Qwen 文本模型异步生成评分、优缺点、改进建议和关键时刻。会话可下载为文字、一段双方轮流说话的 MP3，或同时包含两者的 ZIP。项目还提供响应式管理控制台，用于维护角色和场景，并预览最终发送给模型的 Instructions。
 
 移动端和桌面端共用同一套响应式 React 组件树。Ant Design 提供标准控件和主题算法，项目 CSS 负责聊天布局、消息气泡、录音浮层和随声音变化的波形效果。
 
@@ -56,6 +56,8 @@
 - [获取 API Key](https://help.aliyun.com/zh/model-studio/get-api-key)
 - [获取 Workspace ID](https://help.aliyun.com/zh/model-studio/obtain-the-app-id-and-workspace-id)
 - [Qwen Audio Realtime 使用指南](https://help.aliyun.com/zh/model-studio/qwen-audio-realtime-user-guides)
+- [Qwen OpenAI 兼容 Chat Completions](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions)
+- [Qwen 结构化 JSON 输出](https://help.aliyun.com/zh/model-studio/qwen-structured-output)
 
 ## 本地启动
 
@@ -76,6 +78,7 @@
    ```dotenv
    DASHSCOPE_API_KEY=sk-ws-...
    DASHSCOPE_WORKSPACE_ID=ws_...
+   DASHSCOPE_FEEDBACK_MODEL=qwen-plus
    ```
 
    SQLite 默认使用两个文件：`data/catalog.sqlite` 保存角色、场景、预设和兼容关系；`data/conversations.sqlite` 保存会话快照与最终消息。可分别通过 `CATALOG_DATABASE_PATH` 和 `CONVERSATION_DATABASE_PATH` 覆盖。相对路径从进程工作目录解析，父目录会自动创建。
@@ -96,7 +99,7 @@
    pnpm dev
    ```
 
-6. 打开 [http://localhost:5173](http://localhost:5173)，选择训练场景、兼容角色和难度，点击 **Start voice practice（开始语音对练）**，并允许浏览器使用麦克风。在宽屏设备上使用左侧历史栏，在较小屏幕上使用页面头部的 Drawer 按钮，即可重新进入并继续历史会话。管理控制台拥有独立地址 [http://localhost:5173/admin](http://localhost:5173/admin)。聊天会话使用 `/chat/:conversationId`，例如 `http://localhost:5173/chat/1`；刷新该地址会重新读取持久化的快照和文字历史，并连接到同一个会话。界面首次使用时默认为英文，可通过右上角语言按钮切换到中文。
+6. 打开 [http://localhost:5173](http://localhost:5173)，选择训练场景、兼容角色和难度，点击 **Start voice practice（开始语音对练）**，并允许浏览器使用麦克风。在宽屏设备上使用左侧历史栏，在较小屏幕上使用页面头部的 Drawer 按钮，即可继续未结束会话或查看已结束会话的复盘。管理控制台拥有独立地址 [http://localhost:5173/admin](http://localhost:5173/admin)。聊天会话使用 `/chat/:conversationId`，结束后的复盘使用 `/feedback/:conversationId`；刷新任一地址都会读取对应的持久化数据。界面首次使用时默认为英文，可通过右上角语言按钮切换到中文。
 
 7. 说话时按住 **Hold to talk（按住说话）**，松开发送；向上滑动至少 72 px 后再松开可取消。如果角色正在说话，按钮会变为 **Hold to interrupt and talk（按住打断并说话）**；按住后会立即停止当前播放、开始上下文修复，并录制下一轮输入。
 
@@ -150,23 +153,27 @@ pnpm smoke:realtime /absolute/path/to/input.pcm --interrupt
 ## 当前功能
 
 - 学员启动页、目录管理和语音聊天使用同一个响应式 Ant Design SPA，同时适配移动端和桌面端；没有独立移动应用或重复组件树
-- 启动页（`/`）、管理控制台（`/admin`）和可刷新恢复的会话（`/chat/:conversationId`）拥有独立浏览器地址
-- 中英文界面，首次使用默认为英文；右上角提供语言切换，Ant Design locale 保持同步，并将 `role-player:locale` 保存到 `localStorage`
-- 支持明暗主题，根据保存值或系统偏好初始化，并可从右上角切换
-- 学员启动页提供可搜索的场景和角色选择、兼容性过滤、Ant Design 简单/中等/困难单选按钮，以及目标、技能重点、角色语音行为和性格摘要
+- 启动页（`/`）、管理控制台（`/admin`）、可刷新恢复的会话（`/chat/:conversationId`）和结束复盘（`/feedback/:conversationId`）拥有独立浏览器地址
+- 固定全局工具栏，左侧显示产品图标、名称和副标题，所有页面提供中英文和明暗主题切换，并在管理控制台以外的页面提供文字形式的管理入口
+- 中英文界面，首次使用默认为英文；Ant Design locale 保持同步，并将 `role-player:locale` 保存到 `localStorage`
+- 支持明暗主题，根据保存值或系统偏好初始化，切换时不会重置当前页面状态
+- 学员启动页提供可搜索的场景和角色选择、兼容性过滤、Ant Design 简单/中等/困难单选按钮，展示目标、技能、成功标准、角色背景、性格、动机和顾虑等备战信息，以及真正完整的 Instructions 预览和 `实际字数/12000` 限制
 - 响应式管理控制台，角色/场景独立编辑，兼容关系单独管理，评分权重由成功标准生成，并提供各自独立的 Instructions 预览
 - 数据库驱动的双语角色预设，以及训练目标、重点技能、成功标准和语气风格等场景预设；客户端不再内置角色/场景业务选项
 - 每个需要本地化的角色/场景字段都独立保存中英文；界面优先显示当前语言，缺失时回退另一语言，管理表单只更新当前编辑语言，不会把回退文字误存为翻译
 - 完整双语的初始角色和场景由 JSON 定义并写入 SQLite；用户填写的内容不会经过机器翻译
 - 角色姓名、年龄、背景和行为备注支持自由输入，编辑历史或自定义角色时会保留不在预设中的现有值
 - 角色负责可复用的人物属性和 Qwen 音色；场景负责情境、目标、技能、成功标准、评分权重，以及可选的语气、说话节奏和插话/挑战倾向
-- 使用确定性的 `compileRolePlayInstructions` 模板，不调用额外大模型将结构化目录字段转换为 Qwen 系统提示词
+- 使用由当前界面/会话语言选择的确定性中英文 `compileRolePlayInstructions` 模板，不调用额外大模型将结构化目录字段转换为 Qwen 系统提示词
 - Instructions 共用 12,000 字符限制，保存兼容关系前会检查所有兼容角色和三个训练难度
 - 启动会话时，将所选角色的 `voice` 以及由角色/场景/难度编译出的 Instructions 快照发送给 Qwen，因此后续目录编辑只影响新会话
 - SQLite 持久化会话历史，包括不可变启动快照、已完成的用户/助手文字、活动时间排序和完整记录重新加载
 - 响应式历史导航：1200 px 及以上显示固定 288 px 左侧栏，更窄屏幕复用 Ant Design Drawer，并提供当前项状态和新建对练入口
 - 通过新的 Qwen WebSocket 恢复文字上下文：Node.js 恢复已保存的 Instructions/voice，并等待最近历史的 `conversation.item.create` 确认后才宣布会话就绪
 - 切换会话、新建对练和结束会话会串行执行，并在断开前等待用户/助手的响应级持久化确认；保存失败会明确报错，不会静默丢弃最后一轮
+- 每次 AI 完整响应后异步执行严格的场景目标检测；只有所有成功标准都有直接对话证据且置信度至少为 0.9 时，才提示用户是否结束，绝不会强制结束会话
+- 结束会话后会锁定新增消息和实时重连，异步复盘任务以待处理/生成中/已完成/失败状态持久化，服务重启后可恢复，失败后可重试
+- 响应式复盘页展示由服务端计算的加权总分、场景评分明细、优点、改进项、可执行建议、会话元数据，以及可复制/下载的完整记录；页面底部支持永久删除本次记录，或使用相同角色、场景和难度“再试一次”；关键时刻数量随有效学员轮次调整，格式或引用错误的可选关键时刻会被舍弃而不会拖垮主体复盘，失败时会明确指出取数、模型连接、内容校验或保存阶段
 - 对话记录固定在底部，展示实时用户/助手草稿、时间戳和已中断标签
 - 当前会话可下载为 UTF-8 文字记录、按消息顺序合并且说话者之间带短暂间隔的一段 MP3，或同时包含两者的 ZIP；导出时通过语音感知的响度归一化平衡麦克风与模型音量，被打断的 AI 不会导出尚未说出的文字和音频后缀
 - 鼠标、触摸、触控笔、空格键和 Enter 键均支持按住录音；松开发送，向上滑动取消
@@ -182,7 +189,7 @@ pnpm smoke:realtime /absolute/path/to/input.pcm --interrupt
 
 ## 持久化状态
 
-新建的目录库和会话库拥有彼此独立的迁移历史，只包含各自领域的表。每一类预设都有独立物理表，角色和场景只引用预设 ID，不再重复保存双语标签。历史合并数据库仍保留迁移 1–16，供 `pnpm database:split` 安全升级并复制旧数据。Schema 迁移只负责结构，业务默认值必须显式初始化。目录 REST API 如下：
+新建的目录库和会话库拥有彼此独立的迁移历史，只包含各自领域的表。每一类预设都有独立物理表，角色和场景只引用预设 ID，不再重复保存双语标签。历史合并数据库仍保留迁移 1–17，供 `pnpm database:split` 安全升级并复制旧数据。Schema 迁移只负责结构，业务默认值必须显式初始化。目录 REST API 如下：
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
@@ -199,11 +206,15 @@ pnpm smoke:realtime /absolute/path/to/input.pcm --interrupt
 | `POST` | `/api/conversations` | 根据角色/场景 ID 读取权威数据、保存双语快照、编译 Instructions，并创建持久化会话 |
 | `GET` | `/api/conversations` | 按最新持久化活动时间列出全部会话 |
 | `GET` | `/api/conversations/:id` | 读取一个不可变启动快照及其有序最终消息 |
+| `POST` | `/api/conversations/:id/end` | 锁定已结算会话并创建异步复盘任务 |
+| `GET` | `/api/conversations/:id/feedback` | 读取复盘状态、结果和对应对话记录 |
+| `POST` | `/api/conversations/:id/feedback/retry` | 重试失败的复盘任务 |
 | `GET` | `/api/conversations/:id/download?format=audio\|text\|both` | 下载单个 MP3、UTF-8 文字记录，或同时包含两者的 ZIP |
+| `DELETE` | `/api/conversations/:id` | 永久删除一个已结束会话及其全部快照、消息/音频和复盘 |
 
 业务默认值只定义在 `src/server/catalog/initial-data/*.json` 中。源码开发通过 `pnpm catalog:init` 安装，构建后通过 `pnpm catalog:init:prod` 安装。初始化器写入双语 Qwen 音色名称、双语预设、三个双语示例角色和三个双语场景；SQLite 自增 ID、稳定初始化键与事务化冲突容忍写入保证重复运行不产生重复数据，也不会覆盖已有记录。
 
-系统会在会话数据库中持久化会话快照、所选难度、编译后的 Instructions、音色、最终转写文字，以及与最终消息对应的 PCM 音频。取消的录音、流式草稿和已生成但用户未听到的 AI 后缀不会保存。功能上线前的纯文字历史仍可下载文字，但无法还原出音频。目前的私有单用户部署暴露一份全局历史记录，尚无会话删除 API 或保留期限任务。完整契约请参阅[目录与提示词编译](docs/CATALOG_AND_PROMPTS.md)和[数据库](docs/DATABASE.md)。
+系统会在会话数据库中持久化会话快照、所选难度、编译后的 Instructions、音色、最终转写文字，以及与最终消息对应的 PCM 音频。取消的录音、流式草稿和已生成但用户未听到的 AI 后缀不会保存。功能上线前的纯文字历史仍可下载文字，但无法还原出音频。用户可以在复盘页永久删除已结束记录；服务端会先取消同一进程中仍在运行的复盘任务，再删除会话，使其快照、消息/音频和复盘一起级联清理。“再试一次”不会恢复或修改旧会话，而是使用旧记录对应的角色 ID、场景 ID 和难度，基于当前目录数据及当前界面语言创建一个全新的会话。目前的私有单用户部署暴露一份全局历史记录，尚无自动保留期限任务。完整契约请参阅[目录与提示词编译](docs/CATALOG_AND_PROMPTS.md)和[数据库](docs/DATABASE.md)。
 
 默认 `data/` 目录已被 Git 忽略。未来采用单容器部署时，必须将该目录挂载为持久化存储；如果将数据库文件放入临时镜像层，容器替换后会丢失目录编辑结果。
 
@@ -215,7 +226,7 @@ pnpm smoke:realtime /absolute/path/to/input.pcm --interrupt
 
 历史会话续聊属于文字上下文重建，并不是恢复旧 Qwen 会话或重放原始音频。它可以恢复转写语义上下文，但不能恢复学员语气或情绪等声音细节。模型目前接收最近 20 个用户轮次，界面则保留完整历史记录。
 
-演示应用尚未实现身份认证/管理权限、按用户区分的历史记录归属、会话删除/保留期限控制、评估持久化、反馈/评分生成、多次传输重试与退避、生产限流、Docker，以及生产环境静态文件服务。
+演示应用尚未实现身份认证/管理权限、按用户区分的历史记录归属、自动保留期限控制、评分规则版本管理、复盘任务自动多次重试与退避、生产限流、Docker，以及生产环境静态文件服务。
 
 当前构建产物已经按以下结构分离：
 

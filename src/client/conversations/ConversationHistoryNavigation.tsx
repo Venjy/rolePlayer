@@ -1,4 +1,5 @@
 import {
+  FileDoneOutlined,
   HistoryOutlined,
   MessageOutlined,
   PlusOutlined,
@@ -74,8 +75,8 @@ function ConversationListContent({
         </Flex>
         <Typography.Text type="secondary">
           {t({
-            en: "Continue any previous role-play",
-            zh: "选择任意会话继续对练",
+            en: "Continue active sessions or review completed ones",
+            zh: "继续未结束的对练，或查看已完成的复盘",
           })}
         </Typography.Text>
       </div>
@@ -151,7 +152,11 @@ function ConversationListContent({
                   >
                     <span className={styles.itemTopline}>
                       <span className={styles.personaName}>
-                        <MessageOutlined aria-hidden="true" />
+                        {conversation.status === "ended" ? (
+                          <FileDoneOutlined aria-hidden="true" />
+                        ) : (
+                          <MessageOutlined aria-hidden="true" />
+                        )}
                         <span>{conversation.personaName}</span>
                       </span>
                       <span className={styles.date}>
@@ -163,6 +168,13 @@ function ConversationListContent({
                       <Tag bordered={false}>
                         {t(DIFFICULTY_LABELS[conversation.difficulty])}
                       </Tag>
+                      {conversation.status === "ended" && (
+                        <Tag bordered={false} color="success">
+                          {conversation.feedbackStatus === "completed"
+                            ? t({ en: "Feedback ready", zh: "复盘已生成" })
+                            : t({ en: "Ended", zh: "已结束" })}
+                        </Tag>
+                      )}
                     </span>
                     <span className={styles.preview}>
                       {conversation.lastMessagePreview ??

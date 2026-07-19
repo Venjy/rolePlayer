@@ -6,6 +6,10 @@ import {
   type ConversationList,
   type CreateConversationInput,
 } from "../../shared/conversation-history";
+import {
+  conversationFeedbackViewSchema,
+  type ConversationFeedbackView,
+} from "../../shared/conversation-feedback";
 
 interface ApiErrorBody {
   message?: string;
@@ -16,12 +20,13 @@ async function requestJson<T>(
   init: RequestInit,
   parse: (value: unknown) => T,
 ): Promise<T> {
+  const headers = new Headers(init.headers);
+  if (init.body !== undefined && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   const response = await fetch(path, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...init.headers,
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -65,6 +70,51 @@ export function fetchConversation(
     `/api/conversations/${encodeURIComponent(id)}`,
     { method: "GET", signal },
     (value) => conversationDetailSchema.parse(value),
+  );
+}
+
+export async function deleteConversation(id: number): Promise<void> {
+  const response = await fetch(
+    `/api/conversations/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+  if (response.ok) return;
+
+  let body: ApiErrorBody | undefined;
+  try {
+    body = (await response.json()) as ApiErrorBody;
+  } catch {
+    // Preserve the HTTP status when the response has no JSON body.
+  }
+  throw new Error(body?.message ?? `Request failed with HTTP ${response.status}.`);
+}
+
+export function endConversation(id: number): Promise<ConversationFeedbackView> {
+  return requestJson(
+    `/api/conversations/${encodeURIComponent(id)}/end`,
+    { method: "POST" },
+    (value) => conversationFeedbackViewSchema.parse(value),
+  );
+}
+
+export function fetchConversationFeedback(
+  id: number,
+  signal?: AbortSignal,
+): Promise<ConversationFeedbackView> {
+  return requestJson(
+    `/api/conversations/${encodeURIComponent(id)}/feedback`,
+    { method: "GET", signal },
+    (value) => conversationFeedbackViewSchema.parse(value),
+  );
+}
+
+export function retryConversationFeedback(
+  id: number,
+): Promise<ConversationFeedbackView> {
+  return requestJson(
+    `/api/conversations/${encodeURIComponent(id)}/feedback/retry`,
+    { method: "POST" },
+    (value) => conversationFeedbackViewSchema.parse(value),
   );
 }
 

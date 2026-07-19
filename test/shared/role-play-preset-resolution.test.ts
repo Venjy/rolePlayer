@@ -50,8 +50,8 @@ describe("preset reference resolution", () => {
 
     expect(english.personalityTraits).toEqual(["Impatient"]);
     expect(chinese.personalityTraits).toEqual(["缺乏耐心"]);
-    expect(compilePersonaInstructions(english)).toContain("- Impatient");
-    expect(compilePersonaInstructions(chinese)).toContain("- 缺乏耐心");
+    expect(compilePersonaInstructions(english, "en")).toContain("- Impatient");
+    expect(compilePersonaInstructions(chinese, "zh")).toContain("- 缺乏耐心");
   });
 
   it("rejects a missing or wrong-category preset reference", () => {

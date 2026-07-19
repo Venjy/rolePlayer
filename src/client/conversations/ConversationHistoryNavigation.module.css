@@ -1,7 +1,7 @@
 .desktopNavigation {
   display: none;
   min-width: 0;
-  height: 100dvh;
+  height: 100%;
   overflow: hidden;
   border-right: 1px solid var(--header-border);
   background: var(--chat-surface);

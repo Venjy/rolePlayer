@@ -49,6 +49,21 @@ const qwenEnvSchema = z
     }
   });
 
+const feedbackEnvSchema = z.object({
+  DASHSCOPE_API_KEY: z.string().trim().min(1),
+  DASHSCOPE_FEEDBACK_URL: z
+    .string()
+    .url()
+    .default("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"),
+  DASHSCOPE_FEEDBACK_MODEL: z.string().trim().min(1).default("qwen-plus"),
+  DASHSCOPE_FEEDBACK_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(300_000)
+    .default(60_000),
+});
+
 export type QwenConfig = ReturnType<typeof getQwenConfig>;
 
 export function getServerConfig() {
@@ -88,4 +103,32 @@ export function getQwenConfig() {
 
 export function hasQwenConfig(): boolean {
   return qwenEnvSchema.safeParse(process.env).success;
+}
+
+export type FeedbackConfig = ReturnType<typeof getFeedbackConfig>;
+
+/**
+ * Feedback is optional at process startup. This getter is called only when a
+ * completed conversation needs coaching feedback, so realtime voice remains
+ * usable even when the text-model configuration has not been supplied yet.
+ */
+export function getFeedbackConfig() {
+  const parsed = feedbackEnvSchema.safeParse(process.env);
+  if (!parsed.success) {
+    const details = parsed.error.issues
+      .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+      .join("; ");
+    throw new Error(`Feedback model configuration is incomplete. ${details}`);
+  }
+
+  return {
+    apiKey: parsed.data.DASHSCOPE_API_KEY,
+    endpoint: parsed.data.DASHSCOPE_FEEDBACK_URL,
+    model: parsed.data.DASHSCOPE_FEEDBACK_MODEL,
+    timeoutMs: parsed.data.DASHSCOPE_FEEDBACK_TIMEOUT_MS,
+  };
+}
+
+export function hasFeedbackConfig(): boolean {
+  return feedbackEnvSchema.safeParse(process.env).success;
 }

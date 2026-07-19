@@ -519,6 +519,7 @@ export class CatalogRepository {
       const issue = findRolePlayInstructionsLengthIssue({
         persona: localizedPersona,
         scenario: localizedScenario,
+        locale,
       });
       if (issue) {
         throw new RolePlayInstructionsTooLongError(

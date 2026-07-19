@@ -2,6 +2,7 @@ export type AppRoute =
   | { page: "home" }
   | { page: "admin" }
   | { page: "chat"; conversationId: number }
+  | { page: "feedback"; conversationId: number }
   | { page: "not_found" };
 
 export const HOME_ROUTE = { page: "home" } as const satisfies AppRoute;
@@ -31,11 +32,14 @@ export function parseAppRoute(pathname: string): AppRoute {
   if (pathname === "/" || pathname === "") return HOME_ROUTE;
   if (pathname === "/admin" || pathname === "/admin/") return ADMIN_ROUTE;
 
-  const chatMatch = /^\/chat\/([1-9]\d*)\/?$/.exec(pathname);
-  if (chatMatch?.[1]) {
-    const conversationId = Number(chatMatch[1]);
+  const conversationMatch = /^\/(chat|feedback)\/([1-9]\d*)\/?$/.exec(pathname);
+  if (conversationMatch?.[1] && conversationMatch[2]) {
+    const conversationId = Number(conversationMatch[2]);
     if (Number.isSafeInteger(conversationId)) {
-      return { page: "chat", conversationId };
+      return {
+        page: conversationMatch[1] === "chat" ? "chat" : "feedback",
+        conversationId,
+      };
     }
   }
 
@@ -50,5 +54,7 @@ export function appRoutePath(route: Exclude<AppRoute, { page: "not_found" }>): s
       return "/admin";
     case "chat":
       return `/chat/${route.conversationId}`;
+    case "feedback":
+      return `/feedback/${route.conversationId}`;
   }
 }

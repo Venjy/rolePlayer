@@ -36,6 +36,21 @@ const CONVERSATION_TABLES: readonly TableCopyMapping[] = [
   },
   { source: "conversation_scenario_personas", target: "scenario_personas" },
   { source: "conversation_messages", target: "messages" },
+  { source: "conversation_feedback_reports", target: "feedback_reports" },
+  { source: "conversation_feedback_strengths", target: "feedback_strengths" },
+  {
+    source: "conversation_feedback_improvement_areas",
+    target: "feedback_improvement_areas",
+  },
+  {
+    source: "conversation_feedback_coaching_tips",
+    target: "feedback_coaching_tips",
+  },
+  {
+    source: "conversation_feedback_criterion_scores",
+    target: "feedback_criterion_scores",
+  },
+  { source: "conversation_feedback_moments", target: "feedback_moments" },
 ] as const;
 
 export interface SplitLegacyDatabaseOptions {
@@ -53,7 +68,7 @@ export interface SplitLegacyDatabaseResult {
 }
 
 /**
- * Copies the normalized version-16 one-file schema into two fresh databases.
+ * Copies the normalized version-17 one-file schema into two fresh databases.
  * Existing target files are never merged or overwritten.
  */
 export function splitLegacyDatabase(

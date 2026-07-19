@@ -1,4 +1,5 @@
 import {
+  AimOutlined,
   AudioFilled,
   AudioMutedOutlined,
   CustomerServiceOutlined,
@@ -21,10 +22,12 @@ import {
   Empty,
   Flex,
   message as antMessage,
+  Modal,
   Popconfirm,
   Popover,
   Slider,
   Spin,
+  Tag,
   theme as antdTheme,
   Tooltip,
   Typography,
@@ -56,8 +59,10 @@ import { useRolePlayCatalog } from "./catalog/use-role-play-catalog";
 import { ConversationMessage } from "./components/ConversationMessage";
 import { VoiceWaveform } from "./components/VoiceWaveform";
 import {
+  ConversationFeedbackPage,
   ConversationHistoryNavigation,
   downloadConversation,
+  endConversation,
   useConversationHistory,
 } from "./conversations";
 import {
@@ -289,6 +294,10 @@ const SERVER_ERROR_LABELS: Readonly<Record<string, LocalizedText>> = {
     en: "The selected conversation no longer exists.",
     zh: "所选历史会话已不存在。",
   },
+  CONVERSATION_ENDED: {
+    en: "This conversation has ended. Open its feedback instead.",
+    zh: "该会话已结束，请查看会话复盘。",
+  },
   UPSTREAM_CLOSED: {
     en: "The Qwen connection closed unexpectedly.",
     zh: "Qwen 连接意外关闭。",
@@ -487,6 +496,8 @@ export function App() {
   >(null);
   const [historyMobileOpen, setHistoryMobileOpen] = useState(false);
   const [downloadInProgress, setDownloadInProgress] = useState(false);
+  const [successSuggestionResponseId, setSuccessSuggestionResponseId] =
+    useState<string | null>(null);
 
   const realtimeRef = useRef<RealtimeClient | undefined>(undefined);
   const audioRef = useRef<BrowserAudioEngine | undefined>(undefined);
@@ -1043,6 +1054,10 @@ export function App() {
           break;
         }
 
+        case "scenario.success.detected":
+          setSuccessSuggestionResponseId(message.responseId);
+          break;
+
         case "response.persisted": {
           const runtime = assistantResponsesRef.current.get(message.responseId);
           const transcript = (
@@ -1319,6 +1334,7 @@ export function App() {
     };
 
     setActiveSessionConfig(sessionConfig);
+    setSuccessSuggestionResponseId(null);
     activeConversationIdRef.current = conversation.id;
     setActiveConversationId(conversation.id);
     setErrorMessage(null);
@@ -1647,6 +1663,61 @@ export function App() {
     }
   };
 
+  const tryConversationAgain = async (
+    source: ConversationDetail,
+  ): Promise<void> => {
+    if (transitionInProgressRef.current) {
+      throw new Error(t({
+        en: "Another conversation action is still in progress.",
+        zh: "另一项会话操作仍在进行中。",
+      }));
+    }
+
+    transitionInProgressRef.current = true;
+    setIsStarting(true);
+    setErrorMessage(null);
+    messageApi.destroy(SESSION_ERROR_MESSAGE_KEY);
+    try {
+      const conversation = await conversationHistory.create({
+        personaId: source.persona.id,
+        scenarioId: source.scenario.id,
+        difficulty: source.difficulty,
+        locale,
+      });
+      await activateConversation(conversation);
+      navigate({ page: "chat", conversationId: conversation.id });
+    } finally {
+      transitionInProgressRef.current = false;
+      setIsStarting(false);
+      runPendingRuntimeRecoveryRef.current();
+      synchronizeRequestedRouteRef.current();
+    }
+  };
+
+  const deleteReviewedConversation = async (
+    conversationId: number,
+  ): Promise<void> => {
+    if (transitionInProgressRef.current) {
+      throw new Error(t({
+        en: "Another conversation action is still in progress.",
+        zh: "另一项会话操作仍在进行中。",
+      }));
+    }
+
+    transitionInProgressRef.current = true;
+    setIsStarting(true);
+    try {
+      await conversationHistory.remove(conversationId);
+      setTurns([]);
+      setErrorMessage(null);
+      navigate(HOME_ROUTE, { replace: true });
+    } finally {
+      transitionInProgressRef.current = false;
+      setIsStarting(false);
+      synchronizeRequestedRouteRef.current();
+    }
+  };
+
   const resumeConversation = async (
     conversationId: number,
     synchronizeUrl = true,
@@ -1668,6 +1739,13 @@ export function App() {
         await teardownSessionRuntime();
       }
       const conversation = await conversationHistory.load(conversationId);
+      if (conversation.status === "ended") {
+        navigate(
+          { page: "feedback", conversationId: conversation.id },
+          synchronizeUrl ? undefined : { replace: true },
+        );
+        return;
+      }
       await activateConversation(conversation);
       if (synchronizeUrl) {
         navigate({ page: "chat", conversationId: conversation.id });
@@ -1956,22 +2034,29 @@ export function App() {
 
   const endSession = async () => {
     if (transitionInProgressRef.current) return;
+    const conversationId = activeConversationIdRef.current;
+    if (!conversationId) return;
     transitionInProgressRef.current = true;
     setIsStarting(true);
+    let durablyEnded = false;
     try {
       await pressToTalk.cancelActiveGesture();
       await submissionCompletionRef.current;
       if (recordingRef.current) await cancelRecording();
       await settleSessionBeforeTransition();
+      await endConversation(conversationId);
+      durablyEnded = true;
       await teardownSessionRuntime();
       await refreshConversationHistorySilently();
-      navigate(HOME_ROUTE);
+      navigate({ page: "feedback", conversationId });
     } catch (error) {
       reportContextualError(readableError(error));
-      const currentConversationId = activeConversationIdRef.current;
-      if (conversationStartedRef.current && currentConversationId !== null) {
+      if (durablyEnded) {
+        await teardownSessionRuntime().catch(() => undefined);
+        navigate({ page: "feedback", conversationId }, { replace: true });
+      } else if (conversationStartedRef.current) {
         navigate(
-          { page: "chat", conversationId: currentConversationId },
+          { page: "chat", conversationId },
           { replace: true },
         );
       }
@@ -2001,6 +2086,16 @@ export function App() {
           return;
         }
         void resumeConversation(requestedRoute.conversationId, false);
+        return;
+      }
+
+      if (requestedRoute.page === "feedback") {
+        if (
+          activeConversationIdRef.current !== null ||
+          conversationStartedRef.current
+        ) {
+          void showNewConversation(false);
+        }
         return;
       }
 
@@ -2098,11 +2193,16 @@ export function App() {
     : t({ en: "Switch to dark theme", zh: "切换到深色主题" });
   const restoringConversationRoute =
     route.page === "chat" && !sessionActive && !sessionUiPreview;
+  const displayedConversationId =
+    route.page === "feedback" ? route.conversationId : activeConversationId;
   const activeConversationSummary = conversationHistory.conversations.find(
     ({ id }) => id === activeConversationId,
   );
   const activeConversationHasAudio =
     activeConversationSummary?.audioAvailable === true;
+  const activeConversationHasMessages =
+    (activeConversationSummary?.messageCount ?? 0) > 0;
+  const activeScenarioGoals = activeSessionConfig?.scenario.goals ?? [];
   const missingAudioMessageCount = activeConversationSummary
     ? activeConversationSummary.messageCount -
       activeConversationSummary.audioMessageCount
@@ -2215,6 +2315,63 @@ export function App() {
     >
       <AntApp className="application-root">
         {messageContextHolder}
+        <header className="global-utility-header">
+          <button
+            type="button"
+            className="global-brand"
+            disabled={isStarting}
+            aria-label={t({ en: "Return to home", zh: "返回首页" })}
+            onClick={() => navigate(HOME_ROUTE)}
+          >
+            <Avatar icon={<CustomerServiceOutlined />} />
+            <div className="global-brand-copy">
+              <Typography.Text strong>AI Role Player</Typography.Text>
+              <Typography.Text className="global-brand-subtitle" type="secondary">
+                {t({ en: "Sales practice training", zh: "销售实战训练" })}
+              </Typography.Text>
+            </div>
+          </button>
+          <Flex align="center" gap={4} className="global-utility-actions">
+            {route.page !== "admin" && (
+              <Button
+                className="global-admin-button"
+                disabled={isStarting}
+                onClick={() => navigate(ADMIN_ROUTE)}
+              >
+                {t({ en: "Admin Console", zh: "管理控制台" })}
+              </Button>
+            )}
+            <span className="global-language-toggle">
+              <LanguageToggleButton />
+            </span>
+            {themeButton}
+          </Flex>
+        </header>
+        <Modal
+          open={sessionActive && successSuggestionResponseId !== null}
+          title={t({
+            en: "Scenario goals achieved",
+            zh: "场景目标已达成",
+          })}
+          okText={t({ en: "End and review", zh: "结束并查看复盘" })}
+          cancelText={t({ en: "Keep practicing", zh: "继续对练" })}
+          okButtonProps={{ danger: true }}
+          closable={false}
+          maskClosable={false}
+          onCancel={() => setSuccessSuggestionResponseId(null)}
+          onOk={async () => {
+            await endSession();
+            setSuccessSuggestionResponseId(null);
+          }}
+        >
+          <Typography.Paragraph>
+            {t({
+              en: "AI detected clear evidence that every success criterion for this scenario has been completed. Would you like to end the conversation now?",
+              zh: "AI 检测到当前场景的每一项成功标准都已有明确完成证据。是否现在结束对话？",
+            })}
+          </Typography.Paragraph>
+        </Modal>
+        <div className="application-content">
         {!sessionActive && route.page === "admin" ? (
           <AdminConsole
             catalog={rolePlayCatalog.catalog}
@@ -2224,7 +2381,6 @@ export function App() {
               rolePlayCatalog.loadError ??
               undefined
             }
-            themeButton={themeButton}
             onExit={() => navigate(HOME_ROUTE)}
             onCreatePersona={rolePlayCatalog.createPersona}
             onUpdatePersona={rolePlayCatalog.updatePersona}
@@ -2237,7 +2393,7 @@ export function App() {
           <div className="learner-workspace">
             <ConversationHistoryNavigation
               conversations={conversationHistory.conversations}
-              activeConversationId={activeConversationId}
+              activeConversationId={displayedConversationId}
               loading={conversationHistory.loading}
               busy={conversationHistory.busy || isStarting}
               error={conversationHistory.error}
@@ -2250,7 +2406,35 @@ export function App() {
             <div
               className={`learner-workspace-main${sessionActive ? " has-active-session" : ""}`}
             >
-              {restoringConversationRoute ? (
+              {!sessionActive && route.page === "feedback" ? (
+                <ConversationFeedbackPage
+                  key={route.conversationId}
+                  conversationId={route.conversationId}
+                  historyButton={
+                    <Tooltip
+                      title={t({
+                        en: "Open conversation history",
+                        zh: "打开历史会话",
+                      })}
+                    >
+                      <Button
+                        className="mobile-history-trigger"
+                        type="text"
+                        shape="circle"
+                        icon={<HistoryOutlined />}
+                        aria-label={t({
+                          en: "Open conversation history",
+                          zh: "打开历史会话",
+                        })}
+                        onClick={() => setHistoryMobileOpen(true)}
+                      />
+                    </Tooltip>
+                  }
+                  onFeedbackSettled={refreshConversationHistorySilently}
+                  onDeleteConversation={deleteReviewedConversation}
+                  onTryAgain={tryConversationAgain}
+                />
+              ) : restoringConversationRoute ? (
                 <main className="route-loading-state" aria-busy="true">
                   <Spin size="large" />
                   <Typography.Text type="secondary">
@@ -2297,9 +2481,8 @@ export function App() {
                         })}
                         onClick={() => setHistoryMobileOpen(true)}
                       />
-                    </Tooltip>
+                      </Tooltip>
                   }
-                  themeButton={themeButton}
                   onOpenAdmin={() => navigate(ADMIN_ROUTE)}
                 />
               ) : (
@@ -2368,28 +2551,42 @@ export function App() {
                   </Tooltip>
                 </Popover>
                 <Tooltip
-                  title={t({
-                    en: "Download conversation",
-                    zh: "下载会话",
-                  })}
-                >
-                  <Dropdown
-                    menu={downloadMenu}
-                    trigger={["click"]}
-                    disabled={!activeConversationId || downloadInProgress}
-                    placement="bottomRight"
-                  >
-                    <Button
-                      type="text"
-                      shape="circle"
-                      loading={downloadInProgress}
-                      icon={<DownloadOutlined />}
-                      aria-label={t({
+                  title={activeConversationHasMessages
+                    ? t({
                         en: "Download conversation",
                         zh: "下载会话",
+                      })
+                    : t({
+                        en: "There are no completed messages to download yet",
+                        zh: "还没有可下载的已完成对话",
                       })}
-                    />
-                  </Dropdown>
+                >
+                  <span className="disabled-tooltip-anchor">
+                    <Dropdown
+                      menu={downloadMenu}
+                      trigger={["click"]}
+                      disabled={
+                        !activeConversationId ||
+                        !activeConversationHasMessages ||
+                        downloadInProgress
+                      }
+                      placement="bottomRight"
+                    >
+                      <Button
+                        type="text"
+                        shape="circle"
+                        loading={downloadInProgress}
+                        disabled={
+                          !activeConversationId || !activeConversationHasMessages
+                        }
+                        icon={<DownloadOutlined />}
+                        aria-label={t({
+                          en: "Download conversation",
+                          zh: "下载会话",
+                        })}
+                      />
+                    </Dropdown>
+                  </span>
                 </Tooltip>
                 <Popconfirm
                   title={t({
@@ -2397,8 +2594,8 @@ export function App() {
                     zh: "结束本次对练？",
                   })}
                   description={t({
-                    en: "The current realtime connection will be closed.",
-                    zh: "当前实时连接会被关闭。",
+                    en: "This session cannot be continued after ending. Coaching feedback will be generated next.",
+                    zh: "结束后将无法继续本次会话，系统随后会生成对练复盘。",
                   })}
                   okText={t({ en: "End", zh: "结束" })}
                   cancelText={t({ en: "Keep practicing", zh: "继续对练" })}
@@ -2415,12 +2612,27 @@ export function App() {
                     />
                   </Tooltip>
                 </Popconfirm>
-                <span className="header-language-toggle">
-                  <LanguageToggleButton />
-                </span>
-                {themeButton}
               </Flex>
             </header>
+
+            {activeScenarioGoals.length > 0 && (
+              <section
+                className="chat-goals"
+                aria-label={t({ en: "Goals", zh: "本次目标" })}
+              >
+                <Typography.Text className="chat-goals-label" type="secondary">
+                  <AimOutlined aria-hidden="true" />
+                  {t({ en: "Goals", zh: "本次目标" })}
+                </Typography.Text>
+                <Flex className="chat-goals-list" wrap gap={6}>
+                  {activeScenarioGoals.map((goal, index) => (
+                    <Tag color="green" key={`${index}:${goal}`}>
+                      {goal}
+                    </Tag>
+                  ))}
+                </Flex>
+              </section>
+            )}
 
             <section
               className="conversation-viewport"
@@ -2537,6 +2749,7 @@ export function App() {
             </div>
           </div>
         )}
+        </div>
       </AntApp>
     </ConfigProvider>
   );

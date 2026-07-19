@@ -5,6 +5,7 @@ import {
   moveCatalogVoiceBehaviorToScenarios,
   moveCombinedConversationVoiceBehaviorToScenarioSnapshots,
 } from "./scenario-voice-behavior-migration";
+import { createCombinedConversationFeedbackSchema } from "./conversation-feedback-migration";
 
 /**
  * A migration is immutable after it has reached a deployed environment.
@@ -1504,6 +1505,11 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
       moveCatalogVoiceBehaviorToScenarios(database);
       moveCombinedConversationVoiceBehaviorToScenarioSnapshots(database);
     },
+  },
+  {
+    version: 17,
+    name: "create_conversation_feedback",
+    up: createCombinedConversationFeedbackSchema,
   },
 ];
 

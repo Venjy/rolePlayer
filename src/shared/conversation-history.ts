@@ -11,6 +11,7 @@ const requiredText = (maximum: number) =>
 
 export const conversationLocaleSchema = z.enum(["en", "zh"]);
 export const conversationMessageRoleSchema = z.enum(["user", "assistant"]);
+export const conversationStatusSchema = z.enum(["active", "ended"]);
 export const conversationDownloadFormatSchema = z.enum([
   "audio",
   "text",
@@ -52,6 +53,11 @@ export const conversationSummarySchema = z.object({
   scenarioName: requiredText(120),
   difficulty: difficultySchema,
   locale: conversationLocaleSchema,
+  status: conversationStatusSchema,
+  endedAt: z.string().datetime({ offset: true }).nullable(),
+  feedbackStatus: z
+    .enum(["pending", "processing", "completed", "failed"])
+    .nullable(),
   messageCount: z.number().int().min(0),
   audioMessageCount: z.number().int().min(0),
   audioAvailable: z.boolean(),

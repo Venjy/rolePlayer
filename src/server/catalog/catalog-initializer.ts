@@ -620,6 +620,7 @@ function validateStarterInstructions(
         const issue = findRolePlayInstructionsLengthIssue({
           persona: localizePersonaInput(resolvedPersona, locale),
           scenario: localizeScenarioInput(resolvedScenario, locale),
+          locale,
         });
         if (issue) {
           throw new CatalogInitializationInstructionsTooLongError(

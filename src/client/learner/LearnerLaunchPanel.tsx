@@ -1,18 +1,21 @@
 import {
   AimOutlined,
-  AudioOutlined,
   BulbOutlined,
+  CheckCircleOutlined,
   CustomerServiceOutlined,
+  MessageOutlined,
   PlayCircleFilled,
+  ProfileOutlined,
+  RiseOutlined,
   SettingOutlined,
   UserOutlined,
+  WarningOutlined,
 } from "@ant-design/icons";
 import {
   Alert,
   Avatar,
   Button,
   Card,
-  Descriptions,
   Empty,
   Flex,
   Radio,
@@ -26,17 +29,13 @@ import { useMemo, type ReactNode } from "react";
 import type {
   Difficulty,
   Persona,
-  QwenVoiceDefinition,
   RolePlayCatalog,
   Scenario,
 } from "../../shared/role-play-catalog";
+import { MAX_REALTIME_INSTRUCTIONS_LENGTH } from "../../shared/realtime-protocol";
+import { compileRolePlayInstructions } from "../../shared/role-play-instructions";
 import { localizeCatalog } from "../catalog/catalog-localization";
-import { getVoiceLabel } from "../catalog/qwen-voice-options";
-import {
-  LanguageToggleButton,
-  useI18n,
-  type LocalizedText,
-} from "../i18n";
+import { useI18n, type LocalizedText } from "../i18n";
 import styles from "./LearnerLaunchPanel.module.css";
 
 const { Paragraph, Text, Title } = Typography;
@@ -69,27 +68,6 @@ const GENDER_LABELS: Record<Persona["gender"], LocalizedText> = {
   unspecified: { en: "Not specified", zh: "未指定" },
 };
 
-const PACE_LABELS: Record<
-  NonNullable<Scenario["voiceBehavior"]["speakingPace"]>,
-  LocalizedText
-> = {
-  slow: { en: "Slower", zh: "偏慢" },
-  normal: { en: "Natural", zh: "自然" },
-  fast: { en: "Faster", zh: "偏快" },
-};
-
-const INTERRUPT_LABELS: Record<
-  NonNullable<Scenario["voiceBehavior"]["interruptFrequency"]>,
-  LocalizedText
-> = {
-  low: { en: "Patient, with few challenges", zh: "耐心，较少挑战" },
-  medium: { en: "Occasional brief interjections", zh: "偶尔简短插话" },
-  high: {
-    en: "Frequent, rapid challenges (during the role's responses only)",
-    zh: "频繁、快速挑战（仅在角色回应时）",
-  },
-};
-
 export interface LearnerLaunchPanelProps {
   catalog: RolePlayCatalog | null;
   loading: boolean;
@@ -104,7 +82,6 @@ export interface LearnerLaunchPanelProps {
   isStarting: boolean;
   startDisabled?: boolean;
   historyButton: ReactNode;
-  themeButton: ReactNode;
   onOpenAdmin: () => void;
 }
 
@@ -136,6 +113,53 @@ function SummaryTags({
           </Tag>
         ))}
       </Flex>
+    </section>
+  );
+}
+
+interface SummaryTextProps {
+  icon: ReactNode;
+  label: string;
+  value: string;
+}
+
+function SummaryText({ icon, label, value }: SummaryTextProps) {
+  if (!value.trim()) return null;
+
+  return (
+    <section className={styles.summarySection} aria-label={label}>
+      <Text className={styles.summaryLabel} type="secondary">
+        {icon}
+        {label}
+      </Text>
+      <Paragraph className={styles.summaryValue}>{value}</Paragraph>
+    </section>
+  );
+}
+
+interface SummaryListProps {
+  icon: ReactNode;
+  label: string;
+  values: readonly string[];
+}
+
+function SummaryList({ icon, label, values }: SummaryListProps) {
+  if (values.length === 0) return null;
+
+  return (
+    <section className={styles.summarySection} aria-label={label}>
+      <Text className={styles.summaryLabel} type="secondary">
+        {icon}
+        {label}
+      </Text>
+      <ul className={styles.summaryList}>
+        {values.map((value, index) => (
+          <li key={`${index}:${value}`}>
+            <CheckCircleOutlined aria-hidden="true" />
+            <span>{value}</span>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
@@ -173,47 +197,75 @@ function ScenarioSummary({ scenario }: ScenarioSummaryProps) {
         values={scenario.suggestedSkillFocus}
         color="blue"
       />
-      <Descriptions
-        className={styles.compactDescriptions}
-        column={1}
-        size="small"
-        items={[
-          ...(scenario.toneStyle
-            ? [{
-                key: "tone",
-                label: t({ en: "Tone", zh: "语气" }),
-                children: scenario.toneStyle,
-              }]
-            : []),
-          ...(scenario.voiceBehavior.speakingPace
-            ? [{
-                key: "pace",
-                label: t({ en: "Pace", zh: "语速" }),
-                children: t(PACE_LABELS[scenario.voiceBehavior.speakingPace]),
-              }]
-            : []),
-          ...(scenario.voiceBehavior.interruptFrequency
-            ? [{
-                key: "interruptions",
-                label: t({ en: "Challenges", zh: "插话 / 挑战" }),
-                children: t(
-                  INTERRUPT_LABELS[scenario.voiceBehavior.interruptFrequency],
-                ),
-              }]
-            : []),
-        ]}
+      <SummaryList
+        icon={<CheckCircleOutlined />}
+        label={t({ en: "Success looks like", zh: "达成标准" })}
+        values={scenario.successCriteria}
       />
     </Card>
   );
 }
 
-interface PersonaSummaryProps {
-  persona: Persona;
-  qwenVoices: readonly QwenVoiceDefinition[];
+interface InstructionsPreviewProps {
+  instructions: string;
+  tooLong: boolean;
 }
 
-function PersonaSummary({ persona, qwenVoices }: PersonaSummaryProps) {
-  const { locale, t } = useI18n();
+function InstructionsPreview({
+  instructions,
+  tooLong,
+}: InstructionsPreviewProps) {
+  const { t } = useI18n();
+
+  return (
+    <section
+      className={styles.instructionsSection}
+      aria-label={t({
+        en: "Model Instructions preview",
+        zh: "模型 Instructions 预览",
+      })}
+    >
+      {tooLong && (
+        <Alert
+          className={styles.instructionsAlert}
+          type="error"
+          showIcon
+          title={t({
+            en: "The Instructions exceed the Qwen realtime session limit",
+            zh: "Instructions 超出 Qwen 实时会话长度限制",
+          })}
+          description={t({
+            en: "Shorten the selected scenario or customer role before starting this role-play.",
+            zh: "请先缩短所选场景或客户角色的配置，再开始对练。",
+          })}
+        />
+      )}
+      <Card
+        size="small"
+        title={
+          <Flex align="center" justify="space-between" gap={12}>
+            <Text strong copyable={{ text: instructions }}>
+              {t({
+                en: "Model Instructions preview",
+                zh: "模型 Instructions 预览",
+              })}
+            </Text>
+            <Tag color={tooLong ? "error" : "default"}>
+              {instructions.length}/{MAX_REALTIME_INSTRUCTIONS_LENGTH}
+            </Tag>
+          </Flex>
+        }
+      >
+        <Paragraph className={styles.instructionsPreview}>
+          {instructions}
+        </Paragraph>
+      </Card>
+    </section>
+  );
+}
+
+function PersonaSummary({ persona }: { persona: Persona }) {
+  const { t } = useI18n();
   const basicDetails = [
     t(GENDER_LABELS[persona.gender]),
     persona.age === null
@@ -242,6 +294,12 @@ function PersonaSummary({ persona, qwenVoices }: PersonaSummaryProps) {
 
       <Paragraph className={styles.identity}>{persona.occupation}</Paragraph>
 
+      <SummaryText
+        icon={<ProfileOutlined />}
+        label={t({ en: "Background", zh: "角色背景" })}
+        value={persona.background}
+      />
+
       <SummaryTags
         icon={<UserOutlined />}
         label={t({ en: "Personality traits", zh: "性格特点" })}
@@ -249,36 +307,22 @@ function PersonaSummary({ persona, qwenVoices }: PersonaSummaryProps) {
         color="purple"
       />
 
-      <Descriptions
-        className={styles.compactDescriptions}
-        column={1}
-        size="small"
-        items={[
-          {
-            key: "communication",
-            label: t({ en: "Communication", zh: "沟通方式" }),
-            children: persona.communicationStyle,
-          },
-          ...(persona.behaviorNotes
-            ? [
-                {
-                  key: "behavior",
-                  label: t({ en: "Behavior", zh: "行为设定" }),
-                  children: persona.behaviorNotes,
-                },
-              ]
-            : []),
-          {
-            key: "voice",
-            label: t({ en: "Voice", zh: "音色" }),
-            children: (
-              <Space size={6}>
-                <AudioOutlined />
-                <span>{getVoiceLabel(persona.voice, qwenVoices, locale)}</span>
-              </Space>
-            ),
-          },
-        ]}
+      <SummaryText
+        icon={<MessageOutlined />}
+        label={t({ en: "Communication style", zh: "沟通方式" })}
+        value={persona.communicationStyle}
+      />
+      <SummaryTags
+        icon={<RiseOutlined />}
+        label={t({ en: "What matters to them", zh: "角色动机" })}
+        values={persona.motivations}
+        color="green"
+      />
+      <SummaryTags
+        icon={<WarningOutlined />}
+        label={t({ en: "Likely concerns", zh: "可能的顾虑与异议" })}
+        values={persona.concerns}
+        color="orange"
       />
     </Card>
   );
@@ -298,7 +342,6 @@ export function LearnerLaunchPanel({
   isStarting,
   startDisabled = false,
   historyButton,
-  themeButton,
   onOpenAdmin,
 }: LearnerLaunchPanelProps) {
   const { locale, t } = useI18n();
@@ -317,6 +360,16 @@ export function LearnerLaunchPanel({
     : [];
   const selectedPersona =
     compatiblePersonas.find(({ id }) => id === selectedPersonaId) ?? null;
+  const instructions = selectedScenario && selectedPersona
+    ? compileRolePlayInstructions({
+        persona: selectedPersona,
+        scenario: selectedScenario,
+        difficulty,
+        locale,
+      })
+    : "";
+  const instructionsTooLong =
+    instructions.length > MAX_REALTIME_INSTRUCTIONS_LENGTH;
   const catalogIsEmpty =
     !localizedCatalog ||
     localizedCatalog.scenarios.length === 0 ||
@@ -325,7 +378,8 @@ export function LearnerLaunchPanel({
     !loading &&
     !startDisabled &&
     selectedScenario !== null &&
-    selectedPersona !== null;
+    selectedPersona !== null &&
+    !instructionsTooLong;
 
   const lowerCaseLocale = locale === "zh" ? "zh-CN" : "en-US";
   const scenarioOptions = (localizedCatalog?.scenarios ?? []).map((scenario) => ({
@@ -356,42 +410,9 @@ export function LearnerLaunchPanel({
       aria-labelledby="learner-launch-title"
       aria-busy={loading || isStarting}
     >
-      <header className={styles.header}>
-        <Flex align="center" gap={10} className={styles.brand}>
-          <Avatar icon={<CustomerServiceOutlined />} />
-          <div>
-            <Text strong>AI Role Player</Text>
-            <Text className={styles.brandSubtitle} type="secondary">
-              {t({ en: "Sales practice training", zh: "销售实战训练" })}
-            </Text>
-          </div>
-        </Flex>
-        <Space size={8}>
-          {historyButton}
-          <span className={styles.languageToggle}>
-            <LanguageToggleButton />
-          </span>
-          {themeButton}
-          <Button
-            className={styles.adminButton}
-            aria-label={t({
-              en: "Open Admin Console",
-              zh: "打开管理控制台",
-            })}
-            disabled={loading || isStarting}
-            icon={<SettingOutlined />}
-            onClick={onOpenAdmin}
-          >
-            <span className={styles.buttonLabel}>
-              {t({ en: "Admin Console", zh: "管理控制台" })}
-            </span>
-          </Button>
-        </Space>
-      </header>
-
       <main className={styles.content}>
+        <div className={styles.mobileHistoryRow}>{historyButton}</div>
         <div className={styles.introduction}>
-          <Tag color="green">VOICE ROLE PLAY</Tag>
           <Title id="learner-launch-title">
             {t({
               en: "Get ready for a sales role-play",
@@ -559,6 +580,24 @@ export function LearnerLaunchPanel({
                 </div>
               </section>
 
+              {(selectedScenario || selectedPersona) && (
+                <div className={styles.summaryGrid}>
+                  {selectedScenario && (
+                    <ScenarioSummary scenario={selectedScenario} />
+                  )}
+                  {selectedPersona && (
+                    <PersonaSummary persona={selectedPersona} />
+                  )}
+                </div>
+              )}
+
+              {selectedScenario && selectedPersona && (
+                <InstructionsPreview
+                  instructions={instructions}
+                  tooLong={instructionsTooLong}
+                />
+              )}
+
               <Flex
                 className={styles.startArea}
                 align="center"
@@ -582,20 +621,6 @@ export function LearnerLaunchPanel({
                   {t({ en: "Start voice role-play", zh: "开始语音对练" })}
                 </Button>
               </Flex>
-
-              {(selectedScenario || selectedPersona) && (
-                <div className={styles.summaryGrid}>
-                  {selectedScenario && (
-                    <ScenarioSummary scenario={selectedScenario} />
-                  )}
-                  {selectedPersona && (
-                    <PersonaSummary
-                      persona={selectedPersona}
-                      qwenVoices={localizedCatalog.qwenVoices}
-                    />
-                  )}
-                </div>
-              )}
             </>
           )}
         </Card>

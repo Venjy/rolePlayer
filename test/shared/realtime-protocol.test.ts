@@ -91,6 +91,13 @@ describe("realtime protocol", () => {
 
     expect(
       serverMessageSchema.parse({
+        type: "scenario.success.detected",
+        responseId: "resp_1",
+      }),
+    ).toMatchObject({ type: "scenario.success.detected" });
+
+    expect(
+      serverMessageSchema.parse({
         type: "response.reconciled",
         responseId: "resp_1",
         originalItemId: "item_1",

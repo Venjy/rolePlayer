@@ -5,6 +5,9 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { strFromU8, unzipSync } from "fflate";
 import {
+  conversationFeedbackViewSchema,
+} from "../../src/shared/conversation-feedback";
+import {
   conversationDetailSchema,
   conversationListSchema,
   type CreateConversationInput,
@@ -16,10 +19,18 @@ import { compileRolePlayInstructions } from "../../src/shared/role-play-instruct
 import { CatalogRepository } from "../../src/server/catalog/catalog-repository";
 import { initializeCatalogData } from "../../src/server/catalog/catalog-initializer";
 import {
+  ConversationEndedError,
   ConversationNotFoundError,
   ConversationRepository,
 } from "../../src/server/conversations/conversation-repository";
-import { registerConversationRoutes } from "../../src/server/conversations/conversation-routes";
+import type {
+  ConversationFeedbackGenerator,
+  FeedbackGenerationInput,
+} from "../../src/server/conversations/conversation-feedback-generator";
+import {
+  registerConversationRoutes,
+  type ConversationRouteOptions,
+} from "../../src/server/conversations/conversation-routes";
 import { registerDatabases } from "../../src/server/database/register-database";
 import {
   localizePersona,
@@ -34,20 +45,20 @@ afterEach(() => {
   }
 });
 
-function createApp() {
+function createApp(options?: ConversationRouteOptions) {
   const directory = mkdtempSync(join(tmpdir(), "role-player-conversations-"));
   temporaryDirectories.push(directory);
 
-  return createAppAtPath(join(directory, "conversations.sqlite"));
+  return createAppAtPath(join(directory, "conversations.sqlite"), options);
 }
 
-function createAppAtPath(path: string) {
+function createAppAtPath(path: string, options?: ConversationRouteOptions) {
   const app = Fastify({ logger: false });
   registerDatabases(app, {
     catalogPath: join(dirname(path), "catalog.sqlite"),
     conversationPath: path,
   });
-  registerConversationRoutes(app);
+  registerConversationRoutes(app, options);
   return app;
 }
 
@@ -295,6 +306,34 @@ describe("conversation history routes", () => {
       const restoredRuntime = repository.getRuntimeConversation(created.id);
       expect(restoredRuntime?.instructions).toBe(expectedInstructions);
       expect(restoredRuntime?.voice).toBe(input.persona.voice);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("compiles and stores the template selected by the submitted locale", async () => {
+    const app = createApp();
+    try {
+      await app.ready();
+      const input = { ...getCreateInput(app), locale: "zh" as const };
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/conversations",
+        payload: input,
+      });
+
+      expect(response.statusCode).toBe(201);
+      const created = conversationDetailSchema.parse(response.json());
+      const runtime = new ConversationRepository(
+        app.conversationDatabase,
+      ).getRuntimeConversation(created.id);
+
+      expect(created.locale).toBe("zh");
+      expect(created.personaName).toBe(input.persona.nameZhCn);
+      expect(runtime?.instructions).toContain("[客户角色]");
+      expect(runtime?.instructions).toContain("[销售训练场景]");
+      expect(runtime?.instructions).toContain("难度: 困难");
+      expect(runtime?.instructions).not.toContain("[CUSTOMER PERSONA]");
     } finally {
       await app.close();
     }
@@ -618,6 +657,204 @@ describe("conversation history routes", () => {
       expect(repository.getConversation(conversation.id)?.messages).toHaveLength(
         8,
       );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("ends a conversation, locks it, and persists weighted coaching feedback", async () => {
+    let receivedInput: FeedbackGenerationInput | undefined;
+    const feedbackGenerator: ConversationFeedbackGenerator = {
+      model: "test-coach",
+      generate: async (input) => {
+        receivedInput = input;
+        const highlightedMessage = input.messages[0];
+        if (!highlightedMessage) throw new Error("Expected a transcript message.");
+        return {
+          overallAssessment: "A focused discovery conversation.",
+          strengths: ["Asked a useful diagnostic question."],
+          improvementAreas: ["Confirm the business impact more explicitly."],
+          coachingTips: [
+            { title: "Quantify impact", advice: "Ask for a measurable baseline." },
+            { title: "Confirm next step", advice: "Close with a specific action." },
+          ],
+          criterionScores: input.criteria.map((criterion, index) => ({
+            criterionPosition: criterion.position,
+            score: 80 + index,
+            rationale: `Evidence for ${criterion.name}.`,
+          })),
+          moments: Array.from({ length: 3 }, (_, index) => ({
+            messageId: highlightedMessage.id,
+            kind: index === 0 ? "strength" as const : "improvement" as const,
+            title: `Moment ${index + 1}`,
+            assessment: "A transcript-grounded observation.",
+            suggestedApproach: index === 0 ? "" : "Use one concise follow-up.",
+          })),
+        };
+      },
+    };
+    const app = createApp({ feedbackGenerator });
+    try {
+      await app.ready();
+      const repository = new ConversationRepository(app.conversationDatabase);
+      const createInput = { ...getCreateInput(app), locale: "zh" as const };
+      const conversation = repository.createConversation(createInput);
+      const userMessage = repository.appendMessage({
+        conversationId: conversation.id,
+        role: "user",
+        text: "How much time does manual qualification take today?",
+        interrupted: false,
+        sourceItemId: "feedback-user",
+      });
+      repository.appendMessage({
+        conversationId: conversation.id,
+        role: "assistant",
+        text: "Around ten hours each week.",
+        interrupted: false,
+        sourceItemId: "feedback-assistant",
+        responseId: "feedback-response",
+      });
+
+      const endResponse = await app.inject({
+        method: "POST",
+        url: `/api/conversations/${conversation.id}/end`,
+      });
+      expect([200, 202]).toContain(endResponse.statusCode);
+      expect(conversationFeedbackViewSchema.parse(endResponse.json()).conversation)
+        .toMatchObject({ status: "ended", id: conversation.id });
+
+      let feedbackView = conversationFeedbackViewSchema.parse(endResponse.json());
+      for (let attempt = 0; attempt < 5 && feedbackView.feedback.status !== "completed"; attempt += 1) {
+        const response = await app.inject({
+          method: "GET",
+          url: `/api/conversations/${conversation.id}/feedback`,
+        });
+        feedbackView = conversationFeedbackViewSchema.parse(response.json());
+      }
+
+      expect(receivedInput?.messages[0]).toMatchObject({
+        id: userMessage.id,
+        text: userMessage.text,
+      });
+      expect(receivedInput?.locale).toBe("zh");
+      expect(receivedInput?.criteria.map(({ name }) => name)).toEqual(
+        createInput.scenario.scoringCriteria.map(
+          ({ name, nameZhCn }) => nameZhCn || name,
+        ),
+      );
+      expect(feedbackView.feedback).toMatchObject({
+        status: "completed",
+        model: "test-coach",
+        overallAssessment: "A focused discovery conversation.",
+        strengths: [{ position: 0, text: "Asked a useful diagnostic question." }],
+      });
+      expect(feedbackView.feedback.criterionScores[0]).toMatchObject({
+        name: createInput.scenario.scoringCriteria[0]?.name,
+        nameZhCn: createInput.scenario.scoringCriteria[0]?.nameZhCn,
+      });
+      const expectedScore = Math.round(
+        feedbackView.feedback.criterionScores.reduce(
+          (total, criterion) => total + criterion.score * criterion.weight / 100,
+          0,
+        ),
+      );
+      expect(feedbackView.feedback.overallScore).toBe(expectedScore);
+      expect(feedbackView.feedback.moments).toHaveLength(3);
+      expect(feedbackView.conversation.endedAt).toMatch(/\+08:00$/);
+      expect(() => repository.getRuntimeConversation(conversation.id))
+        .toThrow(ConversationEndedError);
+      expect(() => repository.appendMessage({
+        conversationId: conversation.id,
+        role: "user",
+        text: "This must not be appended.",
+        interrupted: false,
+      })).toThrow(ConversationEndedError);
+      expect(repository.listConversations()).toContainEqual(
+        expect.objectContaining({
+          id: conversation.id,
+          status: "ended",
+          feedbackStatus: "completed",
+        }),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("deletes only ended conversations and cancels in-flight feedback before cascading data", async () => {
+    let generatorAborted = false;
+    const feedbackGenerator: ConversationFeedbackGenerator = {
+      model: "slow-test-coach",
+      generate: async (_input, signal) => new Promise((resolve, reject) => {
+        void resolve;
+        const abort = () => {
+          generatorAborted = true;
+          reject(new Error("Feedback generation aborted for deletion."));
+        };
+        if (signal?.aborted) abort();
+        else signal?.addEventListener("abort", abort, { once: true });
+      }),
+    };
+    const app = createApp({ feedbackGenerator });
+    try {
+      await app.ready();
+      const repository = new ConversationRepository(app.conversationDatabase);
+      const conversation = repository.createConversation(getCreateInput(app));
+      repository.appendMessage({
+        conversationId: conversation.id,
+        role: "user",
+        text: "This record and its audio should be deleted.",
+        interrupted: false,
+        sourceItemId: "delete-user",
+        audio: {
+          sampleRate: 16_000,
+          pcm: createTonePcm(16_000, 100, 220),
+        },
+      });
+
+      const activeDelete = await app.inject({
+        method: "DELETE",
+        url: `/api/conversations/${conversation.id}`,
+      });
+      expect(activeDelete.statusCode).toBe(409);
+      expect(repository.getConversation(conversation.id)).not.toBeNull();
+
+      const endResponse = await app.inject({
+        method: "POST",
+        url: `/api/conversations/${conversation.id}/end`,
+      });
+      expect(endResponse.statusCode).toBe(202);
+
+      const deleteResponse = await app.inject({
+        method: "DELETE",
+        url: `/api/conversations/${conversation.id}`,
+      });
+      expect(deleteResponse.statusCode).toBe(204);
+      expect(deleteResponse.body).toBe("");
+      expect(generatorAborted).toBe(true);
+      expect(repository.getConversation(conversation.id)).toBeNull();
+      expect(repository.listConversations()).toEqual([]);
+
+      for (const table of [
+        "sessions",
+        "persona_snapshots",
+        "scenario_snapshots",
+        "scenario_scoring_criteria",
+        "scenario_personas",
+        "messages",
+        "message_audio",
+        "feedback_reports",
+        "feedback_strengths",
+        "feedback_improvement_areas",
+        "feedback_coaching_tips",
+        "feedback_criterion_scores",
+        "feedback_moments",
+      ]) {
+        const row = app.conversationDatabase.raw
+          .prepare(`SELECT COUNT(*) AS count FROM ${table}`)
+          .get() as unknown as { count: number };
+        expect(row.count, table).toBe(0);
+      }
     } finally {
       await app.close();
     }

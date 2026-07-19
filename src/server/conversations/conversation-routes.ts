@@ -8,7 +8,9 @@ import {
 import { databaseIdSchema } from "../../shared/database-id";
 import { MAX_REALTIME_INSTRUCTIONS_LENGTH } from "../../shared/realtime-protocol";
 import { CatalogRepository } from "../catalog/catalog-repository";
+import { getFeedbackConfig } from "../config";
 import {
+  ActiveConversationDeletionError,
   ConversationInstructionsTooLongError,
   ConversationRepository,
 } from "./conversation-repository";
@@ -17,6 +19,15 @@ import {
   ConversationAudioUnavailableError,
   createConversationDownload,
 } from "./conversation-export";
+import {
+  FeedbackGenerationError,
+  QwenConversationFeedbackGenerator,
+  type ConversationFeedbackGenerator,
+} from "./conversation-feedback-generator";
+import {
+  ConversationFeedbackRepository,
+  ConversationFeedbackService,
+} from "./conversation-feedback-service";
 
 const idParametersSchema = z.object({
   id: z.coerce.number().pipe(databaseIdSchema),
@@ -26,9 +37,24 @@ const downloadQuerySchema = z.object({
   format: conversationDownloadFormatSchema,
 });
 
-/** Exposes durable conversation creation and read-only history retrieval. */
-export function registerConversationRoutes(app: FastifyInstance): void {
+export interface ConversationRouteOptions {
+  feedbackGenerator?: ConversationFeedbackGenerator;
+}
+
+/** Exposes durable conversations, exports, and asynchronous coaching feedback. */
+export function registerConversationRoutes(
+  app: FastifyInstance,
+  options: ConversationRouteOptions = {},
+): void {
   const repository = new ConversationRepository(app.conversationDatabase);
+  const feedbackRepository = new ConversationFeedbackRepository(
+    app.conversationDatabase,
+  );
+  const feedbackService = new ConversationFeedbackService(
+    feedbackRepository,
+    options.feedbackGenerator ?? createDefaultFeedbackGenerator(),
+    (error) => app.log.error({ error }, "Conversation feedback job failed"),
+  );
   const catalog = new CatalogRepository(app.catalogDatabase);
 
   app.post("/api/conversations", async (request, reply) => {
@@ -80,6 +106,86 @@ export function registerConversationRoutes(app: FastifyInstance): void {
   app.get("/api/conversations", async () => ({
     conversations: repository.listConversations(),
   }));
+
+  app.delete("/api/conversations/:id", async (request, reply) => {
+    const parsed = idParametersSchema.safeParse(request.params);
+    if (!parsed.success) return sendValidationError(reply, parsed.error);
+    const conversation = repository.getConversation(parsed.data.id);
+    if (!conversation) return sendConversationNotFound(reply, parsed.data.id);
+
+    try {
+      await feedbackService.cancel(conversation.id);
+      repository.deleteEndedConversation(conversation.id);
+      return reply.code(204).send();
+    } catch (error) {
+      if (error instanceof ActiveConversationDeletionError) {
+        return reply.code(409).send({
+          message: error.message,
+          error: { code: "conversation_not_ended", message: error.message },
+        });
+      }
+      throw error;
+    }
+  });
+
+  app.post("/api/conversations/:id/end", async (request, reply) => {
+    const parsed = idParametersSchema.safeParse(request.params);
+    if (!parsed.success) return sendValidationError(reply, parsed.error);
+    const conversation = repository.getConversation(parsed.data.id);
+    if (!conversation) return sendConversationNotFound(reply, parsed.data.id);
+
+    const endedConversation = repository.endConversation(conversation.id);
+    const feedback = feedbackRepository.ensurePending(endedConversation);
+    if (feedback.status === "pending") feedbackService.trigger(conversation.id);
+    return reply.code(feedback.status === "completed" ? 200 : 202).send({
+      conversation: repository.getConversation(conversation.id),
+      feedback: feedbackRepository.require(conversation.id),
+    });
+  });
+
+  app.get("/api/conversations/:id/feedback", async (request, reply) => {
+    const parsed = idParametersSchema.safeParse(request.params);
+    if (!parsed.success) return sendValidationError(reply, parsed.error);
+    const conversation = repository.getConversation(parsed.data.id);
+    if (!conversation) return sendConversationNotFound(reply, parsed.data.id);
+    if (conversation.status !== "ended") {
+      const message = "The conversation must end before feedback is available.";
+      return reply.code(409).send({
+        message,
+        error: { code: "conversation_not_ended", message },
+      });
+    }
+
+    const feedback = feedbackRepository.ensurePending(conversation);
+    if (feedback.status === "pending") feedbackService.trigger(conversation.id);
+    return {
+      conversation: repository.getConversation(conversation.id),
+      feedback: feedbackRepository.require(conversation.id),
+    };
+  });
+
+  app.post("/api/conversations/:id/feedback/retry", async (request, reply) => {
+    const parsed = idParametersSchema.safeParse(request.params);
+    if (!parsed.success) return sendValidationError(reply, parsed.error);
+    const conversation = repository.getConversation(parsed.data.id);
+    if (!conversation) return sendConversationNotFound(reply, parsed.data.id);
+    if (conversation.status !== "ended") {
+      const message = "The conversation must end before feedback is available.";
+      return reply.code(409).send({
+        message,
+        error: { code: "conversation_not_ended", message },
+      });
+    }
+
+    const current = feedbackRepository.ensurePending(conversation);
+    const feedback = current.status === "failed"
+      ? feedbackService.retry(conversation.id)
+      : current;
+    return reply.code(feedback.status === "completed" ? 200 : 202).send({
+      conversation: repository.getConversation(conversation.id),
+      feedback,
+    });
+  });
 
   app.get("/api/conversations/:id/download", async (request, reply) => {
     const parsedId = idParametersSchema.safeParse(request.params);
@@ -135,14 +241,39 @@ export function registerConversationRoutes(app: FastifyInstance): void {
     const conversation = repository.getConversation(parsed.data.id);
     if (conversation) return conversation;
 
-    const message = `No conversation exists with ID "${parsed.data.id}".`;
-    return reply.code(404).send({
-      message,
-      error: {
-        code: "conversation_not_found",
-        message,
+    return sendConversationNotFound(reply, parsed.data.id);
+  });
+
+  // Database registration opens SQLite in an earlier onReady hook.
+  app.addHook("onReady", async () => {
+    feedbackService.resumePending();
+  });
+  app.addHook("onClose", async () => {
+    await feedbackService.close();
+  });
+}
+
+function createDefaultFeedbackGenerator(): ConversationFeedbackGenerator {
+  try {
+    return new QwenConversationFeedbackGenerator(getFeedbackConfig());
+  } catch {
+    return {
+      model: "unconfigured",
+      generate: async () => {
+        throw new FeedbackGenerationError(
+          "Configure DASHSCOPE_API_KEY to generate end-of-session feedback.",
+          "feedback_configuration_missing",
+        );
       },
-    });
+    };
+  }
+}
+
+function sendConversationNotFound(reply: FastifyReply, id: number) {
+  const message = `No conversation exists with ID "${id}".`;
+  return reply.code(404).send({
+    message,
+    error: { code: "conversation_not_found", message },
   });
 }
 

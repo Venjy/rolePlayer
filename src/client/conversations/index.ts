@@ -1,3 +1,10 @@
 export { ConversationHistoryNavigation } from "./ConversationHistoryNavigation";
-export { downloadConversation } from "./conversation-api";
+export { ConversationFeedbackPage } from "./ConversationFeedbackPage";
+export {
+  deleteConversation,
+  downloadConversation,
+  endConversation,
+  fetchConversationFeedback,
+  retryConversationFeedback,
+} from "./conversation-api";
 export { useConversationHistory } from "./use-conversation-history";

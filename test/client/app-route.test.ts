@@ -13,6 +13,7 @@ describe("app routes", () => {
     ["/admin/", { page: "admin" }],
     ["/chat/1", { page: "chat", conversationId: 1 }],
     ["/chat/2048/", { page: "chat", conversationId: 2048 }],
+    ["/feedback/7", { page: "feedback", conversationId: 7 }],
   ])("parses %s", (pathname, expected) => {
     expect(parseAppRoute(pathname)).toEqual(expected);
   });
@@ -24,6 +25,8 @@ describe("app routes", () => {
     "/chat/-1",
     "/chat/1/extra",
     "/chat/9007199254740992",
+    "/feedback/0",
+    "/feedback/not-an-id",
   ])("rejects unsupported path %s", (pathname) => {
     expect(parseAppRoute(pathname)).toEqual({ page: "not_found" });
   });
@@ -33,6 +36,9 @@ describe("app routes", () => {
     expect(appRoutePath({ page: "admin" })).toBe("/admin");
     expect(appRoutePath({ page: "chat", conversationId: 42 })).toBe(
       "/chat/42",
+    );
+    expect(appRoutePath({ page: "feedback", conversationId: 42 })).toBe(
+      "/feedback/42",
     );
   });
 

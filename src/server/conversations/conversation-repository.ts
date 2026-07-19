@@ -46,6 +46,8 @@ interface ConversationSessionRow {
   locale: string;
   instructions: string;
   voice: string;
+  status: string;
+  ended_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -58,6 +60,7 @@ interface ConversationSummaryRow extends ConversationSessionRow {
   message_count: number;
   audio_message_count: number;
   last_message_text: string | null;
+  feedback_status: string | null;
 }
 
 interface PersonaSnapshotRow {
@@ -236,6 +239,20 @@ export class ConversationNotFoundError extends Error {
   }
 }
 
+export class ConversationEndedError extends Error {
+  public constructor(public readonly conversationId: number) {
+    super(`Conversation "${conversationId}" has already ended.`);
+    this.name = "ConversationEndedError";
+  }
+}
+
+export class ActiveConversationDeletionError extends Error {
+  public constructor(public readonly conversationId: number) {
+    super(`Conversation "${conversationId}" must end before it can be deleted.`);
+    this.name = "ActiveConversationDeletionError";
+  }
+}
+
 export class ConversationInstructionsTooLongError extends Error {
   public constructor(
     public readonly actualLength: number,
@@ -271,6 +288,7 @@ export class ConversationRepository {
       persona: localizedPersona,
       scenario: localizedScenario,
       difficulty: parsed.difficulty,
+      locale: parsed.locale,
     });
     if (instructions.length > MAX_REALTIME_INSTRUCTIONS_LENGTH) {
       throw new ConversationInstructionsTooLongError(instructions.length);
@@ -315,6 +333,7 @@ export class ConversationRepository {
           scenario.name_zh_cn AS scenario_name_zh_cn,
           COUNT(messages.id) AS message_count,
           COUNT(message_audio.message_id) AS audio_message_count,
+          feedback.status AS feedback_status,
           (
             SELECT latest.text
             FROM messages AS latest
@@ -331,6 +350,8 @@ export class ConversationRepository {
           ON messages.conversation_id = sessions.id
         LEFT JOIN message_audio
           ON message_audio.message_id = messages.id
+        LEFT JOIN feedback_reports AS feedback
+          ON feedback.conversation_id = sessions.id
         GROUP BY sessions.id
         ORDER BY sessions.updated_at DESC, sessions.id DESC`,
       )
@@ -350,6 +371,7 @@ export class ConversationRepository {
       scenario,
       messages,
       this.countAudioMessages(id),
+      this.getFeedbackStatus(id),
     );
   }
 
@@ -359,6 +381,7 @@ export class ConversationRepository {
   ): RuntimeConversation | null {
     const row = this.getSessionRow(id);
     if (!row) return null;
+    if (row.status === "ended") throw new ConversationEndedError(id);
     const { persona, scenario } = this.requireSnapshots(id);
     if (
       maximumUserTurns !== undefined &&
@@ -389,6 +412,9 @@ export class ConversationRepository {
     const existingSession = this.getSessionRow(parsed.conversationId);
     if (!existingSession) {
       throw new ConversationNotFoundError(parsed.conversationId);
+    }
+    if (existingSession.status === "ended") {
+      throw new ConversationEndedError(parsed.conversationId);
     }
 
     this.connection.exec("BEGIN IMMEDIATE");
@@ -508,6 +534,41 @@ export class ConversationRepository {
       pcm: Buffer.from(row.pcm),
       durationMs: row.duration_ms,
     }));
+  }
+
+  /** Marks a settled conversation as immutable and records its wall-clock end. */
+  public endConversation(id: number): ConversationDetail {
+    const conversationId = databaseIdSchema.parse(id);
+    const existing = this.getSessionRow(conversationId);
+    if (!existing) throw new ConversationNotFoundError(conversationId);
+    if (existing.status === "ended") return this.requireConversation(conversationId);
+
+    const timestamp = nextDatabaseTimestamp(existing.updated_at);
+    this.connection
+      .prepare(
+        `UPDATE sessions
+         SET status = 'ended', ended_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'active'`,
+      )
+      .run(timestamp, timestamp, conversationId);
+    return this.requireConversation(conversationId);
+  }
+
+  /** Deletes one ended session and all snapshots/messages/audio/feedback via FKs. */
+  public deleteEndedConversation(id: number): void {
+    const conversationId = databaseIdSchema.parse(id);
+    const existing = this.getSessionRow(conversationId);
+    if (!existing) throw new ConversationNotFoundError(conversationId);
+    if (existing.status !== "ended") {
+      throw new ActiveConversationDeletionError(conversationId);
+    }
+
+    const result = this.connection
+      .prepare("DELETE FROM sessions WHERE id = ? AND status = 'ended'")
+      .run(conversationId);
+    if (result.changes !== 1) {
+      throw new ConversationNotFoundError(conversationId);
+    }
   }
 
   private insertPersonaSnapshot(
@@ -702,6 +763,17 @@ export class ConversationRepository {
     return row.count;
   }
 
+  private getFeedbackStatus(conversationId: number): string | null {
+    const row = this.connection
+      .prepare(
+        `SELECT status
+         FROM feedback_reports
+         WHERE conversation_id = ?`,
+      )
+      .get(conversationId) as unknown as { status: string } | undefined;
+    return row?.status ?? null;
+  }
+
   private insertMessageAudio(
     messageId: number,
     audio: z.infer<typeof conversationMessageAudioSchema>,
@@ -813,6 +885,9 @@ function mapConversationSummaryRow(
     ),
     difficulty: row.difficulty,
     locale: row.locale,
+    status: row.status,
+    endedAt: row.ended_at,
+    feedbackStatus: row.feedback_status,
     messageCount: row.message_count,
     audioMessageCount: row.audio_message_count,
     audioAvailable:
@@ -829,6 +904,7 @@ function mapConversationDetail(
   scenario: ScenarioSnapshot,
   messages: ConversationMessage[],
   audioMessageCount: number,
+  feedbackStatus: string | null,
 ): ConversationDetail {
   const locale = parseLocale(row.locale);
   const localizedPersona = localizePersona(persona, locale);
@@ -839,6 +915,9 @@ function mapConversationDetail(
     scenarioName: localizedScenario.name,
     difficulty: row.difficulty,
     locale: row.locale,
+    status: row.status,
+    endedAt: row.ended_at,
+    feedbackStatus,
     messageCount: messages.length,
     audioMessageCount,
     audioAvailable:

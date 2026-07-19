@@ -105,7 +105,7 @@ export function ScenarioEditorDrawer({
       resolveScenarioPresetReferences(previewInput, scenarioPresets),
       locale,
     );
-    return compileScenarioInstructions(previewScenario);
+    return compileScenarioInstructions(previewScenario, locale);
   }, [defaultAllowedPersonaIds, draft, initialValues, locale, scenario, scenarioPresets]);
 
   const handleValuesChange = (changed: Partial<ScenarioFormValues>) => {

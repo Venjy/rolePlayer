@@ -65,6 +65,7 @@ interface Harness {
   sent: ServerMessage[];
   persisted: RealtimePersistedMessage[];
   persistMessage: ReturnType<typeof vi.fn>;
+  assessScenarioSuccess: ReturnType<typeof vi.fn>;
   closeWithError: ReturnType<typeof vi.fn>;
 }
 
@@ -85,12 +86,14 @@ function createHarness(options?: {
     persisted.push(message);
   });
   const closeWithError = vi.fn();
+  const assessScenarioSuccess = vi.fn();
   const controller = new RealtimeSessionController(
     qwen as unknown as QwenRealtimeClient,
     {
       send: (message) => sent.push(message),
       sendAudio: () => true,
       persistMessage,
+      assessScenarioSuccess,
       closeWithError,
       warn: vi.fn(),
       error: vi.fn(),
@@ -103,6 +106,7 @@ function createHarness(options?: {
     sent,
     persisted,
     persistMessage,
+    assessScenarioSuccess,
     closeWithError,
   };
 }
@@ -353,6 +357,20 @@ describe("RealtimeSessionController context reconciliation", () => {
 });
 
 describe("RealtimeSessionController authoritative history persistence", () => {
+  it("requests conservative scenario assessment when generation finishes, before playback", () => {
+    const harness = createHarness();
+    startResponse(harness.controller);
+
+    completeResponse(harness.controller);
+
+    expect(harness.assessScenarioSuccess).toHaveBeenCalledOnce();
+    expect(harness.assessScenarioSuccess).toHaveBeenCalledWith({
+      responseId: RESPONSE_ID,
+      transcript: TRANSCRIPT,
+    });
+    expect(harness.persisted).toEqual([]);
+  });
+
   it("waits for clear acknowledgement and ignores late transcription from a cancelled turn", () => {
     const harness = createHarness();
     harness.controller.handleControl({ type: "input.start" });

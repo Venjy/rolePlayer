@@ -92,6 +92,10 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
     reason: z.string().optional(),
   }),
   z.object({
+    type: z.literal("scenario.success.detected"),
+    responseId: z.string().min(1),
+  }),
+  z.object({
     type: z.literal("response.reconciled"),
     responseId: z.string(),
     originalItemId: z.string().optional(),
