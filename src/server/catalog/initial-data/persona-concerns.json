@@ -3,5 +3,9 @@
   { "key": "concern_roi", "value": "Unclear return on investment", "valueZhCn": "投资回报不明确", "position": 1 },
   { "key": "concern_implementation", "value": "Implementation complexity", "valueZhCn": "实施复杂度", "position": 2 },
   { "key": "concern_security", "value": "Data security", "valueZhCn": "数据安全", "position": 3 },
-  { "key": "concern_change", "value": "Team resistance to change", "valueZhCn": "团队抵触改变", "position": 4 }
+  { "key": "concern_change", "value": "Team resistance to change", "valueZhCn": "团队抵触改变", "position": 4 },
+  { "key": "concern_integration", "value": "Integration with existing systems", "valueZhCn": "与现有系统的集成", "position": 5 },
+  { "key": "concern_timeline", "value": "Implementation timeline", "valueZhCn": "实施周期", "position": 6 },
+  { "key": "concern_vendor", "value": "Vendor reliability", "valueZhCn": "供应商可靠性", "position": 7 },
+  { "key": "concern_approval", "value": "Internal stakeholder approval", "valueZhCn": "内部相关方审批", "position": 8 }
 ]

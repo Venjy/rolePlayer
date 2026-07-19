@@ -103,6 +103,7 @@ interface PresetRow {
 interface QwenVoiceRow {
   id: number;
   voice: string;
+  gender: string;
   name: string;
   name_zh_cn: string;
   position: number;
@@ -407,13 +408,14 @@ export class CatalogRepository {
     if (!tableExists) return [];
     const rows = this.connection
       .prepare(
-        `SELECT id, voice, name, name_zh_cn, position, created_at, updated_at
+        `SELECT id, voice, gender, name, name_zh_cn, position, created_at, updated_at
          FROM qwen_voices ORDER BY position, id`,
       )
       .all() as unknown as QwenVoiceRow[];
     return rows.map((row) => qwenVoiceDefinitionSchema.parse({
       id: row.id,
       voice: row.voice,
+      gender: row.gender,
       name: row.name,
       nameZhCn: row.name_zh_cn,
       position: row.position,

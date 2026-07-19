@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Persona } from "../../src/shared/role-play-catalog";
+import type { Persona, PersonaInput } from "../../src/shared/role-play-catalog";
 import {
   getPersonaFormInitialValues,
   normalizePersonaFormValues,
@@ -66,6 +66,32 @@ describe("persona form localization", () => {
       name: "Zhang San",
       nameZhCn: "张三",
       occupationPresetId: 6,
+    });
+  });
+
+  it("preserves both model-generated languages when the visible draft is saved", () => {
+    const generated: PersonaInput = {
+      ...normalizePersonaFormValues(formValues("Jordan Lee"), "en", undefined),
+      nameZhCn: "李乔丹",
+      background: "English background",
+      backgroundZhCn: "中文背景",
+      behaviorNotes: "English behavior",
+      behaviorNotesZhCn: "中文行为说明",
+      motivationPresetIds: [4],
+    };
+    const visibleChinese = getPersonaFormInitialValues(generated, "zh");
+    const saved = normalizePersonaFormValues(
+      { ...visibleChinese, background: "修改后的中文背景" },
+      "zh",
+      generated,
+    );
+    expect(saved).toMatchObject({
+      name: "Jordan Lee",
+      nameZhCn: "李乔丹",
+      background: "English background",
+      backgroundZhCn: "修改后的中文背景",
+      behaviorNotes: "English behavior",
+      behaviorNotesZhCn: "中文行为说明",
     });
   });
 });

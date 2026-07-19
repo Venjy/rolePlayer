@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { Scenario, ScenarioPreset } from "../../src/shared/role-play-catalog";
+import type {
+  Scenario,
+  ScenarioInput,
+  ScenarioPreset,
+} from "../../src/shared/role-play-catalog";
 import {
   buildScoringCriteriaForSuccessCriteria,
   distributeScoringWeights,
@@ -85,5 +89,31 @@ describe("scenario form values", () => {
     expect(distributeScoringWeights(6)).toEqual([16, 16, 17, 17, 17, 17]);
     const criteria = buildScoringCriteriaForSuccessCriteria([1, 2, 3], presets, "en");
     expect(criteria.map(({ weight }) => weight)).toEqual([33, 33, 34]);
+  });
+
+  it("preserves both model-generated languages when the visible draft is saved", () => {
+    const generated: ScenarioInput = {
+      ...normalizeScenarioFormValues(chineseValues(), "zh", undefined, [1]),
+      name: "Price objection review",
+      nameZhCn: "价格异议评估",
+      description: "The customer is comparing a lower-priced competitor.",
+      descriptionZhCn: "客户正在比较一家价格更低的竞争对手。",
+    };
+    const visibleChinese = getScenarioFormInitialValues(
+      generated,
+      "zh",
+      presets,
+    );
+    const saved = normalizeScenarioFormValues(
+      { ...visibleChinese, description: "客户预算比报价低百分之二十。" },
+      "zh",
+      generated,
+    );
+    expect(saved).toMatchObject({
+      name: "Price objection review",
+      nameZhCn: "价格异议评估",
+      description: "The customer is comparing a lower-priced competitor.",
+      descriptionZhCn: "客户预算比报价低百分之二十。",
+    });
   });
 });

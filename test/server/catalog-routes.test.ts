@@ -2,10 +2,11 @@ import Fastify from "fastify";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Persona, PersonaInput, RolePlayCatalog, Scenario, ScenarioInput } from "../../src/shared/role-play-catalog";
 import { rolePlayCatalogSchema } from "../../src/shared/role-play-catalog";
 import { initializeCatalogData } from "../../src/server/catalog/catalog-initializer";
+import type { CatalogDraftGenerator } from "../../src/server/catalog/catalog-draft-generator";
 import { registerCatalogRoutes } from "../../src/server/catalog/catalog-routes";
 import { registerDatabases } from "../../src/server/database/register-database";
 
@@ -25,14 +26,14 @@ function presetId(catalog: RolePlayCatalog, valueZhCn: string): number {
 function personaInput(catalog: RolePlayCatalog): PersonaInput {
   return {
   name: "", nameZhCn: "张三", gender: "male", age: 29,
-  occupationPresetId: presetId(catalog, "外卖员"),
-  background: "", backgroundZhCn: "每天长时间骑行。",
+  occupationPresetId: presetId(catalog, "物流运营经理"),
+  background: "", backgroundZhCn: "负责区域物流运营与交付效率。",
   personalityTraitPresetIds: [presetId(catalog, "务实")],
   communicationStylePresetId: presetId(catalog, "直接简洁"),
   behaviorNotes: "", behaviorNotesZhCn: "追问价格。",
   motivationPresetIds: [presetId(catalog, "节省成本")],
   concernPresetIds: [presetId(catalog, "价格与预算")],
-  voice: "longanlingxin",
+  voice: "longanlufeng",
   };
 }
 function scenarioInput(catalog: RolePlayCatalog, allowedPersonaIds: number[]): ScenarioInput {
@@ -51,7 +52,7 @@ function scenarioInput(catalog: RolePlayCatalog, allowedPersonaIds: number[]): S
     allowedPersonaIds,
   };
 }
-function createApp() {
+function createApp(draftGenerator?: CatalogDraftGenerator) {
   const directory = mkdtempSync(join(tmpdir(), "role-player-catalog-api-"));
   directories.push(directory);
   const app = Fastify({ logger: false });
@@ -59,7 +60,7 @@ function createApp() {
     catalogPath: join(directory, "catalog.sqlite"),
     conversationPath: join(directory, "conversations.sqlite"),
   });
-  registerCatalogRoutes(app);
+  registerCatalogRoutes(app, { draftGenerator });
   return app;
 }
 
@@ -101,7 +102,7 @@ describe("catalog routes", () => {
       const createdPersonaResponse = await app.inject({ method: "POST", url: "/api/personas", payload: personaInput(catalog) });
       expect(createdPersonaResponse.statusCode).toBe(201);
       const persona = createdPersonaResponse.json<Persona>();
-      expect(persona).toMatchObject({ name: "", nameZhCn: "张三", occupationZhCn: "外卖员" });
+      expect(persona).toMatchObject({ name: "", nameZhCn: "张三", occupationZhCn: "物流运营经理" });
 
       const createdScenarioResponse = await app.inject({
         method: "POST", url: "/api/scenarios", payload: scenarioInput(catalog, [persona.id]),
@@ -142,6 +143,90 @@ describe("catalog routes", () => {
       expect(response.json()).toMatchObject({
         error: { code: "unknown_persona_reference", personaIds: [999_999] },
       });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("exposes generated bilingual drafts without saving them", async () => {
+    const generatePersona = vi.fn(async (catalog: RolePlayCatalog) => ({
+      ...personaInput(catalog),
+      name: "Jordan Lee",
+      nameZhCn: "李乔丹",
+      background: "Leads a regional logistics operation with a measurable delivery bottleneck.",
+      backgroundZhCn: "负责区域物流运营，并面临可量化的配送瓶颈。",
+      behaviorNotes: "Challenges unsupported claims and asks for implementation evidence.",
+      behaviorNotesZhCn: "会质疑缺少依据的承诺，并追问实施证据。",
+    }));
+    const generateScenario = vi.fn(async (catalog: RolePlayCatalog) => ({
+      ...scenarioInput(catalog, catalog.personas.map(({ id }) => id)),
+      name: "Logistics process review",
+      nameZhCn: "物流流程评估",
+      description: "The buyer needs to reduce missed delivery windows before peak season.",
+      descriptionZhCn: "客户需要在旺季前减少配送超时。",
+    }));
+    const draftGenerator: CatalogDraftGenerator = {
+      generatePersona,
+      generateScenario,
+    };
+    const app = createApp(draftGenerator);
+    try {
+      await app.ready();
+      initializeCatalogData(app.catalogDatabase);
+      const before = rolePlayCatalogSchema.parse(
+        (await app.inject({ method: "GET", url: "/api/catalog" })).json(),
+      );
+
+      const personaResponse = await app.inject({
+        method: "POST",
+        url: "/api/catalog/generate/persona",
+        payload: {
+          currentDraft: {
+            name: "Current draft",
+            background: "Current persona background",
+          },
+        },
+      });
+      expect(personaResponse.statusCode).toBe(200);
+      expect(personaResponse.json()).toMatchObject({
+        name: "Jordan Lee",
+        nameZhCn: "李乔丹",
+      });
+
+      const scenarioResponse = await app.inject({
+        method: "POST",
+        url: "/api/catalog/generate/scenario",
+        payload: {
+          currentDraft: {
+            nameZhCn: "当前场景草稿",
+            descriptionZhCn: "当前场景描述",
+          },
+        },
+      });
+      expect(scenarioResponse.statusCode).toBe(200);
+      expect(scenarioResponse.json()).toMatchObject({
+        name: "Logistics process review",
+        nameZhCn: "物流流程评估",
+      });
+      expect(generatePersona).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          name: "Current draft",
+          background: "Current persona background",
+        }),
+      );
+      expect(generateScenario).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          nameZhCn: "当前场景草稿",
+          descriptionZhCn: "当前场景描述",
+        }),
+      );
+      const after = rolePlayCatalogSchema.parse(
+        (await app.inject({ method: "GET", url: "/api/catalog" })).json(),
+      );
+      expect(after.personas).toHaveLength(before.personas.length);
+      expect(after.scenarios).toHaveLength(before.scenarios.length);
     } finally {
       await app.close();
     }

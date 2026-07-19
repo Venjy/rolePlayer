@@ -83,54 +83,68 @@ function PersonaCard({
     unspecified: t({ en: "Not specified", zh: "未指定" }),
   } satisfies Record<Persona["gender"], string>;
   const associationSeparator = locale === "zh" ? "、" : ", ";
-  const details = [
-    persona.age
-      ? t(
-          { en: "{age} years old", zh: "{age} 岁" },
-          { age: persona.age },
-        )
-      : undefined,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const ageLabel = persona.age
+    ? t(
+        { en: "{age} years old", zh: "{age} 岁" },
+        { age: persona.age },
+      )
+    : t({ en: "Age not provided", zh: "年龄未填写" });
+  const metadata = [
+    genderLabel[persona.gender],
+    ageLabel,
+    persona.occupation,
+  ].join(" · ");
 
   return (
-    <Card className={styles.entityCard} size="small">
+    <Card
+      className={`${styles.entityCard} ${styles.personaCard}`}
+      size="small"
+    >
       <div className={styles.cardHeader}>
-        <Space align="start">
-          <span aria-hidden className={styles.entityIcon}>
+        <div className={styles.personaIdentity}>
+          <span
+            aria-hidden
+            className={styles.entityIcon}
+            data-gender={persona.gender}
+          >
             <UserOutlined />
           </span>
-          <div>
+          <div className={styles.personaHeading}>
             <Typography.Title className={styles.cardTitle} level={4}>
               {persona.name}
             </Typography.Title>
-            <Typography.Text type="secondary">
-              {details ||
-                t({
-                  en: "Age not provided",
-                  zh: "尚未填写年龄",
-                })}
+            <Typography.Text className={styles.personaMetadata} type="secondary">
+              {metadata}
             </Typography.Text>
           </div>
-        </Space>
-        <Tag>{genderLabel[persona.gender]}</Tag>
+        </div>
       </div>
 
-      <Typography.Paragraph
-        className={styles.cardDescription}
-        ellipsis={{ rows: 2 }}
-      >
-        {persona.occupation}
-      </Typography.Paragraph>
-      <Space className={styles.tagCloud} size={[4, 6]} wrap>
-        {persona.personalityTraits.slice(0, 4).map((trait) => (
-          <Tag key={trait}>{trait}</Tag>
-        ))}
-        {persona.personalityTraits.length > 4 ? (
-          <Tag>+{persona.personalityTraits.length - 4}</Tag>
-        ) : null}
-      </Space>
+      <div className={styles.personaContent}>
+        <Typography.Text className={styles.cardSectionLabel} type="secondary">
+          {t({ en: "Background", zh: "背景" })}
+        </Typography.Text>
+        <Typography.Paragraph
+          className={styles.personaBackground}
+          ellipsis={{ rows: 4 }}
+          type={persona.background ? undefined : "secondary"}
+        >
+          {persona.background ||
+            t({ en: "No background provided", zh: "尚未填写角色背景" })}
+        </Typography.Paragraph>
+
+        <Typography.Text className={styles.cardSectionLabel} type="secondary">
+          {t({ en: "Personality traits", zh: "性格特征" })}
+        </Typography.Text>
+        <Space className={styles.tagCloud} size={[4, 6]} wrap>
+          {persona.personalityTraits.slice(0, 4).map((trait) => (
+            <Tag key={trait}>{trait}</Tag>
+          ))}
+          {persona.personalityTraits.length > 4 ? (
+            <Tag>+{persona.personalityTraits.length - 4}</Tag>
+          ) : null}
+        </Space>
+      </div>
 
       <div className={styles.cardFooter}>
         <Typography.Text type="secondary">

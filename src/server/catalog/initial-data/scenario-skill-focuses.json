@@ -4,5 +4,8 @@
   { "key": "skill_objection_handling", "value": "Objection handling", "valueZhCn": "异议处理", "position": 2 },
   { "key": "skill_value_articulation", "value": "Value articulation", "valueZhCn": "价值表达", "position": 3 },
   { "key": "skill_negotiation", "value": "Negotiation", "valueZhCn": "谈判推进", "position": 4 },
-  { "key": "skill_empathy", "value": "Empathy", "valueZhCn": "情绪承接", "position": 5 }
+  { "key": "skill_empathy", "value": "Empathy", "valueZhCn": "情绪承接", "position": 5 },
+  { "key": "skill_impact_quantification", "value": "Business impact quantification", "valueZhCn": "业务影响量化", "position": 6 },
+  { "key": "skill_roi_framing", "value": "ROI framing", "valueZhCn": "投资回报表达", "position": 7 },
+  { "key": "skill_stakeholder_mapping", "value": "Stakeholder mapping", "valueZhCn": "相关方梳理", "position": 8 }
 ]

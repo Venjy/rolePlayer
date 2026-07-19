@@ -1,7 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { LoadingOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
+  ConfigProvider,
   Divider,
   Drawer,
   Form,
@@ -26,6 +28,8 @@ import {
 import { useI18n, type AppLocale } from "../i18n";
 import { translate } from "../i18n/locale";
 import { localizePersonaInput, localizePersona } from "../catalog/catalog-localization";
+import { generatePersonaDraft } from "../catalog/catalog-api";
+import { getCatalogGenerationErrorMessage } from "./catalog-generation-errors";
 import { buildPersonaPresetOptions } from "./persona-preset-options";
 import {
   normalizePersonaFormValues,
@@ -71,7 +75,7 @@ function listRule(
 function buildPreviewPersona(
   locale: AppLocale,
   values?: Partial<PersonaFormValues>,
-  persona?: Persona,
+  persona?: Persona | PersonaInput,
   presets: readonly PersonaPreset[] = [],
 ) {
   const initial = getPersonaFormInitialValues(persona, locale, presets);
@@ -92,7 +96,13 @@ export function PersonaEditorDrawer({
   const { locale, t } = useI18n();
   const [form] = Form.useForm<PersonaFormValues>();
   const [submitError, setSubmitError] = useState<string>();
+  const [generating, setGenerating] = useState(false);
+  const [generatedPersona, setGeneratedPersona] = useState<PersonaInput>();
+  const generationAbortRef = useRef<AbortController | null>(null);
+  const generationRequestRef = useRef(0);
   const draft = Form.useWatch([], form);
+  const basePersona = generatedPersona ?? persona;
+  const locked = busy || generating;
 
   const presetOptions = useMemo(
     () => buildPersonaPresetOptions(personaPresets, locale),
@@ -129,18 +139,22 @@ export function PersonaEditorDrawer({
         )
       : undefined;
 
-  const initialValues = getPersonaFormInitialValues(persona, locale, personaPresets);
+  const initialValues = getPersonaFormInitialValues(
+    basePersona,
+    locale,
+    personaPresets,
+  );
 
   const preview = useMemo(() => {
     const previewPersona = localizePersonaInput(
-      buildPreviewPersona(locale, draft, persona, personaPresets),
+      buildPreviewPersona(locale, draft, basePersona, personaPresets),
       locale,
     );
     return {
       prompt: compilePersonaInstructions(previewPersona, locale),
       lengthIssue: null,
     };
-  }, [draft, locale, persona, personaPresets]);
+  }, [basePersona, draft, locale, personaPresets]);
 
   const handleFinish = async (values: PersonaFormValues) => {
     setSubmitError(undefined);
@@ -151,7 +165,7 @@ export function PersonaEditorDrawer({
     const normalizedInput = normalizePersonaFormValues(
       values,
       locale,
-      persona,
+      basePersona,
     );
 
     try {
@@ -168,29 +182,104 @@ export function PersonaEditorDrawer({
     }
   };
 
+  const handleGenerate = async () => {
+    const requestId = generationRequestRef.current + 1;
+    const controller = new AbortController();
+    generationRequestRef.current = requestId;
+    generationAbortRef.current = controller;
+    setSubmitError(undefined);
+    setGenerating(true);
+    try {
+      const currentDraft = normalizePersonaFormValues(
+        { ...initialValues, ...form.getFieldsValue(true) },
+        locale,
+        basePersona,
+      );
+      const generated = await generatePersonaDraft(
+        currentDraft,
+        controller.signal,
+      );
+      if (generationRequestRef.current !== requestId) return;
+      setGeneratedPersona(generated);
+      form.setFieldsValue(
+        getPersonaFormInitialValues(generated, locale, personaPresets),
+      );
+    } catch (error) {
+      if (generationRequestRef.current !== requestId) return;
+      setSubmitError(
+        getCatalogGenerationErrorMessage(error, locale, "persona"),
+      );
+    } finally {
+      if (generationRequestRef.current === requestId) {
+        generationAbortRef.current = null;
+        setGenerating(false);
+      }
+    }
+  };
+
+  const handleCancel = () => {
+    generationRequestRef.current += 1;
+    generationAbortRef.current?.abort();
+    generationAbortRef.current = null;
+    onCancel();
+  };
+
+  useEffect(
+    () => () => {
+      generationRequestRef.current += 1;
+      generationAbortRef.current?.abort();
+    },
+    [],
+  );
+
   return (
     <Drawer
       className={styles.editorDrawer}
       extra={
         <Space>
-          <Button disabled={busy} onClick={onCancel}>
+          <Button disabled={busy} onClick={handleCancel}>
             {t({ en: "Cancel", zh: "取消" })}
           </Button>
+          {!persona ? (
+            <ConfigProvider
+              button={{ className: styles.linearGradientButton }}
+            >
+              <Button
+                disabled={locked || Boolean(presetInitializationMessage)}
+                icon={<span aria-hidden="true">✨</span>}
+                onClick={() => void handleGenerate()}
+                type="primary"
+              >
+                <span className={styles.wideActionLabel}>
+                  {t({ en: "Random generate", zh: "随机生成" })}
+                </span>
+                <span className={styles.narrowActionLabel}>
+                  {t({ en: "Generate", zh: "随机生成" })}
+                </span>
+                {generating ? <LoadingOutlined spin /> : null}
+              </Button>
+            </ConfigProvider>
+          ) : null}
           <Button
-            disabled={Boolean(presetInitializationMessage)}
+            disabled={locked || Boolean(presetInitializationMessage)}
             loading={busy}
             onClick={() => form.submit()}
             type="primary"
           >
-            {t({ en: "Save persona", zh: "保存角色" })}
+            <span className={styles.wideActionLabel}>
+              {t({ en: "Save persona", zh: "保存角色" })}
+            </span>
+            <span className={styles.narrowActionLabel}>
+              {t({ en: "Save", zh: "保存" })}
+            </span>
           </Button>
         </Space>
       }
-      keyboard={!busy}
-      maskClosable={!busy}
-      onClose={busy ? undefined : onCancel}
+      keyboard={!locked}
+      mask={{ closable: Boolean(persona) && !locked }}
+      onClose={locked ? undefined : onCancel}
       open
-      size="large"
+      size="min(736px, 100vw)"
       title={
         persona
           ? t(
@@ -224,6 +313,7 @@ export function PersonaEditorDrawer({
       ) : null}
       <Form<PersonaFormValues>
         form={form}
+        disabled={locked}
         initialValues={initialValues}
         layout="vertical"
         onFinish={handleFinish}

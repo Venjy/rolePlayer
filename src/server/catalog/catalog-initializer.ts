@@ -78,6 +78,7 @@ interface StarterPresetJson {
 interface StarterQwenVoice {
   key: string;
   voice: z.infer<typeof qwenVoiceSchema>;
+  gender: "female" | "male";
   name: string;
   nameZhCn: string;
   position: number;
@@ -89,6 +90,7 @@ const localizedOptionalText = (maximum: number) => z.string().trim().max(maximum
 const starterQwenVoiceSchema = z.object({
   key: starterKeySchema,
   voice: qwenVoiceSchema,
+  gender: z.enum(["female", "male"]),
   name: z.string().trim().min(1).max(120),
   nameZhCn: z.string().trim().min(1).max(120),
   position: z.number().int().min(0),
@@ -241,14 +243,15 @@ function insertQwenVoices(
   if (!hasTable(connection, "qwen_voices")) return;
   const insert = connection.prepare(`
     INSERT INTO qwen_voices (
-      seed_key, voice, name, name_zh_cn, position, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      seed_key, voice, gender, name, name_zh_cn, position, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(seed_key) DO NOTHING
   `);
   for (const definition of INITIAL_QWEN_VOICES) {
     const write = insert.run(
       definition.key,
       definition.voice,
+      definition.gender,
       definition.name,
       definition.nameZhCn,
       definition.position,

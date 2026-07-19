@@ -247,6 +247,15 @@ export const CATALOG_DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
     name: "move_voice_behavior_to_scenarios",
     up: moveCatalogVoiceBehaviorToScenarios,
   },
+  {
+    version: 8,
+    name: "record_qwen_voice_gender",
+    up: `
+      ALTER TABLE qwen_voices ADD COLUMN gender TEXT NOT NULL DEFAULT 'female'
+        CHECK (gender IN ('female', 'male'));
+      UPDATE qwen_voices SET gender = 'male' WHERE voice = 'longanlufeng';
+    `,
+  },
 ];
 
 /** Fresh-schema migrations for immutable session snapshots and messages only. */

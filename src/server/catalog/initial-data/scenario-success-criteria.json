@@ -4,5 +4,8 @@
   { "key": "criterion_value", "value": "Explains value using a relevant outcome", "valueZhCn": "用相关结果解释方案价值", "position": 2 },
   { "key": "criterion_no_early_discount", "value": "Clarifies the objection before discounting", "valueZhCn": "在打折前先澄清异议", "position": 3 },
   { "key": "criterion_summary", "value": "Accurately summarizes the customer's position", "valueZhCn": "准确复述客户立场", "position": 4 },
-  { "key": "criterion_next_step", "value": "Agrees on an actionable next step", "valueZhCn": "达成可执行的下一步", "position": 5 }
+  { "key": "criterion_next_step", "value": "Agrees on an actionable next step", "valueZhCn": "达成可执行的下一步", "position": 5 },
+  { "key": "criterion_impact", "value": "Quantifies the business impact", "valueZhCn": "量化问题造成的业务影响", "position": 6 },
+  { "key": "criterion_decision_process", "value": "Confirms the decision process and stakeholders", "valueZhCn": "确认决策流程与相关方", "position": 7 },
+  { "key": "criterion_implementation", "value": "Addresses a concrete implementation concern", "valueZhCn": "回应一项具体的实施顾虑", "position": 8 }
 ]

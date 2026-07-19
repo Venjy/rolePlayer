@@ -3,5 +3,8 @@
   { "key": "goal_clarify_objection", "value": "Clarify the real objection", "valueZhCn": "澄清真实异议", "position": 1 },
   { "key": "goal_build_value", "value": "Connect value to customer outcomes", "valueZhCn": "建立价值与客户结果的联系", "position": 2 },
   { "key": "goal_next_step", "value": "Agree on a concrete next step", "valueZhCn": "明确具体下一步", "position": 3 },
-  { "key": "goal_rebuild_trust", "value": "Rebuild customer trust", "valueZhCn": "修复客户信任", "position": 4 }
+  { "key": "goal_rebuild_trust", "value": "Rebuild customer trust", "valueZhCn": "修复客户信任", "position": 4 },
+  { "key": "goal_qualify_fit", "value": "Qualify business and solution fit", "valueZhCn": "判断业务与方案契合度", "position": 5 },
+  { "key": "goal_identify_stakeholders", "value": "Identify stakeholders and decision process", "valueZhCn": "识别相关方与决策流程", "position": 6 },
+  { "key": "goal_address_implementation_risk", "value": "Address implementation risk", "valueZhCn": "化解实施风险", "position": 7 }
 ]

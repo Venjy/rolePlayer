@@ -1,7 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { LoadingOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
+  ConfigProvider,
   Divider,
   Drawer,
   Form,
@@ -26,6 +28,8 @@ import {
 import { useI18n, type AppLocale } from "../i18n";
 import { translate } from "../i18n/locale";
 import { localizeScenario, localizeScenarioInput } from "../catalog/catalog-localization";
+import { generateScenarioDraft } from "../catalog/catalog-api";
+import { getCatalogGenerationErrorMessage } from "./catalog-generation-errors";
 import { PromptPreview } from "./PromptPreview";
 import {
   buildScoringCriteriaForSuccessCriteria,
@@ -88,17 +92,23 @@ export function ScenarioEditorDrawer({
   const { locale, t } = useI18n();
   const [form] = Form.useForm<ScenarioFormValues>();
   const [submitError, setSubmitError] = useState<string>();
+  const [generating, setGenerating] = useState(false);
+  const [generatedScenario, setGeneratedScenario] = useState<ScenarioInput>();
+  const generationAbortRef = useRef<AbortController | null>(null);
+  const generationRequestRef = useRef(0);
   const draft = Form.useWatch([], form);
+  const baseScenario = generatedScenario ?? scenario;
+  const locked = busy || generating;
   const initialValues = useMemo(
-    () => getScenarioFormInitialValues(scenario, locale),
-    [locale, scenario],
+    () => getScenarioFormInitialValues(baseScenario, locale, scenarioPresets),
+    [baseScenario, locale, scenarioPresets],
   );
 
   const preview = useMemo(() => {
     const previewInput = normalizeScenarioFormValues(
       { ...initialValues, ...draft },
       locale,
-      scenario,
+      baseScenario,
       defaultAllowedPersonaIds,
     );
     const previewScenario = localizeScenarioInput(
@@ -106,7 +116,7 @@ export function ScenarioEditorDrawer({
       locale,
     );
     return compileScenarioInstructions(previewScenario, locale);
-  }, [defaultAllowedPersonaIds, draft, initialValues, locale, scenario, scenarioPresets]);
+  }, [baseScenario, defaultAllowedPersonaIds, draft, initialValues, locale, scenarioPresets]);
 
   const handleValuesChange = (changed: Partial<ScenarioFormValues>) => {
     if (!changed.successCriterionPresetIds) return;
@@ -126,7 +136,7 @@ export function ScenarioEditorDrawer({
     const normalizedInput = normalizeScenarioFormValues(
       values,
       locale,
-      scenario,
+      baseScenario,
       defaultAllowedPersonaIds,
     );
     try {
@@ -143,24 +153,105 @@ export function ScenarioEditorDrawer({
     }
   };
 
+  const handleGenerate = async () => {
+    const requestId = generationRequestRef.current + 1;
+    const controller = new AbortController();
+    generationRequestRef.current = requestId;
+    generationAbortRef.current = controller;
+    setSubmitError(undefined);
+    setGenerating(true);
+    try {
+      const currentDraft = normalizeScenarioFormValues(
+        { ...initialValues, ...form.getFieldsValue(true) },
+        locale,
+        baseScenario,
+        defaultAllowedPersonaIds,
+      );
+      const generated = await generateScenarioDraft(
+        currentDraft,
+        controller.signal,
+      );
+      if (generationRequestRef.current !== requestId) return;
+      setGeneratedScenario(generated);
+      form.setFieldsValue(
+        getScenarioFormInitialValues(generated, locale, scenarioPresets),
+      );
+    } catch (error) {
+      if (generationRequestRef.current !== requestId) return;
+      setSubmitError(
+        getCatalogGenerationErrorMessage(error, locale, "scenario"),
+      );
+    } finally {
+      if (generationRequestRef.current === requestId) {
+        generationAbortRef.current = null;
+        setGenerating(false);
+      }
+    }
+  };
+
+  const handleCancel = () => {
+    generationRequestRef.current += 1;
+    generationAbortRef.current?.abort();
+    generationAbortRef.current = null;
+    onCancel();
+  };
+
+  useEffect(
+    () => () => {
+      generationRequestRef.current += 1;
+      generationAbortRef.current?.abort();
+    },
+    [],
+  );
+
   return (
     <Drawer
       className={styles.editorDrawer}
       extra={
         <Space>
-          <Button disabled={busy} onClick={onCancel}>
+          <Button disabled={busy} onClick={handleCancel}>
             {t({ en: "Cancel", zh: "取消" })}
           </Button>
-          <Button loading={busy} onClick={() => form.submit()} type="primary">
-            {t({ en: "Save scenario", zh: "保存场景" })}
+          {!scenario ? (
+            <ConfigProvider
+              button={{ className: styles.linearGradientButton }}
+            >
+              <Button
+                disabled={locked}
+                icon={<span aria-hidden="true">✨</span>}
+                onClick={() => void handleGenerate()}
+                type="primary"
+              >
+                <span className={styles.wideActionLabel}>
+                  {t({ en: "Random generate", zh: "随机生成" })}
+                </span>
+                <span className={styles.narrowActionLabel}>
+                  {t({ en: "Generate", zh: "随机生成" })}
+                </span>
+                {generating ? <LoadingOutlined spin /> : null}
+              </Button>
+            </ConfigProvider>
+          ) : null}
+          <Button
+            disabled={locked}
+            loading={busy}
+            onClick={() => form.submit()}
+            type="primary"
+          >
+            <span className={styles.wideActionLabel}>
+              {t({ en: "Save scenario", zh: "保存场景" })}
+            </span>
+            <span className={styles.narrowActionLabel}>
+              {t({ en: "Save", zh: "保存" })}
+            </span>
           </Button>
         </Space>
       }
-      keyboard={!busy}
-      maskClosable={!busy}
-      onClose={busy ? undefined : onCancel}
+      keyboard={!locked}
+      mask={{ closable: Boolean(scenario) && !locked }}
+      onClose={locked ? undefined : onCancel}
       open
-      size="large"
+      size="min(736px, 100vw)"
       title={
         scenario
           ? t(
@@ -182,6 +273,7 @@ export function ScenarioEditorDrawer({
       ) : null}
       <Form<ScenarioFormValues>
         form={form}
+        disabled={locked}
         initialValues={initialValues}
         layout="vertical"
         onFinish={handleFinish}

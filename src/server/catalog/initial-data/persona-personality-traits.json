@@ -6,5 +6,9 @@
   { "key": "trait_detail_oriented", "value": "Detail-oriented", "valueZhCn": "注重细节", "position": 4 },
   { "key": "trait_decisive", "value": "Decisive", "valueZhCn": "果断", "position": 5 },
   { "key": "trait_price_sensitive", "value": "Price-sensitive", "valueZhCn": "价格敏感", "position": 6 },
-  { "key": "trait_reserved", "value": "Reserved", "valueZhCn": "内敛", "position": 7 }
+  { "key": "trait_reserved", "value": "Reserved", "valueZhCn": "内敛", "position": 7 },
+  { "key": "trait_analytical", "value": "Analytical", "valueZhCn": "善于分析", "position": 8 },
+  { "key": "trait_collaborative", "value": "Collaborative", "valueZhCn": "重视协作", "position": 9 },
+  { "key": "trait_risk_averse", "value": "Risk-averse", "valueZhCn": "厌恶风险", "position": 10 },
+  { "key": "trait_assertive", "value": "Assertive", "valueZhCn": "立场坚定", "position": 11 }
 ]

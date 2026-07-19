@@ -167,8 +167,16 @@ describe("splitLegacyDatabase", () => {
     expect(result.catalogRowsCopied.personas).toBe(
       originalCatalog.personas.length,
     );
-    expect(result.catalogRowsCopied.persona_occupation_presets).toBe(20);
-    expect(result.catalogRowsCopied.scenario_training_goal_presets).toBe(5);
+    expect(result.catalogRowsCopied.persona_occupation_presets).toBe(
+      originalCatalog.personaPresets.filter(
+        ({ category }) => category === "occupation",
+      ).length,
+    );
+    expect(result.catalogRowsCopied.scenario_training_goal_presets).toBe(
+      originalCatalog.scenarioPresets.filter(
+        ({ category }) => category === "training_goal",
+      ).length,
+    );
     expect(result.conversationRowsCopied.sessions).toBe(1);
     expect(result.conversationRowsCopied.messages).toBe(1);
 

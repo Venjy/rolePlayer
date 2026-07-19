@@ -3,8 +3,10 @@ import type {
   ScenarioInput,
   ScenarioPreset,
 } from "../../shared/role-play-catalog";
-import { localizeScenario } from "../../shared/role-play-localization";
+import { distributeScoringWeights } from "../../shared/scoring-weights";
 import type { AppLocale } from "../i18n";
+
+export { distributeScoringWeights } from "../../shared/scoring-weights";
 
 interface ScoringCriterionFormValue {
   successCriterionPresetId: number;
@@ -23,6 +25,8 @@ export interface ScenarioFormValues {
   scoringCriteria: ScoringCriterionFormValue[];
 }
 
+type ScenarioFormSource = Scenario | ScenarioInput;
+
 function mergeText(
   value: string,
   locale: AppLocale,
@@ -35,16 +39,6 @@ function mergeText(
   return locale === "en"
     ? { en: normalized, zhCn: chinese }
     : { en: english, zhCn: normalized };
-}
-
-/** Evenly distributes whole percentages and puts rounding units at the end. */
-export function distributeScoringWeights(count: number): number[] {
-  if (count <= 0) return [];
-  const base = Math.floor(100 / count);
-  const remainder = 100 - base * count;
-  return Array.from({ length: count }, (_, index) =>
-    index >= count - remainder ? base + 1 : base,
-  );
 }
 
 export function buildScoringCriteriaForSuccessCriteria(
@@ -70,34 +64,43 @@ export function buildScoringCriteriaForSuccessCriteria(
 }
 
 export function getScenarioFormInitialValues(
-  scenario: Scenario | undefined,
+  scenario: ScenarioFormSource | undefined,
   locale: AppLocale,
+  presets: readonly ScenarioPreset[] = [],
 ): ScenarioFormValues {
-  const display = scenario ? localizeScenario(scenario, locale) : undefined;
+  const localized = (english: string | undefined, chinese: string | undefined) =>
+    locale === "en" ? english || chinese || "" : chinese || english || "";
   return {
-    name: display?.name ?? "",
-    description: display?.description ?? "",
+    name: localized(scenario?.name, scenario?.nameZhCn),
+    description: localized(scenario?.description, scenario?.descriptionZhCn),
     trainingGoalPresetIds: scenario?.trainingGoalPresetIds ?? [],
     skillFocusPresetIds: scenario?.skillFocusPresetIds ?? [],
     successCriterionPresetIds: scenario?.successCriterionPresetIds ?? [],
     toneStylePresetId: scenario?.toneStylePresetId,
     voiceBehavior: scenario?.voiceBehavior ?? {},
     scoringCriteria:
-      scenario?.scoringCriteria.map((criterion) => ({
-        successCriterionPresetId: criterion.successCriterionPresetId,
-        displayName:
-          locale === "en"
-            ? criterion.name || criterion.nameZhCn
-            : criterion.nameZhCn || criterion.name,
-        weight: criterion.weight,
-      })) ?? [],
+      scenario?.scoringCriteria.map((criterion) => {
+        const resolved = presets.find(
+          (preset) =>
+            preset.id === criterion.successCriterionPresetId &&
+            preset.category === "success_criterion",
+        );
+        const english = "name" in criterion ? criterion.name : resolved?.value;
+        const chinese =
+          "nameZhCn" in criterion ? criterion.nameZhCn : resolved?.valueZhCn;
+        return {
+          successCriterionPresetId: criterion.successCriterionPresetId,
+          displayName: localized(english, chinese),
+          weight: criterion.weight,
+        };
+      }) ?? [],
   };
 }
 
 export function normalizeScenarioFormValues(
   values: ScenarioFormValues,
   locale: AppLocale,
-  scenario: Scenario | undefined,
+  scenario: ScenarioFormSource | undefined,
   defaultAllowedPersonaIds: readonly number[] = [],
 ): ScenarioInput {
   const name = mergeText(

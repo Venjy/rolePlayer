@@ -158,7 +158,7 @@ pnpm smoke:realtime /absolute/path/to/input.pcm --interrupt
 - 中英文界面，首次使用默认为英文；Ant Design locale 保持同步，并将 `role-player:locale` 保存到 `localStorage`
 - 支持明暗主题，根据保存值或系统偏好初始化，切换时不会重置当前页面状态
 - 学员启动页提供可搜索的场景和角色选择、兼容性过滤、Ant Design 简单/中等/困难单选按钮，展示目标、技能、成功标准、角色背景、性格、动机和顾虑等备战信息，以及真正完整的 Instructions 预览和 `实际字数/12000` 限制
-- 响应式管理控制台，角色/场景独立编辑，兼容关系单独管理，评分权重由成功标准生成，并提供各自独立的 Instructions 预览
+- 响应式管理控制台，角色/场景独立编辑，兼容关系单独管理，评分权重由成功标准生成，并提供各自独立的 Instructions 预览和由已配置 Qwen 文本模型生成的双语可编辑随机草稿
 - 数据库驱动的双语角色预设，以及训练目标、重点技能、成功标准和语气风格等场景预设；客户端不再内置角色/场景业务选项
 - 每个需要本地化的角色/场景字段都独立保存中英文；界面优先显示当前语言，缺失时回退另一语言，管理表单只更新当前编辑语言，不会把回退文字误存为翻译
 - 完整双语的初始角色和场景由 JSON 定义并写入 SQLite；用户填写的内容不会经过机器翻译
@@ -194,6 +194,7 @@ pnpm smoke:realtime /absolute/path/to/input.pcm --interrupt
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | `GET` | `/api/catalog` | 读取 `qwenVoices`、`personaPresets`、`scenarioPresets`、双语角色/场景和兼容 ID |
+| `POST` | `/api/catalog/generate/persona`、`/api/catalog/generate/scenario` | 根据当前数据库可选项生成经过校验的双语可编辑草稿，并排除已持久化内容和请求中提交的当前抽屉草稿；不自动保存目录记录 |
 | `POST`、`PUT`、`DELETE` | `/api/personas`、`/api/personas/:id` | 新建、整体替换或删除角色 |
 | `POST`、`PUT`、`DELETE` | `/api/scenarios`、`/api/scenarios/:id` | 新建、整体替换或删除场景 |
 

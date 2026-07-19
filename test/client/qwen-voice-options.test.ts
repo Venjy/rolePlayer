@@ -7,18 +7,24 @@ import type { QwenVoiceDefinition } from "../../src/shared/role-play-catalog";
 
 const timestamp = "2026-07-19T12:00:00.000+08:00";
 const voiceNames = [
-  ["longanqian", "Natural female voice", "自然女声"],
-  ["longanlingxin", "Sophisticated female voice", "知性女声"],
-  ["longanlingxi", "Lively female voice", "活泼女声"],
-  ["longanxiaoxin", "Emotional female voice", "感性女声"],
-  ["longanlufeng", "Cheerful male voice", "开朗男声"],
+  ["longanqian", "female", "Natural female voice", "自然女声"],
+  ["longanlingxin", "female", "Sophisticated female voice", "知性女声"],
+  ["longanlingxi", "female", "Lively female voice", "活泼女声"],
+  ["longanxiaoxin", "female", "Emotional female voice", "感性女声"],
+  ["longanlufeng", "male", "Cheerful male voice", "开朗男声"],
 ] as const satisfies ReadonlyArray<
-  readonly [QwenVoiceDefinition["voice"], string, string]
+  readonly [
+    QwenVoiceDefinition["voice"],
+    QwenVoiceDefinition["gender"],
+    string,
+    string,
+  ]
 >;
 const voices: QwenVoiceDefinition[] = voiceNames.map(
-  ([voice, name, nameZhCn], index) => ({
+  ([voice, gender, name, nameZhCn], index) => ({
   id: index + 1,
   voice,
+  gender,
   name,
   nameZhCn,
   position: index,

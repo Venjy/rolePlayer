@@ -4,8 +4,9 @@ import type {
   PersonaPreset,
   PersonaPresetCategory,
 } from "../../shared/role-play-catalog";
-import { localizePersona } from "../../shared/role-play-localization";
 import type { AppLocale } from "../i18n";
+
+type PersonaFormSource = Persona | PersonaInput;
 
 /** Form text is localized, while every preset selection is a language-neutral ID. */
 export interface PersonaFormValues {
@@ -39,7 +40,7 @@ function mergeText(
 export function normalizePersonaFormValues(
   values: PersonaFormValues,
   locale: AppLocale,
-  persona: Persona | undefined,
+  persona: PersonaFormSource | undefined,
 ): PersonaInput {
   const name = mergeText(
     values.name,
@@ -79,27 +80,28 @@ export function normalizePersonaFormValues(
 }
 
 export function getPersonaFormInitialValues(
-  persona: Persona | undefined,
+  persona: PersonaFormSource | undefined,
   locale: AppLocale,
   presets: readonly PersonaPreset[] = [],
 ): PersonaFormValues {
-  const display = persona ? localizePersona(persona, locale) : undefined;
+  const localized = (english: string | undefined, chinese: string | undefined) =>
+    locale === "en" ? english || chinese || "" : chinese || english || "";
   const firstId = (category: PersonaPresetCategory) =>
     presets
       .filter((preset) => preset.category === category)
       .sort((left, right) => left.position - right.position)[0]?.id;
   return {
-    name: display?.name ?? "",
+    name: localized(persona?.name, persona?.nameZhCn),
     gender: persona?.gender ?? "unspecified",
     age: persona?.age ?? null,
     occupationPresetId: persona?.occupationPresetId ?? firstId("occupation"),
-    background: display?.background ?? "",
+    background: localized(persona?.background, persona?.backgroundZhCn),
     personalityTraitPresetIds:
       persona?.personalityTraitPresetIds ??
       (firstId("personality_trait") ? [firstId("personality_trait")!] : []),
     communicationStylePresetId:
       persona?.communicationStylePresetId ?? firstId("communication_style"),
-    behaviorNotes: display?.behaviorNotes ?? "",
+    behaviorNotes: localized(persona?.behaviorNotes, persona?.behaviorNotesZhCn),
     motivationPresetIds: persona?.motivationPresetIds ?? [],
     concernPresetIds: persona?.concernPresetIds ?? [],
     voice: persona?.voice ?? "longanqian",

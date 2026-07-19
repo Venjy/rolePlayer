@@ -3,11 +3,19 @@ import type { ZodError } from "zod";
 import { z } from "zod";
 import { databaseIdSchema } from "../../shared/database-id";
 import {
+  personaDraftGenerationRequestSchema,
   personaInputSchema,
+  scenarioDraftGenerationRequestSchema,
   scenarioInputSchema,
 } from "../../shared/role-play-catalog";
 import { MAX_REALTIME_INSTRUCTIONS_LENGTH } from "../../shared/realtime-protocol";
 import { PresetReferenceResolutionError } from "../../shared/role-play-preset-resolution";
+import { getFeedbackConfig } from "../config";
+import {
+  CatalogDraftGenerationError,
+  QwenCatalogDraftGenerator,
+  type CatalogDraftGenerator,
+} from "./catalog-draft-generator";
 import {
   CatalogNameConflictError,
   CatalogRepository,
@@ -20,11 +28,53 @@ const idParametersSchema = z.object({
   id: z.coerce.number().pipe(databaseIdSchema),
 });
 
+interface CatalogRouteOptions {
+  /** Test/alternate provider injection; the default lazily reuses qwen-plus. */
+  draftGenerator?: CatalogDraftGenerator;
+}
+
 /** Registers the server-owned CRUD boundary for editable personas and scenarios. */
-export function registerCatalogRoutes(app: FastifyInstance): void {
+export function registerCatalogRoutes(
+  app: FastifyInstance,
+  options: CatalogRouteOptions = {},
+): void {
   const repository = new CatalogRepository(app.catalogDatabase);
+  const getDraftGenerator = () =>
+    options.draftGenerator ?? createConfiguredDraftGenerator();
 
   app.get("/api/catalog", async () => repository.listCatalog());
+
+  app.post("/api/catalog/generate/persona", async (request, reply) => {
+    const parsed = personaDraftGenerationRequestSchema.safeParse(
+      request.body ?? {},
+    );
+    if (!parsed.success) return sendValidationError(reply, parsed.error);
+    try {
+      const draft = await getDraftGenerator().generatePersona(
+        repository.listCatalog(),
+        parsed.data.currentDraft,
+      );
+      return reply.send(draft);
+    } catch (error) {
+      return handleCatalogError(error, reply);
+    }
+  });
+
+  app.post("/api/catalog/generate/scenario", async (request, reply) => {
+    const parsed = scenarioDraftGenerationRequestSchema.safeParse(
+      request.body ?? {},
+    );
+    if (!parsed.success) return sendValidationError(reply, parsed.error);
+    try {
+      const draft = await getDraftGenerator().generateScenario(
+        repository.listCatalog(),
+        parsed.data.currentDraft,
+      );
+      return reply.send(draft);
+    } catch (error) {
+      return handleCatalogError(error, reply);
+    }
+  });
 
   app.post("/api/personas", async (request, reply) => {
     const parsed = personaInputSchema.safeParse(request.body);
@@ -148,6 +198,20 @@ function sendNotFound(
 }
 
 function handleCatalogError(error: unknown, reply: FastifyReply) {
+  if (error instanceof CatalogDraftGenerationError) {
+    const status =
+      error.code === "catalog_generation_model_timeout"
+        ? 504
+        : error.code === "catalog_generation_configuration_missing" ||
+            error.code === "catalog_generation_model_unreachable"
+          ? 503
+          : 502;
+    return reply.code(status).send({
+      message: error.message,
+      error: { code: error.code, message: error.message },
+    });
+  }
+
   if (error instanceof CatalogNameConflictError) {
     return reply.code(409).send({
       message: error.message,
@@ -210,4 +274,17 @@ function handleCatalogError(error: unknown, reply: FastifyReply) {
   }
 
   throw error;
+}
+
+function createConfiguredDraftGenerator(): CatalogDraftGenerator {
+  try {
+    return new QwenCatalogDraftGenerator(getFeedbackConfig());
+  } catch (error) {
+    throw new CatalogDraftGenerationError(
+      error instanceof Error
+        ? error.message
+        : "The catalog generation model is not configured.",
+      "catalog_generation_configuration_missing",
+    );
+  }
 }

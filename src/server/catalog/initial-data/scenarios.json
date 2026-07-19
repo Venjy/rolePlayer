@@ -3,7 +3,7 @@
     "key": "scenario_sales_discovery",
     "input": {
       "name": "Sales discovery call", "nameZhCn": "销售需求探索",
-      "description": "Run an initial conversation with a potential buyer and determine whether there is a credible fit.", "descriptionZhCn": "与潜在客户进行首次沟通，判断双方是否存在可靠的合作契合点。",
+      "description": "This is the first structured conversation with a potential buyer at a mid-sized company whose lead qualification and handoff process still relies on spreadsheets and manual follow-up. Slow response times are causing promising leads to go cold, but the buyer has not yet agreed internally on the size of the problem, the available budget, or who must approve a change. The buyer is comparing several approaches and will resist a generic product pitch. The learner must uncover the current workflow, quantify the business impact, identify the decision process, and earn a concrete next step.", "descriptionZhCn": "这是与一家中型企业潜在客户的首次正式沟通。该客户的线索筛选与交接仍依赖表格和人工跟进，响应缓慢已经导致部分高意向线索流失，但内部尚未就问题规模、可用预算和审批人形成共识。客户正在比较多种解决方式，并会抵触缺乏针对性的产品推销。学员需要了解当前流程、量化业务影响、确认决策机制，并争取一个明确的下一步。",
       "trainingGoalPresetKeys": ["goal_discover_needs", "goal_next_step"],
       "skillFocusPresetKeys": ["skill_open_questions", "skill_active_listening"],
       "toneStylePresetKey": "tone_professional",
@@ -20,7 +20,7 @@
     "key": "scenario_price_objection",
     "input": {
       "name": "Handling a price objection", "nameZhCn": "价格异议处理",
-      "description": "The customer believes the quote exceeds the budget. Clarify the objection before connecting value to cost.", "descriptionZhCn": "客户认为报价超出预算，学员需要先澄清异议，再建立价值与成本之间的联系。",
+      "description": "The customer has received a formal proposal whose price is roughly twenty percent above the approved budget, while a competing vendor has submitted a cheaper alternative. The customer is not yet convinced that the additional value, payback period, integration effort, and service commitments justify the difference. An internal recommendation is due soon, so there is pressure to reduce price quickly. The learner must determine whether price is the real objection, connect value to measurable outcomes, explain relevant trade-offs, and agree on a defensible next step without offering an unsupported early discount.", "descriptionZhCn": "客户收到的正式报价比已批准预算高约百分之二十，同时另一家供应商给出了更便宜的替代方案。客户尚未确信额外价值、回报周期、集成投入和服务承诺足以解释这部分价差。内部供应商建议即将到期，因此客户希望尽快压价。学员需要判断价格是否是真实异议，把价值与可量化结果联系起来，说明不同方案的取舍，并在不轻率降价的前提下达成一个站得住脚的下一步。",
       "trainingGoalPresetKeys": ["goal_clarify_objection", "goal_build_value"],
       "skillFocusPresetKeys": ["skill_objection_handling", "skill_value_articulation", "skill_negotiation"],
       "toneStylePresetKey": "tone_challenging",
@@ -37,7 +37,7 @@
     "key": "scenario_renewal_recovery",
     "input": {
       "name": "Renewal recovery", "nameZhCn": "续约挽回",
-      "description": "An existing customer is dissatisfied and considering not renewing. Understand the problem and rebuild trust.", "descriptionZhCn": "现有客户对使用效果不满意并考虑不再续约，学员需要理解问题并修复信任。",
+      "description": "The conversation takes place six weeks before renewal with an existing customer whose adoption has fallen below the level promised during implementation. Users report workflow friction, unresolved integration issues, and reports that do not give managers the visibility they expected. The executive sponsor is under cost pressure and is considering either reducing scope or moving to another provider, although the customer is still open to recovery if there is a credible plan. The learner must acknowledge the experience without becoming defensive, identify the root causes and business impact, rebuild trust, and secure a recovery plan with owners, milestones, and a follow-up date.", "descriptionZhCn": "本次沟通发生在续约前六周，现有客户的实际使用率低于实施阶段的预期。终端用户反馈流程操作不顺、集成问题迟迟未解决，管理报表也没有提供原本期待的经营可视性。高层负责人正面临成本压力，正在考虑缩减范围或更换供应商，但如果能看到可信的改进方案，客户仍愿意给一次挽回机会。学员需要在不辩解的前提下承接客户感受，找出问题根因和业务影响，修复信任，并达成包含责任人、里程碑和复盘时间的恢复计划。",
       "trainingGoalPresetKeys": ["goal_rebuild_trust", "goal_next_step"],
       "skillFocusPresetKeys": ["skill_active_listening", "skill_empathy"],
       "toneStylePresetKey": "tone_warm",

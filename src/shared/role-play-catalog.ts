@@ -27,6 +27,7 @@ export const personaGenderSchema = z.enum([
   "non_binary",
   "unspecified",
 ]);
+export type PersonaGender = z.infer<typeof personaGenderSchema>;
 
 export const difficultySchema = z.enum(["easy", "medium", "hard"]);
 export type Difficulty = z.infer<typeof difficultySchema>;
@@ -108,9 +109,11 @@ export const voiceBehaviorSchema = z.object({
 });
 
 /** Database-backed display metadata for a provider-owned Qwen voice ID. */
+export const qwenVoiceGenderSchema = z.enum(["female", "male"]);
 export const qwenVoiceDefinitionSchema = z.object({
   id: databaseIdSchema,
   voice: qwenVoiceSchema,
+  gender: qwenVoiceGenderSchema,
   name: requiredText(120),
   nameZhCn: requiredText(120),
   position: z.number().int().min(0),
@@ -153,6 +156,23 @@ export const personaInputSchema = personaInputObjectSchema.superRefine(
   addRequiredPersonaInputIssues,
 );
 export type PersonaInput = z.infer<typeof personaInputSchema>;
+
+/**
+ * A create drawer may be only partially filled. The current values are sent as
+ * an exclusion hint, so generation must not require an otherwise savable row.
+ */
+export const personaDraftGenerationContextSchema =
+  personaInputObjectSchema.partial();
+export type PersonaDraftGenerationContext = z.infer<
+  typeof personaDraftGenerationContextSchema
+>;
+
+export const personaDraftGenerationRequestSchema = z.object({
+  currentDraft: personaDraftGenerationContextSchema.optional(),
+});
+export type PersonaDraftGenerationRequest = z.infer<
+  typeof personaDraftGenerationRequestSchema
+>;
 
 const resolvedPersonaPresetFieldsSchema = z.object({
   occupation: optionalText(500),
@@ -310,6 +330,28 @@ export const scenarioInputSchema = z
   });
 
 export type ScenarioInput = z.infer<typeof scenarioInputSchema>;
+
+export const scenarioDraftGenerationContextSchema = z.object({
+  name: optionalText(120).optional(),
+  nameZhCn: optionalText(120).optional(),
+  description: optionalText(2_000).optional(),
+  descriptionZhCn: optionalText(2_000).optional(),
+  trainingGoalPresetIds: uniqueIdList(10).optional(),
+  skillFocusPresetIds: uniqueIdList(10).optional(),
+  successCriterionPresetIds: uniqueIdList(12).optional(),
+  toneStylePresetId: databaseIdSchema.optional(),
+  voiceBehavior: voiceBehaviorSchema.partial().optional(),
+});
+export type ScenarioDraftGenerationContext = z.infer<
+  typeof scenarioDraftGenerationContextSchema
+>;
+
+export const scenarioDraftGenerationRequestSchema = z.object({
+  currentDraft: scenarioDraftGenerationContextSchema.optional(),
+});
+export type ScenarioDraftGenerationRequest = z.infer<
+  typeof scenarioDraftGenerationRequestSchema
+>;
 
 export const scenarioSchema = scenarioInputSchema.safeExtend({
   goals: shortTextList(10),

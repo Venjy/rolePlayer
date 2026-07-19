@@ -162,7 +162,7 @@ feedback_moments
 
 Unsuffixed database columns represent English and `_zh_cn` columns represent Simplified Chinese. The API maps those columns to unsuffixed English fields and `*ZhCn` Chinese fields. Either language may be empty; fallback remains presentation-only.
 
-Free-text business fields have explicit English/Chinese columns. Preset-backed fields do not duplicate localized text on personas or scenarios: single selections are foreign-key columns and multi-selections are ordered relation rows. `qwen_voices.voice` and `personas.voice` retain the provider-owned Qwen ID needed by the realtime API; localized display names live only in `qwen_voices.name` / `name_zh_cn`. Scenario voice behavior uses nullable `interrupt_frequency` and `speaking_pace` columns; scenario success-standard weights live on `scenario_success_criteria`.
+Free-text business fields have explicit English/Chinese columns. Preset-backed fields do not duplicate localized text on personas or scenarios: single selections are foreign-key columns and multi-selections are ordered relation rows. `qwen_voices.voice` and `personas.voice` retain the provider-owned Qwen ID needed by the realtime API; localized display names live only in `qwen_voices.name` / `name_zh_cn`, and `qwen_voices.gender` stores the structured provider voice gender used to validate generated personas. Scenario voice behavior uses nullable `interrupt_frequency` and `speaking_pace` columns; scenario success-standard weights live on `scenario_success_criteria`.
 
 ## Presets
 
@@ -186,7 +186,7 @@ Deleting an ended session removes its `sessions` row. Foreign keys cascade every
 
 ## Migrations, legacy splitting, and business initialization
 
-Migrations are append-only structural changes. The catalog chain currently has seven entries: migration 4 moves both historical discriminator tables into nine independent domain tables, migration 5 replaces duplicated catalog text with preset foreign keys/ordered relations, migration 6 creates the bilingual Qwen voice directory, and migration 7 moves tone/pace/interjection configuration from personas to scenarios. The conversation chain has seven entries: migration 4 removes the redundant `conversation_` prefix from business table and index names, migration 5 adds finalized-message audio, migration 6 moves the resolved voice-behavior values from persona snapshots to scenario snapshots, and migration 7 adds terminal session state plus normalized feedback tables. Neither file contains the other domain's business tables.
+Migrations are append-only structural changes. The catalog chain currently has eight entries: migration 4 moves both historical discriminator tables into nine independent domain tables, migration 5 replaces duplicated catalog text with preset foreign keys/ordered relations, migration 6 creates the bilingual Qwen voice directory, migration 7 moves tone/pace/interjection configuration from personas to scenarios, and migration 8 records structured Qwen voice gender. The conversation chain has seven entries: migration 4 removes the redundant `conversation_` prefix from business table and index names, migration 5 adds finalized-message audio, migration 6 moves the resolved voice-behavior values from persona snapshots to scenario snapshots, and migration 7 adds terminal session state plus normalized feedback tables. Neither file contains the other domain's business tables.
 
 The historical combined database uses migrations 1–17:
 
