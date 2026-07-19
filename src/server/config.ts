@@ -10,7 +10,18 @@ const serverEnvSchema = z.object({
   SERVER_HOST: z.string().default("127.0.0.1"),
   SERVER_PORT: z.coerce.number().int().min(1).max(65_535).default(3001),
   CLIENT_ORIGIN: z.string().url().default("http://localhost:5173"),
-  DATABASE_PATH: z.string().trim().min(1).default("data/role-player.sqlite"),
+  CATALOG_DATABASE_PATH: z
+    .string()
+    .trim()
+    .min(1)
+    .default("data/catalog.sqlite"),
+  CONVERSATION_DATABASE_PATH: z
+    .string()
+    .trim()
+    .min(1)
+    .default("data/conversations.sqlite"),
+  LEGACY_DATABASE_PATH: z.string().trim().min(1).optional(),
+  DATABASE_PATH: z.string().trim().min(1).optional(),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
     .default("info"),
@@ -41,7 +52,16 @@ const qwenEnvSchema = z
 export type QwenConfig = ReturnType<typeof getQwenConfig>;
 
 export function getServerConfig() {
-  return serverEnvSchema.parse(process.env);
+  const parsed = serverEnvSchema.parse(process.env);
+  return {
+    ...parsed,
+    // DATABASE_PATH is accepted only as the source path for the one-time split
+    // command so existing local .env files do not need an immediate edit.
+    LEGACY_DATABASE_PATH:
+      parsed.LEGACY_DATABASE_PATH ??
+      parsed.DATABASE_PATH ??
+      "data/role-player.sqlite",
+  };
 }
 
 export function getQwenConfig() {

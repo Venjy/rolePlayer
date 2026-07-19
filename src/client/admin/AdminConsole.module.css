@@ -20,6 +20,13 @@
   margin: 0 0 4px;
 }
 
+.headerTitleGroup {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 12px;
+}
+
 .headerActions {
   flex: 0 0 auto;
   justify-content: flex-end;
@@ -136,6 +143,12 @@
   column-gap: 16px;
 }
 
+.personaBasicsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 16px;
+}
+
 .fullSpan {
   grid-column: 1 / -1;
 }
@@ -151,6 +164,13 @@
 .scoringRow {
   display: grid;
   grid-template-columns: minmax(160px, 1fr) 140px 32px;
+  gap: 8px;
+  align-items: center;
+}
+
+.readonlyScoringRow {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) 140px;
   gap: 8px;
   align-items: center;
 }
@@ -205,12 +225,20 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .personaBasicsGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .fullSpan {
     grid-column: auto;
   }
 
   .scoringRow {
     grid-template-columns: minmax(0, 1fr) 104px 32px;
+  }
+
+  .readonlyScoringRow {
+    grid-template-columns: minmax(0, 1fr) 104px;
   }
 
   .cardFooter {

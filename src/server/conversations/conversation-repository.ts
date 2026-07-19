@@ -1,15 +1,17 @@
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
   conversationDetailSchema,
   conversationMessageRoleSchema,
   conversationMessageSchema,
   conversationSummarySchema,
-  createConversationInputSchema,
+  conversationLocaleSchema,
+  personaSnapshotSchema,
+  scenarioSnapshotSchema,
   type ConversationDetail,
   type ConversationMessage,
+  type PersonaSnapshot,
+  type ScenarioSnapshot,
   type ConversationSummary,
-  type CreateConversationInput,
 } from "../../shared/conversation-history";
 import type {
   Difficulty,
@@ -22,16 +24,24 @@ import {
 } from "../../shared/role-play-catalog";
 import { compileRolePlayInstructions } from "../../shared/role-play-instructions";
 import {
+  localizePersona,
+  localizeScenario,
+} from "../../shared/role-play-localization";
+import {
   MAX_REALTIME_INSTRUCTIONS_LENGTH,
   qwenVoiceSchema,
   type QwenVoice,
 } from "../../shared/realtime-protocol";
 import type { ApplicationDatabase } from "../database/database";
+import {
+  formatDatabaseTimestamp,
+  nextDatabaseTimestamp,
+  normalizeDatabaseTimestamp,
+} from "../database/database-time";
+import { databaseIdSchema } from "../../shared/database-id";
 
 interface ConversationSessionRow {
-  id: string;
-  persona_json: string;
-  scenario_json: string;
+  id: number;
   difficulty: string;
   locale: string;
   instructions: string;
@@ -41,13 +51,71 @@ interface ConversationSessionRow {
 }
 
 interface ConversationSummaryRow extends ConversationSessionRow {
+  persona_name: string;
+  persona_name_zh_cn: string;
+  scenario_name: string;
+  scenario_name_zh_cn: string;
   message_count: number;
   last_message_text: string | null;
 }
 
+interface PersonaSnapshotRow {
+  conversation_id: number;
+  source_persona_id: number;
+  name: string;
+  name_zh_cn: string;
+  gender: string;
+  age: number | null;
+  occupation: string;
+  occupation_zh_cn: string;
+  background: string;
+  background_zh_cn: string;
+  personality_traits_json: string;
+  personality_traits_zh_cn_json: string;
+  communication_style: string;
+  communication_style_zh_cn: string;
+  tone_style: string;
+  tone_style_zh_cn: string;
+  behavior_notes: string;
+  behavior_notes_zh_cn: string;
+  motivations_json: string;
+  motivations_zh_cn_json: string;
+  concerns_json: string;
+  concerns_zh_cn_json: string;
+  voice: string;
+  interrupt_frequency: string;
+  speaking_pace: string;
+  source_created_at: string;
+  source_updated_at: string;
+}
+
+interface ScenarioSnapshotRow {
+  conversation_id: number;
+  source_scenario_id: number;
+  name: string;
+  name_zh_cn: string;
+  description: string;
+  description_zh_cn: string;
+  goals_json: string;
+  goals_zh_cn_json: string;
+  suggested_skill_focus_json: string;
+  suggested_skill_focus_zh_cn_json: string;
+  success_criteria_json: string;
+  success_criteria_zh_cn_json: string;
+  source_created_at: string;
+  source_updated_at: string;
+}
+
+interface SnapshotScoringCriterionRow {
+  position: number;
+  name: string;
+  name_zh_cn: string;
+  weight: number;
+}
+
 interface ConversationMessageRow {
-  id: string;
-  conversation_id: string;
+  id: number;
+  conversation_id: number;
   position: number;
   role: string;
   text: string;
@@ -58,7 +126,7 @@ interface ConversationMessageRow {
 }
 
 const appendMessageInputSchema = z.object({
-  conversationId: z.string().trim().min(1).max(100),
+  conversationId: databaseIdSchema,
   role: conversationMessageRoleSchema,
   text: z.string().trim().min(1).max(100_000),
   interrupted: z.boolean(),
@@ -67,7 +135,7 @@ const appendMessageInputSchema = z.object({
 });
 
 export interface AppendConversationMessageInput {
-  conversationId: string;
+  conversationId: number;
   role: ConversationMessage["role"];
   text: string;
   interrupted: boolean;
@@ -76,18 +144,42 @@ export interface AppendConversationMessageInput {
 }
 
 export interface RuntimeConversation {
-  id: string;
-  persona: Persona;
-  scenario: Scenario;
+  id: number;
+  persona: PersonaSnapshot;
+  scenario: ScenarioSnapshot;
   difficulty: Difficulty;
-  locale: CreateConversationInput["locale"];
+  locale: z.infer<typeof conversationLocaleSchema>;
   instructions: string;
   voice: QwenVoice;
   messages: ConversationMessage[];
 }
 
+export interface CreateConversationSnapshotInput {
+  persona: Persona;
+  scenario: Scenario;
+  difficulty: Difficulty;
+  locale: z.infer<typeof conversationLocaleSchema>;
+}
+
+const createConversationSnapshotInputSchema = z
+  .object({
+    persona: personaSchema,
+    scenario: scenarioSchema,
+    difficulty: z.enum(["easy", "medium", "hard"]),
+    locale: conversationLocaleSchema,
+  })
+  .superRefine((value, context) => {
+    if (!value.scenario.allowedPersonaIds.includes(value.persona.id)) {
+      context.addIssue({
+        code: "custom",
+        path: ["persona", "id"],
+        message: "The persona is not compatible with the selected scenario.",
+      });
+    }
+  });
+
 export class ConversationNotFoundError extends Error {
-  public constructor(public readonly conversationId: string) {
+  public constructor(public readonly conversationId: number) {
     super(`No conversation exists with ID "${conversationId}".`);
     this.name = "ConversationNotFoundError";
   }
@@ -118,35 +210,47 @@ export class ConversationMessageIdentityConflictError extends Error {
 export class ConversationRepository {
   public constructor(private readonly database: ApplicationDatabase) {}
 
-  public createConversation(input: CreateConversationInput): ConversationDetail {
-    const parsed = createConversationInputSchema.parse(input);
-    const instructions = compileRolePlayInstructions(parsed);
+  public createConversation(input: CreateConversationSnapshotInput): ConversationDetail {
+    const parsed = createConversationSnapshotInputSchema.parse(input);
+    const personaSnapshot = normalizeSnapshotTimestamps(parsed.persona);
+    const scenarioSnapshot = normalizeSnapshotTimestamps(parsed.scenario);
+    const localizedPersona = localizePersona(personaSnapshot, parsed.locale);
+    const localizedScenario = localizeScenario(scenarioSnapshot, parsed.locale);
+    const instructions = compileRolePlayInstructions({
+      persona: localizedPersona,
+      scenario: localizedScenario,
+      difficulty: parsed.difficulty,
+    });
     if (instructions.length > MAX_REALTIME_INSTRUCTIONS_LENGTH) {
       throw new ConversationInstructionsTooLongError(instructions.length);
     }
 
-    const id = `conversation_${randomUUID()}`;
-    const timestamp = new Date().toISOString();
-    this.connection
-      .prepare(
-        `INSERT INTO conversation_sessions (
-          id, persona_json, scenario_json, difficulty, locale,
-          instructions, voice, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        id,
-        JSON.stringify(parsed.persona),
-        JSON.stringify(parsed.scenario),
-        parsed.difficulty,
-        parsed.locale,
-        instructions,
-        parsed.persona.voice,
-        timestamp,
-        timestamp,
-      );
-
-    return this.requireConversation(id);
+    const timestamp = formatDatabaseTimestamp();
+    this.connection.exec("BEGIN IMMEDIATE");
+    try {
+      const write = this.connection
+        .prepare(
+          `INSERT INTO sessions (
+            difficulty, locale, instructions, voice, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          parsed.difficulty,
+          parsed.locale,
+          instructions,
+          personaSnapshot.voice,
+          timestamp,
+          timestamp,
+        );
+      const id = toDatabaseId(write.lastInsertRowid);
+      this.insertPersonaSnapshot(id, personaSnapshot);
+      this.insertScenarioSnapshot(id, scenarioSnapshot);
+      this.connection.exec("COMMIT");
+      return this.requireConversation(id);
+    } catch (error) {
+      this.connection.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   public listConversations(): ConversationSummary[] {
@@ -154,16 +258,24 @@ export class ConversationRepository {
       .prepare(
         `SELECT
           sessions.*,
+          persona.name AS persona_name,
+          persona.name_zh_cn AS persona_name_zh_cn,
+          scenario.name AS scenario_name,
+          scenario.name_zh_cn AS scenario_name_zh_cn,
           COUNT(messages.id) AS message_count,
           (
             SELECT latest.text
-            FROM conversation_messages AS latest
+            FROM messages AS latest
             WHERE latest.conversation_id = sessions.id
             ORDER BY latest.position DESC
             LIMIT 1
           ) AS last_message_text
-        FROM conversation_sessions AS sessions
-        LEFT JOIN conversation_messages AS messages
+        FROM sessions
+        JOIN persona_snapshots AS persona
+          ON persona.conversation_id = sessions.id
+        JOIN scenario_snapshots AS scenario
+          ON scenario.conversation_id = sessions.id
+        LEFT JOIN messages
           ON messages.conversation_id = sessions.id
         GROUP BY sessions.id
         ORDER BY sessions.updated_at DESC, sessions.id DESC`,
@@ -173,19 +285,21 @@ export class ConversationRepository {
     return rows.map(mapConversationSummaryRow);
   }
 
-  public getConversation(id: string): ConversationDetail | null {
+  public getConversation(id: number): ConversationDetail | null {
     const row = this.getSessionRow(id);
     if (!row) return null;
+    const { persona, scenario } = this.requireSnapshots(id);
     const messages = this.listMessages(id);
-    return mapConversationDetail(row, messages);
+    return mapConversationDetail(row, persona, scenario, messages);
   }
 
   public getRuntimeConversation(
-    id: string,
+    id: number,
     maximumUserTurns?: number,
   ): RuntimeConversation | null {
     const row = this.getSessionRow(id);
     if (!row) return null;
+    const { persona, scenario } = this.requireSnapshots(id);
     if (
       maximumUserTurns !== undefined &&
       (!Number.isSafeInteger(maximumUserTurns) || maximumUserTurns < 1)
@@ -195,8 +309,8 @@ export class ConversationRepository {
 
     return {
       id: row.id,
-      persona: parsePersona(row.persona_json),
-      scenario: parseScenario(row.scenario_json),
+      persona: localizePersona(persona, parseLocale(row.locale)),
+      scenario: localizeScenario(scenario, parseLocale(row.locale)),
       difficulty: parseDifficulty(row.difficulty),
       locale: parseLocale(row.locale),
       instructions: row.instructions,
@@ -241,7 +355,7 @@ export class ConversationRepository {
         ) {
           this.connection
             .prepare(
-              `UPDATE conversation_messages
+              `UPDATE messages
                SET source_item_id = COALESCE(source_item_id, ?),
                    response_id = COALESCE(response_id, ?)
                WHERE id = ?`,
@@ -260,22 +374,20 @@ export class ConversationRepository {
       const positionRow = this.connection
         .prepare(
           `SELECT COALESCE(MAX(position), -1) + 1 AS position
-           FROM conversation_messages
+           FROM messages
            WHERE conversation_id = ?`,
         )
         .get(parsed.conversationId) as unknown as { position: number };
-      const id = `message_${randomUUID()}`;
-      const timestamp = nextTimestamp(existingSession.updated_at);
+      const timestamp = nextDatabaseTimestamp(existingSession.updated_at);
 
-      this.connection
+      const write = this.connection
         .prepare(
-          `INSERT INTO conversation_messages (
-            id, conversation_id, position, role, text, interrupted,
+          `INSERT INTO messages (
+            conversation_id, position, role, text, interrupted,
             source_item_id, response_id, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
-          id,
           parsed.conversationId,
           positionRow.position,
           parsed.role,
@@ -287,12 +399,12 @@ export class ConversationRepository {
         );
       this.connection
         .prepare(
-          `UPDATE conversation_sessions
+          `UPDATE sessions
            SET updated_at = ?
            WHERE id = ?`,
         )
         .run(timestamp, parsed.conversationId);
-      const result = this.requireMessage(id);
+      const result = this.requireMessage(toDatabaseId(write.lastInsertRowid));
       this.connection.exec("COMMIT");
 
       return result;
@@ -302,27 +414,178 @@ export class ConversationRepository {
     }
   }
 
+  private insertPersonaSnapshot(
+    conversationId: number,
+    persona: Persona,
+  ): void {
+    this.connection
+      .prepare(
+        `INSERT INTO persona_snapshots (
+          conversation_id, source_persona_id, name, name_zh_cn, gender, age,
+          occupation, occupation_zh_cn, background, background_zh_cn,
+          personality_traits_json, personality_traits_zh_cn_json,
+          communication_style, communication_style_zh_cn,
+          tone_style, tone_style_zh_cn, behavior_notes, behavior_notes_zh_cn,
+          motivations_json, motivations_zh_cn_json,
+          concerns_json, concerns_zh_cn_json, voice,
+          interrupt_frequency, speaking_pace, source_created_at, source_updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        conversationId,
+        persona.id,
+        persona.name,
+        persona.nameZhCn,
+        persona.gender,
+        persona.age,
+        persona.occupation,
+        persona.occupationZhCn,
+        persona.background,
+        persona.backgroundZhCn,
+        JSON.stringify(persona.personalityTraits),
+        JSON.stringify(persona.personalityTraitsZhCn),
+        persona.communicationStyle,
+        persona.communicationStyleZhCn,
+        persona.toneStyle,
+        persona.toneStyleZhCn,
+        persona.behaviorNotes,
+        persona.behaviorNotesZhCn,
+        JSON.stringify(persona.motivations),
+        JSON.stringify(persona.motivationsZhCn),
+        JSON.stringify(persona.concerns),
+        JSON.stringify(persona.concernsZhCn),
+        persona.voice,
+        persona.voiceBehavior.interruptFrequency,
+        persona.voiceBehavior.speakingPace,
+        persona.createdAt,
+        persona.updatedAt,
+      );
+  }
+
+  private insertScenarioSnapshot(
+    conversationId: number,
+    scenario: Scenario,
+  ): void {
+    this.connection
+      .prepare(
+        `INSERT INTO scenario_snapshots (
+          conversation_id, source_scenario_id, name, name_zh_cn,
+          description, description_zh_cn, goals_json, goals_zh_cn_json,
+          suggested_skill_focus_json, suggested_skill_focus_zh_cn_json,
+          success_criteria_json, success_criteria_zh_cn_json,
+          source_created_at, source_updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        conversationId,
+        scenario.id,
+        scenario.name,
+        scenario.nameZhCn,
+        scenario.description,
+        scenario.descriptionZhCn,
+        JSON.stringify(scenario.goals),
+        JSON.stringify(scenario.goalsZhCn),
+        JSON.stringify(scenario.suggestedSkillFocus),
+        JSON.stringify(scenario.suggestedSkillFocusZhCn),
+        JSON.stringify(scenario.successCriteria),
+        JSON.stringify(scenario.successCriteriaZhCn),
+        scenario.createdAt,
+        scenario.updatedAt,
+      );
+
+    const insertCriterion = this.connection.prepare(
+      `INSERT INTO scenario_scoring_criteria (
+        conversation_id, position, name, name_zh_cn, weight
+      ) VALUES (?, ?, ?, ?, ?)`,
+    );
+    scenario.scoringCriteria.forEach((criterion, position) => {
+      insertCriterion.run(
+        conversationId,
+        position,
+        criterion.name,
+        criterion.nameZhCn,
+        criterion.weight,
+      );
+    });
+
+    const insertPersona = this.connection.prepare(
+      `INSERT INTO scenario_personas (
+        conversation_id, position, persona_id
+      ) VALUES (?, ?, ?)`,
+    );
+    scenario.allowedPersonaIds.forEach((personaId, position) => {
+      insertPersona.run(conversationId, position, personaId);
+    });
+  }
+
+  private requireSnapshots(conversationId: number): {
+    persona: PersonaSnapshot;
+    scenario: ScenarioSnapshot;
+  } {
+    const personaRow = this.connection
+      .prepare(
+        `SELECT * FROM persona_snapshots
+         WHERE conversation_id = ?`,
+      )
+      .get(conversationId) as unknown as PersonaSnapshotRow | undefined;
+    const scenarioRow = this.connection
+      .prepare(
+        `SELECT * FROM scenario_snapshots
+         WHERE conversation_id = ?`,
+      )
+      .get(conversationId) as unknown as ScenarioSnapshotRow | undefined;
+    if (!personaRow || !scenarioRow) {
+      throw new Error(
+        `Conversation "${conversationId}" is missing its immutable catalog snapshots.`,
+      );
+    }
+    const criteria = this.connection
+      .prepare(
+        `SELECT position, name, name_zh_cn, weight
+         FROM scenario_scoring_criteria
+         WHERE conversation_id = ?
+         ORDER BY position`,
+      )
+      .all(conversationId) as unknown as SnapshotScoringCriterionRow[];
+    const personaRows = this.connection
+      .prepare(
+        `SELECT persona_id
+         FROM scenario_personas
+         WHERE conversation_id = ?
+         ORDER BY position`,
+      )
+      .all(conversationId) as unknown as Array<{ persona_id: number }>;
+    return {
+      persona: mapPersonaSnapshotRow(personaRow),
+      scenario: mapScenarioSnapshotRow(
+        scenarioRow,
+        criteria,
+        personaRows.map(({ persona_id }) => persona_id),
+      ),
+    };
+  }
+
   private get connection() {
     return this.database.raw;
   }
 
-  private getSessionRow(id: string): ConversationSessionRow | undefined {
+  private getSessionRow(id: number): ConversationSessionRow | undefined {
     return this.connection
-      .prepare("SELECT * FROM conversation_sessions WHERE id = ?")
+      .prepare("SELECT * FROM sessions WHERE id = ?")
       .get(id) as unknown as ConversationSessionRow | undefined;
   }
 
-  private requireConversation(id: string): ConversationDetail {
+  private requireConversation(id: number): ConversationDetail {
     const conversation = this.getConversation(id);
     if (!conversation) throw new ConversationNotFoundError(id);
     return conversation;
   }
 
-  private listMessages(conversationId: string): ConversationMessage[] {
+  private listMessages(conversationId: number): ConversationMessage[] {
     const rows = this.connection
       .prepare(
         `SELECT *
-         FROM conversation_messages
+         FROM messages
          WHERE conversation_id = ?
          ORDER BY position`,
       )
@@ -331,20 +594,20 @@ export class ConversationRepository {
   }
 
   private listRecentMessages(
-    conversationId: string,
+    conversationId: number,
     maximumUserTurns: number,
   ): ConversationMessage[] {
     const rows = this.connection
       .prepare(
         `WITH recent_user_positions AS (
            SELECT position
-           FROM conversation_messages
+           FROM messages
            WHERE conversation_id = ? AND role = 'user'
            ORDER BY position DESC
            LIMIT ?
          )
          SELECT *
-         FROM conversation_messages
+         FROM messages
          WHERE conversation_id = ?
            AND position >= COALESCE(
              (SELECT MIN(position) FROM recent_user_positions),
@@ -360,9 +623,9 @@ export class ConversationRepository {
     return rows.map(mapConversationMessageRow);
   }
 
-  private requireMessage(id: string): ConversationMessage {
+  private requireMessage(id: number): ConversationMessage {
     const row = this.connection
-      .prepare("SELECT * FROM conversation_messages WHERE id = ?")
+      .prepare("SELECT * FROM messages WHERE id = ?")
       .get(id) as unknown as ConversationMessageRow | undefined;
     if (!row) throw new Error(`Conversation message "${id}" disappeared after writing.`);
     return mapConversationMessageRow(row);
@@ -376,7 +639,7 @@ export class ConversationRepository {
     return this.connection
       .prepare(
         `SELECT *
-         FROM conversation_messages
+         FROM messages
          WHERE conversation_id = ?
            AND (
              (? IS NOT NULL AND source_item_id = ?)
@@ -394,15 +657,33 @@ export class ConversationRepository {
   }
 }
 
+function normalizeSnapshotTimestamps<T extends {
+  createdAt: string;
+  updatedAt: string;
+}>(snapshot: T): T {
+  return {
+    ...snapshot,
+    createdAt: normalizeDatabaseTimestamp(snapshot.createdAt),
+    updatedAt: normalizeDatabaseTimestamp(snapshot.updatedAt),
+  };
+}
+
 function mapConversationSummaryRow(
   row: ConversationSummaryRow,
 ): ConversationSummary {
-  const persona = parsePersona(row.persona_json);
-  const scenario = parseScenario(row.scenario_json);
+  const locale = parseLocale(row.locale);
   return conversationSummarySchema.parse({
     id: row.id,
-    personaName: persona.name,
-    scenarioName: scenario.name,
+    personaName: selectLocalizedValue(
+      row.persona_name,
+      row.persona_name_zh_cn,
+      locale,
+    ),
+    scenarioName: selectLocalizedValue(
+      row.scenario_name,
+      row.scenario_name_zh_cn,
+      locale,
+    ),
     difficulty: row.difficulty,
     locale: row.locale,
     messageCount: row.message_count,
@@ -414,23 +695,89 @@ function mapConversationSummaryRow(
 
 function mapConversationDetail(
   row: ConversationSessionRow,
+  persona: PersonaSnapshot,
+  scenario: ScenarioSnapshot,
   messages: ConversationMessage[],
 ): ConversationDetail {
-  const persona = parsePersona(row.persona_json);
-  const scenario = parseScenario(row.scenario_json);
+  const locale = parseLocale(row.locale);
+  const localizedPersona = localizePersona(persona, locale);
+  const localizedScenario = localizeScenario(scenario, locale);
   return conversationDetailSchema.parse({
     id: row.id,
-    personaName: persona.name,
-    scenarioName: scenario.name,
+    personaName: localizedPersona.name,
+    scenarioName: localizedScenario.name,
     difficulty: row.difficulty,
     locale: row.locale,
     messageCount: messages.length,
     lastMessagePreview: messages.at(-1)?.text.slice(0, 240) ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    persona,
-    scenario,
+    persona: localizedPersona,
+    scenario: localizedScenario,
     messages,
+  });
+}
+
+function mapPersonaSnapshotRow(row: PersonaSnapshotRow): PersonaSnapshot {
+  return personaSnapshotSchema.parse({
+    id: row.source_persona_id,
+    name: row.name,
+    nameZhCn: row.name_zh_cn,
+    gender: row.gender,
+    age: row.age,
+    occupation: row.occupation,
+    occupationZhCn: row.occupation_zh_cn,
+    background: row.background,
+    backgroundZhCn: row.background_zh_cn,
+    personalityTraits: parseJsonList(row.personality_traits_json),
+    personalityTraitsZhCn: parseJsonList(row.personality_traits_zh_cn_json),
+    communicationStyle: row.communication_style,
+    communicationStyleZhCn: row.communication_style_zh_cn,
+    toneStyle: row.tone_style,
+    toneStyleZhCn: row.tone_style_zh_cn,
+    behaviorNotes: row.behavior_notes,
+    behaviorNotesZhCn: row.behavior_notes_zh_cn,
+    motivations: parseJsonList(row.motivations_json),
+    motivationsZhCn: parseJsonList(row.motivations_zh_cn_json),
+    concerns: parseJsonList(row.concerns_json),
+    concernsZhCn: parseJsonList(row.concerns_zh_cn_json),
+    voice: row.voice,
+    voiceBehavior: {
+      interruptFrequency: row.interrupt_frequency,
+      speakingPace: row.speaking_pace,
+    },
+    createdAt: row.source_created_at,
+    updatedAt: row.source_updated_at,
+  });
+}
+
+function mapScenarioSnapshotRow(
+  row: ScenarioSnapshotRow,
+  criteria: readonly SnapshotScoringCriterionRow[],
+  allowedPersonaIds: readonly number[],
+): ScenarioSnapshot {
+  return scenarioSnapshotSchema.parse({
+    id: row.source_scenario_id,
+    name: row.name,
+    nameZhCn: row.name_zh_cn,
+    description: row.description,
+    descriptionZhCn: row.description_zh_cn,
+    goals: parseJsonList(row.goals_json),
+    goalsZhCn: parseJsonList(row.goals_zh_cn_json),
+    suggestedSkillFocus: parseJsonList(row.suggested_skill_focus_json),
+    suggestedSkillFocusZhCn: parseJsonList(
+      row.suggested_skill_focus_zh_cn_json,
+    ),
+    successCriteria: parseJsonList(row.success_criteria_json),
+    successCriteriaZhCn: parseJsonList(row.success_criteria_zh_cn_json),
+    scoringCriteria: criteria.map((criterion) => ({
+      name: criterion.name,
+      nameZhCn: criterion.name_zh_cn,
+      weight: criterion.weight,
+    })),
+    allowedPersonaIds,
+    createdAt: row.source_created_at,
+    updatedAt: row.source_updated_at,
   });
 }
 
@@ -446,26 +793,30 @@ function mapConversationMessageRow(
   });
 }
 
-function parsePersona(value: string): Persona {
-  return personaSchema.parse(JSON.parse(value) as unknown);
+function parseJsonList(value: string): unknown {
+  return JSON.parse(value) as unknown;
 }
 
-function parseScenario(value: string): Scenario {
-  return scenarioSchema.parse(JSON.parse(value) as unknown);
+function selectLocalizedValue(
+  english: string,
+  chinese: string,
+  locale: z.infer<typeof conversationLocaleSchema>,
+): string {
+  return locale === "zh" ? chinese || english : english || chinese;
 }
 
 function parseDifficulty(value: string): Difficulty {
-  return createConversationInputSchema.shape.difficulty.parse(value);
+  return createConversationSnapshotInputSchema.shape.difficulty.parse(value);
 }
 
-function parseLocale(value: string): CreateConversationInput["locale"] {
-  return createConversationInputSchema.shape.locale.parse(value);
+function parseLocale(value: string): z.infer<typeof conversationLocaleSchema> {
+  return conversationLocaleSchema.parse(value);
 }
 
-function nextTimestamp(previous: string): string {
-  const now = Date.now();
-  const previousTime = Date.parse(previous);
-  return new Date(
-    Number.isFinite(previousTime) ? Math.max(now, previousTime + 1) : now,
-  ).toISOString();
+function toDatabaseId(value: number | bigint): number {
+  const id = Number(value);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error(`SQLite returned an invalid generated ID: ${String(value)}.`);
+  }
+  return id;
 }

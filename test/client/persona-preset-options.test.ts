@@ -1,108 +1,32 @@
 import { describe, expect, it } from "vitest";
 import { buildPersonaPresetOptions } from "../../src/client/admin/persona-preset-options";
-import type {
-  Persona,
-  PersonaPreset,
-} from "../../src/shared/role-play-catalog";
+import type { PersonaPreset } from "../../src/shared/role-play-catalog";
 
 const timestamp = "2026-07-18T00:00:00.000Z";
-
 function preset(
-  id: string,
+  id: number,
   category: PersonaPreset["category"],
   value: string,
   position: number,
-  valueEn = value,
+  valueZhCn = value,
 ): PersonaPreset {
-  return {
-    id,
-    category,
-    value,
-    valueEn,
-    position,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  };
+  return { id, category, value, valueZhCn, position, createdAt: timestamp, updatedAt: timestamp };
 }
 
-const legacyPersona: Persona = {
-  id: "legacy-persona",
-  name: "Legacy",
-  gender: "unspecified",
-  age: null,
-  occupation: "Legacy occupation",
-  identity: "Legacy identity",
-  background: "",
-  personalityTraits: ["Thoughtful", "Legacy trait"],
-  communicationStyle: "Legacy communication style",
-  behaviorNotes: "",
-  motivations: ["Legacy motivation"],
-  concerns: ["Legacy concern"],
-  voice: "longanqian",
-  createdAt: timestamp,
-  updatedAt: timestamp,
-};
-
 describe("persona preset options", () => {
-  it("sorts database choices by position within each category", () => {
-    const result = buildPersonaPresetOptions(
-      [
-        preset("trait-2", "personality_trait", "Direct", 2),
-        preset("occupation-1", "occupation", "Founder", 1),
-        preset("trait-1", "personality_trait", "Thoughtful", 1),
-      ],
-      "zh",
-    );
-
-    expect(result.personality_trait).toEqual([
-      { label: "Thoughtful", value: "Thoughtful" },
-      { label: "Direct", value: "Direct" },
+  it("localizes labels while preserving numeric IDs", () => {
+    const presets = [
+      preset(2, "personality_trait", "Direct", 2, "直接"),
+      preset(3, "occupation", "Founder", 1, "创始人"),
+      preset(1, "personality_trait", "Thoughtful", 1, "周到"),
+    ];
+    expect(buildPersonaPresetOptions(presets, "zh").personality_trait).toEqual([
+      { label: "周到", value: 1 },
+      { label: "直接", value: 2 },
     ]);
-    expect(result.occupation).toEqual([
-      { label: "Founder", value: "Founder" },
+    expect(buildPersonaPresetOptions(presets, "en").personality_trait).toEqual([
+      { label: "Thoughtful", value: 1 },
+      { label: "Direct", value: 2 },
     ]);
-  });
-
-  it("retains historical values without duplicating active presets", () => {
-    const result = buildPersonaPresetOptions(
-      [
-        preset("trait-1", "personality_trait", "Thoughtful", 0),
-        preset("identity-1", "identity", "Buyer", 0),
-      ],
-      "zh",
-      legacyPersona,
-    );
-
-    expect(result.personality_trait).toEqual([
-      { label: "Thoughtful", value: "Thoughtful" },
-      { label: "Legacy trait（现有值）", value: "Legacy trait" },
-    ]);
-    expect(result.identity).toContainEqual({
-      label: "Legacy identity（现有值）",
-      value: "Legacy identity",
-    });
-    expect(result.occupation).toEqual([
-      {
-        label: "Legacy occupation（现有值）",
-        value: "Legacy occupation",
-      },
-    ]);
-  });
-
-  it("uses English display labels while keeping Chinese snapshot values", () => {
-    const result = buildPersonaPresetOptions(
-      [preset("trait-1", "personality_trait", "理性", 0, "Rational")],
-      "en",
-      legacyPersona,
-    );
-
-    expect(result.personality_trait).toContainEqual({
-      label: "Rational",
-      value: "理性",
-    });
-    expect(result.personality_trait).toContainEqual({
-      label: "Thoughtful (Existing value)",
-      value: "Thoughtful",
-    });
   });
 });

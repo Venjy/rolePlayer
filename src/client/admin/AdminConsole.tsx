@@ -1,6 +1,8 @@
 import {
+  ArrowLeftOutlined,
   DeleteOutlined,
   EditOutlined,
+  LinkOutlined,
   PlusOutlined,
   SearchOutlined,
   UserOutlined,
@@ -13,9 +15,11 @@ import {
   Card,
   Empty,
   Input,
+  Modal,
   Pagination,
   Popconfirm,
   Space,
+  Select,
   Tabs,
   Tag,
   Tooltip,
@@ -45,11 +49,11 @@ export interface AdminConsoleProps {
   themeButton: ReactNode;
   onExit: () => void;
   onCreatePersona: (input: PersonaInput) => Promise<void>;
-  onUpdatePersona: (id: string, input: PersonaInput) => Promise<void>;
-  onDeletePersona: (id: string) => Promise<void>;
+  onUpdatePersona: (id: number, input: PersonaInput) => Promise<void>;
+  onDeletePersona: (id: number) => Promise<void>;
   onCreateScenario: (input: ScenarioInput) => Promise<void>;
-  onUpdateScenario: (id: string, input: ScenarioInput) => Promise<void>;
-  onDeleteScenario: (id: string) => Promise<void>;
+  onUpdateScenario: (id: number, input: ScenarioInput) => Promise<void>;
+  onDeleteScenario: (id: number) => Promise<void>;
 }
 
 type PersonaDrawerState = { mode: "create" } | { mode: "edit"; persona: Persona };
@@ -81,7 +85,6 @@ function PersonaCard({
   } satisfies Record<Persona["gender"], string>;
   const associationSeparator = locale === "zh" ? "、" : ", ";
   const details = [
-    persona.occupation,
     persona.age
       ? t(
           { en: "{age} years old", zh: "{age} 岁" },
@@ -106,8 +109,8 @@ function PersonaCard({
             <Typography.Text type="secondary">
               {details ||
                 t({
-                  en: "Occupation and age not provided",
-                  zh: "尚未填写职业和年龄",
+                  en: "Age not provided",
+                  zh: "尚未填写年龄",
                 })}
             </Typography.Text>
           </div>
@@ -119,7 +122,7 @@ function PersonaCard({
         className={styles.cardDescription}
         ellipsis={{ rows: 2 }}
       >
-        {persona.identity}
+        {persona.occupation}
       </Typography.Paragraph>
       <Space className={styles.tagCloud} size={[4, 6]} wrap>
         {persona.personalityTraits.slice(0, 4).map((trait) => (
@@ -226,24 +229,18 @@ function ScenarioCard({
   scenario,
   busy,
   personaNames,
+  onEditCompatibility,
   onEdit,
   onDelete,
 }: {
   scenario: Scenario;
   busy: boolean;
   personaNames: string[];
+  onEditCompatibility: () => void;
   onEdit: () => void;
   onDelete: () => Promise<void>;
 }) {
   const { locale, t } = useI18n();
-  const interruptLabel = {
-    low: t({ en: "Rarely challenges", zh: "较少挑战" }),
-    medium: t({ en: "Occasional interjections", zh: "偶尔插话" }),
-    high: t({ en: "Frequent challenges", zh: "频繁挑战" }),
-  } satisfies Record<
-    Scenario["voiceBehavior"]["interruptFrequency"],
-    string
-  >;
   const nameSeparator = locale === "zh" ? "、" : ", ";
 
   return (
@@ -254,8 +251,10 @@ function ScenarioCard({
             {scenario.name}
           </Typography.Title>
           <Typography.Text type="secondary">
-            {interruptLabel[scenario.voiceBehavior.interruptFrequency]} ·
-            {" "}{scenario.voiceBehavior.toneStyle}
+            {t(
+              { en: "{count} success criteria", zh: "{count} 项成功标准" },
+              { count: scenario.successCriteria.length },
+            )}
           </Typography.Text>
         </div>
         <Badge
@@ -308,6 +307,14 @@ function ScenarioCard({
           </Typography.Text>
         </Tooltip>
         <Space size="small">
+          <Button
+            disabled={busy}
+            icon={<LinkOutlined />}
+            onClick={onEditCompatibility}
+            size="small"
+          >
+            {t({ en: "Compatibility", zh: "兼容角色" })}
+          </Button>
           <Button
             aria-label={t(
               { en: "Edit scenario {name}", zh: "编辑场景 {name}" },
@@ -375,32 +382,31 @@ export function AdminConsole({
   const [scenarioPage, setScenarioPage] = useState(1);
   const [personaDrawer, setPersonaDrawer] = useState<PersonaDrawerState>();
   const [scenarioDrawer, setScenarioDrawer] = useState<ScenarioDrawerState>();
+  const [compatibilityScenario, setCompatibilityScenario] = useState<Scenario>();
+  const [compatibilityPersonaIds, setCompatibilityPersonaIds] = useState<number[]>([]);
 
   const personas = useMemo(
     () =>
       catalog.personas
         .map((persona) => ({
           canonical: persona,
-          display: localizePersona(
-            persona,
-            locale,
-            catalog.personaPresets,
-          ),
+          display: localizePersona(persona, locale),
         }))
         .filter(({ canonical, display }) =>
           includesSearchText(
             personaQuery,
             display.name,
             display.occupation,
-            display.identity,
             display.personalityTraits,
             canonical.name,
+            canonical.nameZhCn,
             canonical.occupation,
-            canonical.identity,
+            canonical.occupationZhCn,
             canonical.personalityTraits,
+            canonical.personalityTraitsZhCn,
           ),
         ),
-    [catalog.personaPresets, catalog.personas, locale, personaQuery],
+    [catalog.personas, locale, personaQuery],
   );
   const scenarios = useMemo(
     () =>
@@ -417,9 +423,13 @@ export function AdminConsole({
             display.goals,
             display.suggestedSkillFocus,
             canonical.name,
+            canonical.nameZhCn,
             canonical.description,
+            canonical.descriptionZhCn,
             canonical.goals,
+            canonical.goalsZhCn,
             canonical.suggestedSkillFocus,
+            canonical.suggestedSkillFocusZhCn,
           ),
         ),
     [catalog.scenarios, locale, scenarioQuery],
@@ -455,8 +465,8 @@ export function AdminConsole({
             setPersonaPage(1);
           }}
           placeholder={t({
-            en: "Search by name, occupation, identity, or personality",
-            zh: "按名字、职业、身份或性格搜索",
+            en: "Search by name, occupation, or personality",
+            zh: "按名字、职业或性格搜索",
           })}
           prefix={<SearchOutlined />}
           value={personaQuery}
@@ -544,22 +554,14 @@ export function AdminConsole({
           prefix={<SearchOutlined />}
           value={scenarioQuery}
         />
-        <Tooltip
-          title={
-            catalog.personas.length === 0
-              ? t({ en: "Create a persona first", zh: "请先创建一个角色" })
-              : undefined
-          }
+        <Button
+          disabled={busy}
+          icon={<PlusOutlined />}
+          onClick={() => setScenarioDrawer({ mode: "create" })}
+          type="primary"
         >
-          <Button
-            disabled={busy || catalog.personas.length === 0}
-            icon={<PlusOutlined />}
-            onClick={() => setScenarioDrawer({ mode: "create" })}
-            type="primary"
-          >
-            {t({ en: "New scenario", zh: "新建场景" })}
-          </Button>
-        </Tooltip>
+          {t({ en: "New scenario", zh: "新建场景" })}
+        </Button>
       </div>
       {scenarios.length === 0 ? (
         <Empty
@@ -570,7 +572,7 @@ export function AdminConsole({
           }
           image={Empty.PRESENTED_IMAGE_SIMPLE}
         >
-          {!scenarioQuery && catalog.personas.length > 0 ? (
+          {!scenarioQuery ? (
             <Button
               icon={<PlusOutlined />}
               onClick={() => setScenarioDrawer({ mode: "create" })}
@@ -591,6 +593,10 @@ export function AdminConsole({
                 onEdit={() =>
                   setScenarioDrawer({ mode: "edit", scenario: canonical })
                 }
+                onEditCompatibility={() => {
+                  setCompatibilityPersonaIds(canonical.allowedPersonaIds);
+                  setCompatibilityScenario(canonical);
+                }}
                 personaNames={canonical.allowedPersonaIds
                   .map((id) => {
                     const persona = catalog.personas.find(
@@ -623,7 +629,14 @@ export function AdminConsole({
   return (
     <main className={styles.console}>
       <header className={styles.header}>
-        <div>
+        <div className={styles.headerTitleGroup}>
+          <Button
+            aria-label={t({ en: "Back to practice", zh: "返回对练" })}
+            disabled={busy}
+            icon={<ArrowLeftOutlined />}
+            onClick={onExit}
+          />
+          <div>
           <Typography.Title className={styles.title} level={2}>
             {t({ en: "Role-play admin console", zh: "角色对练控制台" })}
           </Typography.Title>
@@ -633,13 +646,11 @@ export function AdminConsole({
               zh: "配置客户角色和销售训练场景，并在保存前检查模型 Instructions。",
             })}
           </Typography.Text>
+          </div>
         </div>
         <Space className={styles.headerActions} wrap>
           <LanguageToggleButton />
           {themeButton}
-          <Button disabled={busy} onClick={onExit}>
-            {t({ en: "Back to practice", zh: "返回对练" })}
-          </Button>
         </Space>
       </header>
 
@@ -686,11 +697,11 @@ export function AdminConsole({
       {personaDrawer ? (
         <PersonaEditorDrawer
           busy={busy}
-          key={
+          key={`${
             personaDrawer.mode === "edit"
               ? `edit-${personaDrawer.persona.id}`
               : "create"
-          }
+          }-${locale}`}
           onCancel={() => setPersonaDrawer(undefined)}
           onSubmit={async (input) => {
             if (personaDrawer.mode === "edit") {
@@ -704,18 +715,17 @@ export function AdminConsole({
             personaDrawer.mode === "edit" ? personaDrawer.persona : undefined
           }
           personaPresets={catalog.personaPresets}
-          scenarios={catalog.scenarios}
         />
       ) : null}
 
       {scenarioDrawer ? (
         <ScenarioEditorDrawer
           busy={busy}
-          key={
+          key={`${
             scenarioDrawer.mode === "edit"
               ? `edit-${scenarioDrawer.scenario.id}`
               : "create"
-          }
+          }-${locale}`}
           onCancel={() => setScenarioDrawer(undefined)}
           onSubmit={async (input) => {
             if (scenarioDrawer.mode === "edit") {
@@ -725,13 +735,53 @@ export function AdminConsole({
             }
             setScenarioDrawer(undefined);
           }}
-          personas={catalog.personas}
-          personaPresets={catalog.personaPresets}
+          defaultAllowedPersonaIds={catalog.personas.map(({ id }) => id)}
+          scenarioPresets={catalog.scenarioPresets}
           scenario={
             scenarioDrawer.mode === "edit" ? scenarioDrawer.scenario : undefined
           }
         />
       ) : null}
+
+      <Modal
+        cancelText={t({ en: "Cancel", zh: "取消" })}
+        confirmLoading={busy}
+        okText={t({ en: "Save compatibility", zh: "保存兼容关系" })}
+        onCancel={() => setCompatibilityScenario(undefined)}
+        onOk={async () => {
+          if (!compatibilityScenario) return;
+          await onUpdateScenario(compatibilityScenario.id, {
+            ...compatibilityScenario,
+            allowedPersonaIds: compatibilityPersonaIds,
+          });
+          setCompatibilityScenario(undefined);
+        }}
+        open={Boolean(compatibilityScenario)}
+        title={t({ en: "Compatible personas", zh: "兼容角色" })}
+      >
+        <Typography.Paragraph type="secondary">
+          {t({
+            en: "Compatibility is managed independently from scenario content and is not included in the scenario Instructions preview.",
+            zh: "兼容关系独立于场景内容管理，也不会出现在场景 Instructions 预览中。",
+          })}
+        </Typography.Paragraph>
+        <Select
+          className={styles.fullWidth}
+          maxCount={100}
+          mode="multiple"
+          onChange={setCompatibilityPersonaIds}
+          optionFilterProp="label"
+          options={catalog.personas.map((persona) => {
+            const display = localizePersona(persona, locale);
+            return {
+              value: persona.id,
+              label: `${display.name} · ${display.occupation}`,
+            };
+          })}
+          placeholder={t({ en: "Select compatible personas", zh: "选择兼容角色" })}
+          value={compatibilityPersonaIds}
+        />
+      </Modal>
     </main>
   );
 }

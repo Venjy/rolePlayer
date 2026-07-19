@@ -68,7 +68,7 @@ export function createPersona(input: PersonaInput): Promise<Persona> {
   );
 }
 
-export function updatePersona(id: string, input: PersonaInput): Promise<Persona> {
+export function updatePersona(id: number, input: PersonaInput): Promise<Persona> {
   return requestJson(
     `/api/personas/${encodeURIComponent(id)}`,
     { method: "PUT", body: JSON.stringify(input) },
@@ -76,7 +76,7 @@ export function updatePersona(id: string, input: PersonaInput): Promise<Persona>
   );
 }
 
-export function deletePersona(id: string): Promise<void> {
+export function deletePersona(id: number): Promise<void> {
   return requestEmpty(`/api/personas/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
@@ -91,7 +91,7 @@ export function createScenario(input: ScenarioInput): Promise<Scenario> {
 }
 
 export function updateScenario(
-  id: string,
+  id: number,
   input: ScenarioInput,
 ): Promise<Scenario> {
   return requestJson(
@@ -101,7 +101,7 @@ export function updateScenario(
   );
 }
 
-export function deleteScenario(id: string): Promise<void> {
+export function deleteScenario(id: number): Promise<void> {
   return requestEmpty(`/api/scenarios/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });

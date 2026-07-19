@@ -31,21 +31,18 @@ import type {
   ServerMessage,
   SessionState,
 } from "../shared/realtime-protocol";
-import { MAX_REALTIME_INSTRUCTIONS_LENGTH } from "../shared/realtime-protocol";
 import type {
   Difficulty,
-  Persona,
   RolePlayCatalog,
-  Scenario,
 } from "../shared/role-play-catalog";
-import type { ConversationDetail } from "../shared/conversation-history";
-import { compileRolePlayInstructions } from "../shared/role-play-instructions";
+import type {
+  ConversationDetail,
+  PersonaSnapshot,
+  ScenarioSnapshot,
+} from "../shared/conversation-history";
 import { AdminConsole } from "./admin";
 import { BrowserAudioEngine } from "./audio/browser-audio-engine";
-import {
-  localizePersona,
-  localizeScenario,
-} from "./catalog/catalog-localization";
+import { localizePersona } from "./catalog/catalog-localization";
 import {
   reconcileCatalogSelection,
   resolvePersona,
@@ -79,13 +76,13 @@ type AppMode = "learner" | "admin";
 type UiError = string | LocalizedText;
 
 interface ActiveSessionConfig {
-  persona: Persona;
-  scenario: Scenario;
+  persona: PersonaSnapshot;
+  scenario: ScenarioSnapshot;
   difficulty: Difficulty;
 }
 
 interface TranscriptTurn {
-  id: string;
+  id: string | number;
   responseId?: string;
   role: "user" | "assistant";
   text: string;
@@ -133,7 +130,7 @@ interface AssistantSettlementWaiter extends SettlementWaiter {
 }
 
 interface RuntimeMessageContext {
-  conversationId: string;
+  conversationId: number;
   runtimeEpoch: number;
 }
 
@@ -429,8 +426,8 @@ export function App() {
   const sessionUiPreview = uiPreviewMode !== null;
   const recordingUiPreview = uiPreviewMode === "recording";
   const [catalogSelection, setCatalogSelection] = useState({
-    scenarioId: null as string | null,
-    personaId: null as string | null,
+    scenarioId: null as number | null,
+    personaId: null as number | null,
   });
   const reconcileSelection = useCallback(
     (catalog: RolePlayCatalog) => {
@@ -475,7 +472,7 @@ export function App() {
   const [isReconciling, setIsReconciling] = useState(false);
   const [isUserCommitPending, setIsUserCommitPending] = useState(false);
   const [activeConversationId, setActiveConversationId] = useState<
-    string | null
+    number | null
   >(null);
   const [historyMobileOpen, setHistoryMobileOpen] = useState(false);
 
@@ -1572,23 +1569,6 @@ export function App() {
       return;
     }
 
-    const sessionConfig: ActiveSessionConfig = {
-      persona: localizePersona(
-        selectedPersona,
-        locale,
-        rolePlayCatalog.catalog.personaPresets,
-      ),
-      scenario: localizeScenario(selectedScenario, locale),
-      difficulty,
-    };
-    const instructions = compileRolePlayInstructions(sessionConfig);
-    if (instructions.length > MAX_REALTIME_INSTRUCTIONS_LENGTH) {
-      setErrorMessage({
-        en: `The Instructions generated for this role and scenario are too long (${instructions.length}/${MAX_REALTIME_INSTRUCTIONS_LENGTH} characters). Simplify the configuration in Admin Console.`,
-        zh: `当前角色与场景生成的 Instructions 过长（${instructions.length}/${MAX_REALTIME_INSTRUCTIONS_LENGTH} 字符），请在管理控制台精简配置。`,
-      });
-      return;
-    }
     if (transitionInProgressRef.current) return;
 
     transitionInProgressRef.current = true;
@@ -1596,7 +1576,9 @@ export function App() {
     messageApi.destroy(SESSION_ERROR_MESSAGE_KEY);
     try {
       const conversation = await conversationHistory.create({
-        ...sessionConfig,
+        personaId: selectedPersona.id,
+        scenarioId: selectedScenario.id,
+        difficulty,
         locale,
       });
       await activateConversation(conversation);
@@ -1609,7 +1591,7 @@ export function App() {
     }
   };
 
-  const resumeConversation = async (conversationId: string) => {
+  const resumeConversation = async (conversationId: number) => {
     setHistoryMobileOpen(false);
     if (sessionActive && conversationId === activeConversationId) return;
     if (transitionInProgressRef.current) return;
@@ -1913,7 +1895,7 @@ export function App() {
     setColorMode((current) => (current === "dark" ? "light" : "dark"));
   };
 
-  const handleScenarioSelection = (scenarioId: string) => {
+  const handleScenarioSelection = (scenarioId: number) => {
     const scenario = rolePlayCatalog.catalog.scenarios.find(
       (candidate) => candidate.id === scenarioId,
     );

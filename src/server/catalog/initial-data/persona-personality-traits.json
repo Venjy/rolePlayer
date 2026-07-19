@@ -1,0 +1,10 @@
+[
+  { "key": "trait_pragmatic", "value": "Pragmatic", "valueZhCn": "务实", "position": 0 },
+  { "key": "trait_skeptical", "value": "Skeptical", "valueZhCn": "谨慎多疑", "position": 1 },
+  { "key": "trait_friendly", "value": "Friendly", "valueZhCn": "友善", "position": 2 },
+  { "key": "trait_impatient", "value": "Impatient", "valueZhCn": "缺乏耐心", "position": 3 },
+  { "key": "trait_detail_oriented", "value": "Detail-oriented", "valueZhCn": "注重细节", "position": 4 },
+  { "key": "trait_decisive", "value": "Decisive", "valueZhCn": "果断", "position": 5 },
+  { "key": "trait_price_sensitive", "value": "Price-sensitive", "valueZhCn": "价格敏感", "position": 6 },
+  { "key": "trait_reserved", "value": "Reserved", "valueZhCn": "内敛", "position": 7 }
+]

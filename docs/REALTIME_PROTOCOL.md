@@ -40,10 +40,10 @@ conversation.
 
 `compileRolePlayInstructions` remains a deterministic shared template, not a
 call to another language model. It includes the snapshotted persona
-identity/behavior, scenario goals and hidden criteria, difficulty, tone, pace,
+occupation/behavior, scenario goals and hidden criteria, difficulty, tone, pace,
 and interjection behavior in stable, previewable sections. Conversation creation
 rejects compiled Instructions over the shared 12,000-character limit; the
-catalog association guards and App-level check remain defense in depth.
+catalog association guards remain defense in depth.
 
 Any error received before `session.ready` rejects startup immediately,
 regardless of whether that error could have been recoverable in an already-ready
@@ -51,7 +51,7 @@ session. The browser settles that rejection with the server's structured error
 before the App tears down the partial socket, so a synchronous disconnect cannot
 replace the localized cause with a generic close message.
 
-Scenario `voiceBehavior.interruptFrequency` does not change protocol turn
+Persona `voiceBehavior.interruptFrequency` does not change protocol turn
 detection. With manual push-to-talk (`turn_detection: null`), it can guide brief
 interjections or quicker challenges inside the model's response, but it cannot
 make Qwen autonomously talk over an in-progress learner recording. The learner's
@@ -68,12 +68,12 @@ Must be the first message after WebSocket open.
 ```json
 {
   "type": "session.configure",
-  "conversationId": "conversation_...",
+  "conversationId": 42,
   "maxHistoryTurns": 20
 }
 ```
 
-`conversationId` is a non-empty string of at most 100 characters.
+`conversationId` is a positive SQLite-generated integer.
 `maxHistoryTurns` is an integer from 1 through 50 and defaults to 20 when
 omitted. A turn is counted by user messages: restoration starts at the selected
 recent user turn and includes all following user/assistant messages in their
@@ -218,7 +218,7 @@ still active, and reconciles the assistant item as described below.
 {
   "type": "session.ready",
   "sessionId": "sess_...",
-  "conversationId": "conversation_..."
+  "conversationId": 42
 }
 ```
 

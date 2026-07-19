@@ -1,5 +1,7 @@
 # AI Role Player — Realtime Voice Demo
 
+**English** | [简体中文](README.zh-CN.md)
+
 A single-repository React + Node/TypeScript application for configurable realtime voice sales role-play. Learners choose an SQLite-backed sales scenario, compatible customer persona, and difficulty; the browser then connects its microphone to Qwen `qwen-audio-3.0-realtime-plus` through a server-side WebSocket gateway, streams transcripts into a chat timeline, and plays the selected persona's voice. Finalized text conversations and launch snapshots are stored in SQLite, listed in responsive history navigation, and can be continued through a fresh Qwen connection with restored text context. A responsive admin console provides persona/scenario CRUD and an inspectable model-Instructions preview.
 
 The UI uses one responsive React component tree for mobile and desktop. Ant Design supplies the standard controls and theme algorithms; project CSS handles the chat layout, message bubbles, recording overlay, and audio-reactive waveform.
@@ -13,6 +15,7 @@ This is one root package, not a monorepo. Client, server, tests, and shared prot
 ├── public/                         # Browser AudioWorklet modules
 ├── scripts/
 │   ├── initialize-catalog.ts       # Explicit idempotent catalog defaults
+│   ├── split-database.ts           # One-time legacy database splitter
 │   └── smoke-realtime.ts           # Live realtime smoke harness
 ├── src/
 │   ├── client/
@@ -75,15 +78,17 @@ Official setup references:
    DASHSCOPE_WORKSPACE_ID=ws_...
    ```
 
-   SQLite defaults to `data/role-player.sqlite`. To place the file elsewhere, set `DATABASE_PATH` to an absolute path or a path relative to the process working directory. The parent directory is created automatically. Catalog initialization needs only this server/database configuration; the Qwen credential fields may still be blank while running it.
+   SQLite uses two files by default: `data/catalog.sqlite` for personas, scenarios, presets, and compatibility; and `data/conversations.sqlite` for conversation snapshots and finalized messages. Override them with `CATALOG_DATABASE_PATH` and `CONVERSATION_DATABASE_PATH`. Relative paths resolve from the process working directory and parent directories are created automatically.
 
-4. Initialize the database-backed persona choices and starter personas:
+   If upgrading an existing checkout that still has `data/role-player.sqlite`, stop the server, wait for its `-wal`/`-shm` files to disappear, then run `pnpm database:split` once. The command preserves the legacy source and refuses to overwrite either destination.
+
+4. Initialize the database-backed bilingual persona/scenario choices and starter catalog:
 
    ```bash
    pnpm catalog:init
    ```
 
-   This command opens the configured `DATABASE_PATH`, applies pending schema migrations, inserts missing catalog defaults, and backfills only blank English labels on unchanged built-in preset rows in one transaction. It is safe to run repeatedly, preserves administrator edits, and does not require Qwen credentials.
+   This command opens `CATALOG_DATABASE_PATH`, applies pending schema migrations, and transactionally inserts missing bilingual catalog defaults from JSON. SQLite generates numeric IDs; stable JSON seed keys and conflict-tolerant writes make repeated runs safe without duplicating data or overwriting administrator edits. It does not require Qwen credentials. A run that reports only skipped rows succeeded and simply had nothing new to insert.
 
 5. Start the React and Node development servers:
 
@@ -115,6 +120,8 @@ These URLs reuse the production React components but inject static in-memory sta
 | `pnpm dev:server` | Run only the Node TypeScript server |
 | `pnpm catalog:init` | Apply migrations and idempotently add missing presets/starter personas using TypeScript sources |
 | `pnpm catalog:init:prod` | Run the built initializer against the deployment database before starting the built server |
+| `pnpm database:split` | One-time copy from the legacy combined database into fresh catalog and conversation files |
+| `pnpm database:split:prod` | Run the built one-time database splitter |
 | `pnpm lint` | Run the shared ESLint configuration |
 | `pnpm typecheck` | Type-check client, server, and shared code |
 | `pnpm test` | Run all tests once |
@@ -145,12 +152,13 @@ Use `--interrupt-during-generation` to exercise the cancellation path. With no t
 - One responsive Ant Design SPA for learner launch, admin catalog, and voice chat on mobile and desktop; no separate mobile application or duplicated component tree
 - English and Chinese UI with English as the first-run default, an upper-right language control, Ant Design locale synchronization, and the saved `role-player:locale` preference in `localStorage`
 - Light and dark themes, initialized from the saved choice or OS preference and switchable from the upper-right control
-- Learner launcher with searchable scenario and persona selectors, compatibility filtering, easy/medium/hard difficulty, and summaries of goals, skill focus, voice behavior, and persona traits
-- Responsive admin console with searchable persona/scenario tabs, create/edit drawers, validation, deletion confirmation, compatibility editing, and live Instructions preview
-- Database-backed bilingual persona presets for identity, occupation, personality traits, communication style, motivations, and concerns; the stable Chinese value is stored in the persona while English UI summaries, prompt previews, and English-launched model Instructions project exact preset matches through `valueEn`
-- Authored English/Chinese display content for the unmodified built-in personas and default scenario; administrator-edited and user-created free text is always shown exactly as saved and is never machine-translated
+- Learner launcher with searchable scenario/persona selectors, compatibility filtering, Ant Design easy/medium/hard Radio buttons, and summaries of goals, skill focus, persona voice behavior, and traits
+- Responsive admin console with independent persona/scenario editors, separate compatibility management, derived scoring weights, and standalone Instructions previews
+- Database-backed bilingual persona presets plus scenario presets for training goals, skill focus, and success criteria; no persona/scenario business options are authored in the client
+- Independent Chinese/English fields for every localized persona/scenario value; the current language is displayed first with fallback to the other, while admin saves update only the language being edited and never persist fallback text as a translation
+- Fully bilingual JSON-defined starter personas/scenarios loaded into SQLite; user-authored content is never machine-translated
 - Free-form persona name, age, background, and behavior notes, with existing non-preset values preserved when editing older/custom personas
-- Scenario fields for situation, goals, skill focus, hidden success/scoring criteria, compatible personas, and voice behavior
+- Persona owns occupation, tone, voice, speaking pace, and interjection tendency. Scenario owns situation, goals, skills, success criteria, and derived scoring weights
 - Deterministic `compileRolePlayInstructions` template; no extra LLM is called to turn structured catalog fields into the Qwen system prompt
 - Shared 12,000-character Instructions budget, checked across every compatible persona and all three difficulty levels before an association can be saved
 - Session-start snapshot sends the selected persona's `voice` and the compiled persona/scenario/difficulty Instructions to Qwen, so later catalog edits affect only future sessions
@@ -167,16 +175,16 @@ Use `--interrupt-during-generation` to exercise the cancellation path. With no t
 - Node WebSocket proxy with server-only Qwen authentication
 - Streamed PCM16 24 kHz Qwen playback with volume, mute, stop-response, and end-session controls
 - Response-aware playback receipts and best-effort interrupted-response reconciliation
-- SQLite file setup, Fastify lifecycle ownership, WAL mode, foreign keys, busy timeout, an append-only migration runner, durable catalog CRUD, and an explicit transactional/idempotent catalog initializer
+- Separate SQLite catalog/conversation files, Fastify lifecycle ownership, rollback-journal transactions without persistent WAL/SHM sidecars, foreign keys, busy timeout, append-only migrations, durable catalog CRUD, and an explicit transactional/idempotent catalog initializer
 - Phase-aware error handling: a first-time startup failure returns to the launcher; once ready, the chat stays visible, errors use a five-second Ant Design message at the top, fatal failures rebuild safely from finalized SQLite text, and a failed rebuild can be retried from the composer
 
 ## Persistence status
 
-Migration 2 persists the role-play catalog in strict `personas`, `scenarios`, and `scenario_personas` tables and contains the immutable legacy Alex/sales-discovery seed. Migration 3 adds deterministic per-scenario persona ordering and upgrades already-created catalog files without requiring deletion. Migration 4 creates the strict `persona_presets` reference table; it intentionally contains no business seed data. Migration 5 adds the backward-compatible English display column for preset rows. Migration 6 adds strict `conversation_sessions` and `conversation_messages` for immutable runtime snapshots and finalized text. The catalog REST API is:
+Fresh catalog and conversation files have independent migration histories and contain only their own domain tables. Every preset domain has its own physical table, and catalog records reference preset IDs instead of copying localized labels. The historical combined file retains migrations 1–15 so `pnpm database:split` can upgrade and copy old data safely. Schema migrations own structure only; current business defaults are installed explicitly. The catalog REST API is:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/catalog` | Read `personaPresets`, personas, and scenarios with compatibility IDs |
+| `GET` | `/api/catalog` | Read `personaPresets`, `scenarioPresets`, bilingual personas/scenarios, and compatibility IDs |
 | `POST`, `PUT`, `DELETE` | `/api/personas`, `/api/personas/:id` | Create, replace, or delete a persona |
 | `POST`, `PUT`, `DELETE` | `/api/scenarios`, `/api/scenarios/:id` | Create, replace, or delete a scenario |
 
@@ -186,13 +194,13 @@ The conversation REST API is:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/api/conversations` | Validate a localized persona/scenario/difficulty snapshot, compile Instructions on Node, and create a durable conversation |
+| `POST` | `/api/conversations` | Resolve authoritative persona/scenario IDs, store a bilingual snapshot, compile Instructions, and create a durable conversation |
 | `GET` | `/api/conversations` | List all conversations by latest persisted activity |
 | `GET` | `/api/conversations/:id` | Read one immutable launch snapshot and its ordered finalized messages |
 
-Business defaults are installed explicitly with `pnpm catalog:init` during source development or `pnpm catalog:init:prod` after building. The initializer inserts 70 bilingual presets (8 identities, 12 occupations, 16 personality traits, 8 communication styles, 12 motivations, and 14 concerns) plus the starter personas 林悦, 王强, and 陈晨. For an existing seed preset whose category and Chinese value are still unchanged, a blank English value is backfilled without replacing a non-empty administrator translation; legacy/custom rows with no English label fall back to their canonical text in the UI. If `scenario_sales_discovery` exists, the initializer appends missing starter-persona links without replacing the current ordering, but only after each pair passes the shared easy/medium/hard 12,000-character Instructions check. An over-budget pair produces a clear error and rolls back the initializer's data writes. The whole operation is transactional and idempotent.
+Business defaults are defined only in `src/server/catalog/initial-data/*.json` and installed with `pnpm catalog:init` (source) or `pnpm catalog:init:prod` (built). The initializer inserts bilingual presets, three starter personas, three starter scenarios, and compatibility links. Stable IDs and transactional conflict-tolerant writes make repeated runs safe without duplicate data or overwritten administrator rows.
 
-Conversation snapshots, selected difficulty, compiled Instructions, voice, and finalized transcript text are persisted. Streaming drafts, microphone/model audio, users, and evaluations are not. The current private single-user deployment exposes one global history retained with the database file; there is no conversation deletion API or retention job yet. See [Catalog and prompt compilation](docs/CATALOG_AND_PROMPTS.md) and [Database](docs/DATABASE.md) for the complete contracts.
+Conversation snapshots, selected difficulty, compiled Instructions, voice, and finalized transcript text are persisted in the conversation database. Streaming drafts, microphone/model audio, users, and evaluations are not. The current private single-user deployment exposes one global history; there is no conversation deletion API or retention job yet. See [Catalog and prompt compilation](docs/CATALOG_AND_PROMPTS.md) and [Database](docs/DATABASE.md) for the complete contracts.
 
 The default `data/` directory is ignored by Git. A future single-container deployment must mount that directory as persistent storage; embedding the database file in an ephemeral image layer would lose catalog edits when the container is replaced.
 
@@ -200,7 +208,7 @@ The default `data/` directory is ignored by Git. A future single-container deplo
 
 Interrupted-response truncation is an estimate because Qwen does not provide word-level audio timestamps and browsers cannot prove what reached the user's physical output device. The application prefers deleting the entire interrupted assistant turn when evidence is weak.
 
-Scenario `interruptFrequency` changes prompt-level conversational patience/interjection/challenge behavior only. Because the demo uses manual push-to-talk (`turn_detection: null`), it cannot make Qwen autonomously interrupt a learner in the middle of an utterance. Learner barge-in while the persona speaks is the separate playback-interruption feature.
+Persona `voiceBehavior.interruptFrequency` changes prompt-level conversational patience/interjection/challenge behavior only. Because the demo uses manual push-to-talk (`turn_detection: null`), it cannot make Qwen autonomously interrupt a learner in the middle of an utterance. Learner barge-in while the persona speaks is the separate playback-interruption feature.
 
 History continuation is text-level context reconstruction, not revival of the old Qwen session or replay of original audio. It restores semantic transcript context but not acoustic details such as the learner's tone or emotion. The model currently receives the most recent 20 user turns while the UI keeps the complete stored transcript.
 
@@ -219,7 +227,7 @@ The intended production step is to add Fastify static serving for `dist/client`,
 
 ### The persona editor says required presets are missing
 
-Stop the development server if necessary, confirm `DATABASE_PATH`, run `pnpm catalog:init`, then reload the SPA. In a built deployment, run `pnpm catalog:init:prod` against the same persistent volume before starting the service. These commands do not require Qwen credentials.
+Stop the development server if necessary, confirm `CATALOG_DATABASE_PATH`, run `pnpm catalog:init`, then reload the SPA. In a built deployment, run `pnpm catalog:init:prod` against the same persistent volume before starting the service. These commands do not require Qwen credentials.
 
 ### Catalog initialization rejects an oversized scenario link
 
@@ -248,7 +256,7 @@ Check the page volume and mute controls, system output device, and browser tab a
 
 ### The server cannot open the SQLite database
 
-Confirm that the `DATABASE_PATH` parent directory is writable by the Node process. Relative paths are resolved from the directory where the process starts. Do not put the production database in a read-only or ephemeral container path.
+Confirm that the parent directories of `CATALOG_DATABASE_PATH` and `CONVERSATION_DATABASE_PATH` are writable by the Node process. Relative paths are resolved from the directory where the process starts. Do not put production databases in a read-only or ephemeral container path.
 
 ## Further documentation
 

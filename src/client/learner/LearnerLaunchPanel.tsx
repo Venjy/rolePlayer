@@ -15,7 +15,7 @@ import {
   Descriptions,
   Empty,
   Flex,
-  Segmented,
+  Radio,
   Select,
   Skeleton,
   Space,
@@ -23,13 +23,9 @@ import {
   Typography,
 } from "antd";
 import { useMemo, type ReactNode } from "react";
-import type {
-  Difficulty,
-  Persona,
-  RolePlayCatalog,
-  Scenario,
-} from "../../shared/role-play-catalog";
+import type { Difficulty, Persona, RolePlayCatalog, Scenario } from "../../shared/role-play-catalog";
 import { localizeCatalog } from "../catalog/catalog-localization";
+import { getVoiceLabel } from "../catalog/qwen-voice-options";
 import {
   LanguageToggleButton,
   useI18n,
@@ -68,7 +64,7 @@ const GENDER_LABELS: Record<Persona["gender"], LocalizedText> = {
 };
 
 const PACE_LABELS: Record<
-  Scenario["voiceBehavior"]["speakingPace"],
+  Persona["voiceBehavior"]["speakingPace"],
   LocalizedText
 > = {
   slow: { en: "Slower", zh: "偏慢" },
@@ -77,7 +73,7 @@ const PACE_LABELS: Record<
 };
 
 const INTERRUPT_LABELS: Record<
-  Scenario["voiceBehavior"]["interruptFrequency"],
+  Persona["voiceBehavior"]["interruptFrequency"],
   LocalizedText
 > = {
   low: { en: "Patient, with few challenges", zh: "耐心，较少挑战" },
@@ -92,11 +88,11 @@ export interface LearnerLaunchPanelProps {
   catalog: RolePlayCatalog | null;
   loading: boolean;
   error: string | null;
-  selectedScenarioId: string | null;
-  selectedPersonaId: string | null;
+  selectedScenarioId: number | null;
+  selectedPersonaId: number | null;
   difficulty: Difficulty;
-  onScenarioChange: (scenarioId: string) => void;
-  onPersonaChange: (personaId: string) => void;
+  onScenarioChange: (scenarioId: number) => void;
+  onPersonaChange: (personaId: number) => void;
   onDifficultyChange: (difficulty: Difficulty) => void;
   onStart: () => void | Promise<void>;
   isStarting: boolean;
@@ -172,33 +168,6 @@ function ScenarioSummary({ scenario }: ScenarioSummaryProps) {
         color="blue"
       />
 
-      <Descriptions
-        className={styles.compactDescriptions}
-        column={1}
-        size="small"
-        items={[
-          {
-            key: "tone",
-            label: t({ en: "Tone", zh: "语气" }),
-            children: scenario.voiceBehavior.toneStyle,
-          },
-          {
-            key: "pace",
-            label: t({ en: "Pace", zh: "语速" }),
-            children: t(PACE_LABELS[scenario.voiceBehavior.speakingPace]),
-          },
-          {
-            key: "interruptions",
-            label: t({
-              en: "Interjection / challenge tendency",
-              zh: "插话 / 挑战倾向",
-            }),
-            children: t(
-              INTERRUPT_LABELS[scenario.voiceBehavior.interruptFrequency],
-            ),
-          },
-        ]}
-      />
     </Card>
   );
 }
@@ -208,13 +177,12 @@ interface PersonaSummaryProps {
 }
 
 function PersonaSummary({ persona }: PersonaSummaryProps) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const basicDetails = [
     t(GENDER_LABELS[persona.gender]),
     persona.age === null
       ? null
       : t({ en: "{age} years old", zh: "{age} 岁" }, { age: persona.age }),
-    persona.occupation || null,
   ].filter((value): value is string => value !== null);
 
   return (
@@ -236,7 +204,7 @@ function PersonaSummary({ persona }: PersonaSummaryProps) {
         </div>
       </Flex>
 
-      <Paragraph className={styles.identity}>{persona.identity}</Paragraph>
+      <Paragraph className={styles.identity}>{persona.occupation}</Paragraph>
 
       <SummaryTags
         icon={<UserOutlined />}
@@ -255,6 +223,26 @@ function PersonaSummary({ persona }: PersonaSummaryProps) {
             label: t({ en: "Communication", zh: "沟通方式" }),
             children: persona.communicationStyle,
           },
+          {
+            key: "tone",
+            label: t({ en: "Tone", zh: "语气" }),
+            children: persona.toneStyle,
+          },
+          {
+            key: "pace",
+            label: t({ en: "Pace", zh: "语速" }),
+            children: t(PACE_LABELS[persona.voiceBehavior.speakingPace]),
+          },
+          {
+            key: "interruptions",
+            label: t({
+              en: "Challenges",
+              zh: "插话 / 挑战",
+            }),
+            children: t(
+              INTERRUPT_LABELS[persona.voiceBehavior.interruptFrequency],
+            ),
+          },
           ...(persona.behaviorNotes
             ? [
                 {
@@ -270,7 +258,7 @@ function PersonaSummary({ persona }: PersonaSummaryProps) {
             children: (
               <Space size={6}>
                 <AudioOutlined />
-                <span>{persona.voice}</span>
+                <span>{getVoiceLabel(persona.voice, locale)}</span>
               </Space>
             ),
           },
@@ -336,7 +324,6 @@ export function LearnerLaunchPanel({
     value: persona.id,
     searchText: [
       persona.name,
-      persona.identity,
       persona.occupation,
       ...persona.personalityTraits,
     ]
@@ -534,23 +521,26 @@ export function LearnerLaunchPanel({
                       zh: "3. 选择训练难度",
                     })}
                   </Text>
+                  <br/>
+                  <Radio.Group
+                    aria-label={t({
+                      en: "Choose a training difficulty",
+                      zh: "选择训练难度",
+                    })}
+                    buttonStyle="solid"
+                    className={styles.difficultyOptions}
+                    disabled={isStarting}
+                    optionType="button"
+                    options={difficultyOptions}
+                    value={difficulty}
+                    onChange={(event) =>
+                      onDifficultyChange(event.target.value as Difficulty)
+                    }
+                  />
                   <Paragraph type="secondary">
                     {t(DIFFICULTY_DESCRIPTIONS[difficulty])}
                   </Paragraph>
                 </div>
-                <Segmented
-                  aria-label={t({
-                    en: "Choose a training difficulty",
-                    zh: "选择训练难度",
-                  })}
-                  block
-                  disabled={isStarting}
-                  options={difficultyOptions}
-                  value={difficulty}
-                  onChange={(value) =>
-                    onDifficultyChange(value as Difficulty)
-                  }
-                />
               </section>
 
               <Flex

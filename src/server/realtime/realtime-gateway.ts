@@ -53,7 +53,7 @@ export async function registerRealtimeGateway(
   options: { clientOrigin: string },
 ): Promise<void> {
   await app.register(websocket);
-  const conversations = new ConversationRepository(app.database);
+  const conversations = new ConversationRepository(app.conversationDatabase);
 
   app.get("/ws/realtime", { websocket: true }, (browser, request) => {
     const origin = request.headers.origin;

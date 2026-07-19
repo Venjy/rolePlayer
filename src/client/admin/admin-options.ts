@@ -1,8 +1,11 @@
 import type {
   PersonaInput,
   ScenarioInput,
+  ScenarioPreset,
+  ScenarioPresetCategory,
 } from "../../shared/role-play-catalog";
 import { translate, type AppLocale } from "../i18n/locale";
+export { getVoiceOptions } from "../catalog/qwen-voice-options";
 
 export function getGenderOptions(locale: AppLocale) {
   return [
@@ -17,21 +20,6 @@ export function getGenderOptions(locale: AppLocale) {
       label: translate(locale, { en: "Not specified", zh: "未指定" }),
     },
   ] satisfies Array<{ value: PersonaInput["gender"]; label: string }>;
-}
-
-export function getVoiceOptions(locale: AppLocale) {
-  const names =
-    locale === "zh"
-      ? ["龙安芊", "龙安聆心", "龙安聆希", "龙安小新", "龙安陆风"]
-      : ["Qian", "Lingxin", "Lingxi", "Xiaoxin", "Lufeng"];
-
-  return [
-    { value: "longanqian", label: `${names[0]} · longanqian` },
-    { value: "longanlingxin", label: `${names[1]} · longanlingxin` },
-    { value: "longanlingxi", label: `${names[2]} · longanlingxi` },
-    { value: "longanxiaoxin", label: `${names[3]} · longanxiaoxin` },
-    { value: "longanlufeng", label: `${names[4]} · longanlufeng` },
-  ] satisfies Array<{ value: PersonaInput["voice"]; label: string }>;
 }
 
 export function getInterruptFrequencyOptions(locale: AppLocale) {
@@ -58,7 +46,7 @@ export function getInterruptFrequencyOptions(locale: AppLocale) {
       }),
     },
   ] satisfies Array<{
-    value: ScenarioInput["voiceBehavior"]["interruptFrequency"];
+    value: PersonaInput["voiceBehavior"]["interruptFrequency"];
     label: string;
   }>;
 }
@@ -72,63 +60,63 @@ export function getSpeakingPaceOptions(locale: AppLocale) {
     },
     { value: "fast", label: translate(locale, { en: "Fast", zh: "快" }) },
   ] satisfies Array<{
-    value: ScenarioInput["voiceBehavior"]["speakingPace"];
+    value: PersonaInput["voiceBehavior"]["speakingPace"];
     label: string;
   }>;
 }
 
-export function getFallbackScenario(locale: AppLocale): ScenarioInput {
+export function getScenarioPresetOptions(
+  presets: readonly ScenarioPreset[],
+  category: ScenarioPresetCategory,
+  locale: AppLocale,
+) {
+  return presets
+    .filter((preset) => preset.category === category)
+    .sort((left, right) => left.position - right.position)
+    .map((preset) => {
+      const value =
+        locale === "en"
+          ? preset.value || preset.valueZhCn
+          : preset.valueZhCn || preset.value;
+      return { label: value, value: preset.id };
+    });
+}
+
+export function getFallbackScenario(): ScenarioInput {
   return {
-    name: translate(locale, { en: "General sales conversation", zh: "通用销售沟通" }),
-    description: translate(locale, {
-      en: "A salesperson is exploring a customer's needs and trying to offer a suitable solution.",
-      zh: "销售人员正在了解客户需求，并尝试提供合适的解决方案。",
-    }),
-    goals:
-      locale === "zh"
-        ? ["理解客户需求", "推进一次明确的下一步"]
-        : ["Understand the customer's needs", "Agree on a clear next step"],
-    suggestedSkillFocus:
-      locale === "zh"
-        ? ["需求发现", "积极倾听"]
-        : ["Needs discovery", "Active listening"],
-    successCriteria:
-      locale === "zh"
-        ? ["围绕客户真实需求展开对话"]
-        : ["Keep the conversation focused on the customer's real needs"],
+    name: "",
+    nameZhCn: "",
+    description: "",
+    descriptionZhCn: "",
+    trainingGoalPresetIds: [],
+    skillFocusPresetIds: [],
+    successCriterionPresetIds: [],
     scoringCriteria: [],
-    allowedPersonaIds: ["preview-persona"],
-    voiceBehavior: {
-      interruptFrequency: "medium",
-      speakingPace: "normal",
-      toneStyle: translate(locale, {
-        en: "Natural, realistic, and measured",
-        zh: "自然、真实、克制",
-      }),
-    },
+    allowedPersonaIds: [1],
   };
 }
 
-export function getFallbackPersona(locale: AppLocale): PersonaInput {
+export function getFallbackPersona(): PersonaInput {
   return {
-    name: translate(locale, { en: "Preview persona", zh: "预览角色" }),
+    name: "",
+    nameZhCn: "",
     gender: "unspecified",
     age: null,
-    occupation: translate(locale, { en: "Prospective customer", zh: "潜在客户" }),
-    identity: translate(locale, {
-      en: "A prospective customer evaluating a sales proposal",
-      zh: "正在评估销售方案的潜在客户",
-    }),
+    occupationPresetId: 1,
     background: "",
-    personalityTraits: [translate(locale, { en: "Rational", zh: "理性" })],
-    communicationStyle: translate(locale, {
-      en: "Communicates naturally and concisely",
-      zh: "自然、简洁地交流",
-    }),
+    backgroundZhCn: "",
+    personalityTraitPresetIds: [],
+    communicationStylePresetId: 1,
+    toneStylePresetId: 1,
     behaviorNotes: "",
-    motivations: [],
-    concerns: [],
+    behaviorNotesZhCn: "",
+    motivationPresetIds: [],
+    concernPresetIds: [],
     voice: "longanqian",
+    voiceBehavior: {
+      interruptFrequency: "medium",
+      speakingPace: "normal",
+    },
   };
 }
 

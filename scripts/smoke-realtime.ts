@@ -38,7 +38,7 @@ function apiBaseFromGateway(gatewayUrl: string): URL {
   return base;
 }
 
-async function createSmokeConversation(gatewayUrl: string): Promise<string> {
+async function createSmokeConversation(gatewayUrl: string): Promise<number> {
   const apiBase = process.env.SMOKE_API_URL
     ? new URL(process.env.SMOKE_API_URL)
     : apiBaseFromGateway(gatewayUrl);
@@ -65,8 +65,8 @@ async function createSmokeConversation(gatewayUrl: string): Promise<string> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      persona,
-      scenario,
+      personaId: persona.id,
+      scenarioId: scenario.id,
       difficulty: "easy",
       locale: "en",
     }),

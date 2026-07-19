@@ -1,40 +1,75 @@
 import { describe, expect, it } from "vitest";
+import type { Persona } from "../../src/shared/role-play-catalog";
 import {
+  getPersonaFormInitialValues,
   normalizePersonaFormValues,
   type PersonaFormValues,
 } from "../../src/client/admin/persona-form-values";
 
-describe("persona form normalization", () => {
-  it("normalizes cleared optional controls without throwing", () => {
-    const values: PersonaFormValues = {
-      name: "测试角色",
-      gender: "unspecified",
-      age: null,
-      occupation: undefined,
-      identity: "业务部门的最终决策者",
-      background: undefined,
-      personalityTraits: [" 务实 ", ""],
-      communicationStyle: "简洁直接",
-      behaviorNotes: undefined,
-      motivations: undefined,
-      concerns: [" 投入产出比 "],
-      voice: "longanqian",
-      previewScenarioId: "scenario-preview-only",
-    };
+const timestamp = "2026-07-18T00:00:00.000Z";
+function formValues(name: string): PersonaFormValues {
+  return {
+    name,
+    gender: "unspecified",
+    age: null,
+    occupationPresetId: 1,
+    personalityTraitPresetIds: [2],
+    communicationStylePresetId: 3,
+    toneStylePresetId: 4,
+    concernPresetIds: [5],
+    voice: "longanqian",
+    voiceBehavior: { interruptFrequency: "medium", speakingPace: "normal" },
+  };
+}
+const chinesePersona: Persona = {
+  ...normalizePersonaFormValues(formValues("张三"), "zh", undefined),
+  occupation: "Delivery Rider",
+  occupationZhCn: "外卖员",
+  personalityTraits: ["Pragmatic"],
+  personalityTraitsZhCn: ["务实"],
+  communicationStyle: "Direct and concise",
+  communicationStyleZhCn: "直接简洁",
+  toneStyle: "Professional and composed",
+  toneStyleZhCn: "专业沉稳",
+  motivations: [],
+  motivationsZhCn: [],
+  concerns: ["Price and budget"],
+  concernsZhCn: ["价格与预算"],
+  id: 1,
+  createdAt: timestamp,
+  updatedAt: timestamp,
+};
 
-    expect(normalizePersonaFormValues(values)).toEqual({
-      name: "测试角色",
-      gender: "unspecified",
-      age: null,
-      occupation: "",
-      identity: "业务部门的最终决策者",
-      background: "",
-      personalityTraits: ["务实"],
-      communicationStyle: "简洁直接",
-      behaviorNotes: "",
-      motivations: [],
-      concerns: ["投入产出比"],
-      voice: "longanqian",
+describe("persona form localization", () => {
+  it("writes localized free text but keeps preset selections as IDs", () => {
+    expect(normalizePersonaFormValues(formValues("张三"), "zh", undefined)).toMatchObject({
+      name: "",
+      nameZhCn: "张三",
+      occupationPresetId: 1,
+      personalityTraitPresetIds: [2],
+      concernPresetIds: [5],
+    });
+  });
+
+  it("shows fallback text without persisting it to English", () => {
+    const englishForm = getPersonaFormInitialValues(chinesePersona, "en");
+    expect(englishForm.name).toBe("张三");
+    const unchanged = normalizePersonaFormValues(englishForm, "en", chinesePersona);
+    expect(unchanged.name).toBe("");
+    expect(unchanged.nameZhCn).toBe("张三");
+  });
+
+  it("edits English without overwriting Chinese or preset IDs", () => {
+    const englishForm = getPersonaFormInitialValues(chinesePersona, "en");
+    const updated = normalizePersonaFormValues(
+      { ...englishForm, name: "Zhang San", occupationPresetId: 6 },
+      "en",
+      chinesePersona,
+    );
+    expect(updated).toMatchObject({
+      name: "Zhang San",
+      nameZhCn: "张三",
+      occupationPresetId: 6,
     });
   });
 });

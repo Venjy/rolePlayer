@@ -16,7 +16,7 @@ export interface RealtimeClientHandlers {
 }
 
 export interface RealtimeSessionConfiguration {
-  conversationId: string;
+  conversationId: number;
   maxHistoryTurns: number;
 }
 

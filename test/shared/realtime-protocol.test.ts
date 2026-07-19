@@ -9,12 +9,12 @@ describe("realtime protocol", () => {
     expect(
       clientControlMessageSchema.parse({
         type: "session.configure",
-        conversationId: "conversation_123",
+        conversationId: 123,
         maxHistoryTurns: 20,
       }),
     ).toMatchObject({
       type: "session.configure",
-      conversationId: "conversation_123",
+      conversationId: 123,
     });
   });
 
@@ -22,31 +22,31 @@ describe("realtime protocol", () => {
     expect(() =>
       clientControlMessageSchema.parse({
         type: "session.configure",
-        conversationId: "conversation_123",
+        conversationId: 123,
         maxHistoryTurns: 51,
       }),
     ).toThrow();
   });
 
-  it("requires a bounded conversation ID and rejects browser prompt fields", () => {
+  it("requires a positive integer conversation ID and rejects browser prompt fields", () => {
     expect(
       clientControlMessageSchema.safeParse({
         type: "session.configure",
-        conversationId: "x".repeat(100),
+        conversationId: 1,
         maxHistoryTurns: 20,
       }).success,
     ).toBe(true);
     expect(
       clientControlMessageSchema.safeParse({
         type: "session.configure",
-        conversationId: "x".repeat(101),
+        conversationId: 0,
         maxHistoryTurns: 20,
       }).success,
     ).toBe(false);
     expect(() =>
       clientControlMessageSchema.parse({
         type: "session.configure",
-        conversationId: "conversation_123",
+        conversationId: 123,
         maxHistoryTurns: 20,
         instructions: "Browser-controlled prompt",
         voice: "longanqian",
@@ -59,7 +59,7 @@ describe("realtime protocol", () => {
       serverMessageSchema.parse({
         type: "session.ready",
         sessionId: "sess_1",
-        conversationId: "conversation_123",
+        conversationId: 123,
       }),
     ).toMatchObject({ type: "session.ready" });
 

@@ -1,0 +1,46 @@
+[
+  {
+    "key": "scenario_sales_discovery",
+    "input": {
+      "name": "Sales discovery call", "nameZhCn": "销售需求探索",
+      "description": "Run an initial conversation with a potential buyer and determine whether there is a credible fit.", "descriptionZhCn": "与潜在客户进行首次沟通，判断双方是否存在可靠的合作契合点。",
+      "trainingGoalPresetKeys": ["goal_discover_needs", "goal_next_step"],
+      "skillFocusPresetKeys": ["skill_open_questions", "skill_active_listening"],
+      "successCriteria": [
+        { "presetKey": "criterion_need", "weight": 33 },
+        { "presetKey": "criterion_concern", "weight": 33 },
+        { "presetKey": "criterion_next_step", "weight": 34 }
+      ],
+      "allowedPersonaKeys": ["persona_alex", "persona_lin_yue", "persona_wang_qiang"]
+    }
+  },
+  {
+    "key": "scenario_price_objection",
+    "input": {
+      "name": "Handling a price objection", "nameZhCn": "价格异议处理",
+      "description": "The customer believes the quote exceeds the budget. Clarify the objection before connecting value to cost.", "descriptionZhCn": "客户认为报价超出预算，学员需要先澄清异议，再建立价值与成本之间的联系。",
+      "trainingGoalPresetKeys": ["goal_clarify_objection", "goal_build_value"],
+      "skillFocusPresetKeys": ["skill_objection_handling", "skill_value_articulation", "skill_negotiation"],
+      "successCriteria": [
+        { "presetKey": "criterion_no_early_discount", "weight": 33 },
+        { "presetKey": "criterion_value", "weight": 33 },
+        { "presetKey": "criterion_next_step", "weight": 34 }
+      ],
+      "allowedPersonaKeys": ["persona_alex", "persona_lin_yue", "persona_wang_qiang"]
+    }
+  },
+  {
+    "key": "scenario_renewal_recovery",
+    "input": {
+      "name": "Renewal recovery", "nameZhCn": "续约挽回",
+      "description": "An existing customer is dissatisfied and considering not renewing. Understand the problem and rebuild trust.", "descriptionZhCn": "现有客户对使用效果不满意并考虑不再续约，学员需要理解问题并修复信任。",
+      "trainingGoalPresetKeys": ["goal_rebuild_trust", "goal_next_step"],
+      "skillFocusPresetKeys": ["skill_active_listening", "skill_empathy"],
+      "successCriteria": [
+        { "presetKey": "criterion_summary", "weight": 50 },
+        { "presetKey": "criterion_next_step", "weight": 50 }
+      ],
+      "allowedPersonaKeys": ["persona_alex", "persona_lin_yue", "persona_wang_qiang"]
+    }
+  }
+]

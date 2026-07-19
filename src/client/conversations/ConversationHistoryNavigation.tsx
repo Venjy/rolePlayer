@@ -28,13 +28,13 @@ const DIFFICULTY_LABELS: Record<Difficulty, LocalizedText> = {
 
 export interface ConversationHistoryNavigationProps {
   conversations: readonly ConversationSummary[];
-  activeConversationId: string | null;
+  activeConversationId: number | null;
   loading: boolean;
   busy: boolean;
   error: string | null;
   mobileOpen: boolean;
   onMobileClose: () => void;
-  onSelect: (id: string) => void | Promise<void>;
+  onSelect: (id: number) => void | Promise<void>;
   onNew: () => void | Promise<void>;
   onRetry: () => void | Promise<void>;
 }

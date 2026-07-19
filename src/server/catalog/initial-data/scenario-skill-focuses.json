@@ -1,0 +1,8 @@
+[
+  { "key": "skill_open_questions", "value": "Open questions", "valueZhCn": "开放式提问", "position": 0 },
+  { "key": "skill_active_listening", "value": "Active listening", "valueZhCn": "积极倾听", "position": 1 },
+  { "key": "skill_objection_handling", "value": "Objection handling", "valueZhCn": "异议处理", "position": 2 },
+  { "key": "skill_value_articulation", "value": "Value articulation", "valueZhCn": "价值表达", "position": 3 },
+  { "key": "skill_negotiation", "value": "Negotiation", "valueZhCn": "谈判推进", "position": 4 },
+  { "key": "skill_empathy", "value": "Empathy", "valueZhCn": "情绪承接", "position": 5 }
+]

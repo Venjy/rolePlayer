@@ -1,11 +1,13 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { ZodError } from "zod";
 import { z } from "zod";
+import { databaseIdSchema } from "../../shared/database-id";
 import {
   personaInputSchema,
   scenarioInputSchema,
 } from "../../shared/role-play-catalog";
 import { MAX_REALTIME_INSTRUCTIONS_LENGTH } from "../../shared/realtime-protocol";
+import { PresetReferenceResolutionError } from "../../shared/role-play-preset-resolution";
 import {
   CatalogNameConflictError,
   CatalogRepository,
@@ -15,12 +17,12 @@ import {
 } from "./catalog-repository";
 
 const idParametersSchema = z.object({
-  id: z.string().trim().min(1).max(100),
+  id: z.coerce.number().pipe(databaseIdSchema),
 });
 
 /** Registers the server-owned CRUD boundary for editable personas and scenarios. */
 export function registerCatalogRoutes(app: FastifyInstance): void {
-  const repository = new CatalogRepository(app.database);
+  const repository = new CatalogRepository(app.catalogDatabase);
 
   app.get("/api/catalog", async () => repository.listCatalog());
 
@@ -133,7 +135,7 @@ function sendValidationError(reply: FastifyReply, error: ZodError) {
 function sendNotFound(
   reply: FastifyReply,
   entity: "persona" | "scenario",
-  id: string,
+  id: number,
 ) {
   const message = `No ${entity} exists with ID "${id}".`;
   return reply.code(404).send({
@@ -165,6 +167,18 @@ function handleCatalogError(error: unknown, reply: FastifyReply) {
         code: "unknown_persona_reference",
         message: error.message,
         personaIds: error.personaIds,
+      },
+    });
+  }
+
+  if (error instanceof PresetReferenceResolutionError) {
+    return reply.code(400).send({
+      message: error.message,
+      error: {
+        code: "unknown_preset_reference",
+        message: error.message,
+        category: error.category,
+        presetId: error.presetId,
       },
     });
   }

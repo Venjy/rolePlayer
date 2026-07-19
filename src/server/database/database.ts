@@ -1,7 +1,11 @@
 import { mkdirSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { runMigrations } from "./migrations";
+import {
+  DATABASE_MIGRATIONS,
+  runMigrations,
+  type DatabaseMigration,
+} from "./migrations";
 
 // node:sqlite can be imported without an experimental flag from Node 22.13.0;
 // package.json deliberately enforces that minimum runtime version.
@@ -10,6 +14,7 @@ const BUSY_TIMEOUT_MS = 5_000;
 
 export interface ApplicationDatabaseOptions {
   path: string;
+  migrations?: readonly DatabaseMigration[];
 }
 
 /**
@@ -21,9 +26,11 @@ export class ApplicationDatabase {
   public readonly path: string;
 
   private connection?: DatabaseSync;
+  private readonly migrations: readonly DatabaseMigration[];
 
   public constructor(options: ApplicationDatabaseOptions) {
     this.path = resolveDatabasePath(options.path);
+    this.migrations = options.migrations ?? DATABASE_MIGRATIONS;
   }
 
   public open(): void {
@@ -36,12 +43,15 @@ export class ApplicationDatabase {
     const connection = new DatabaseSync(this.path);
 
     try {
+      // Each domain has one synchronous connection in the single Node process.
+      // DELETE journaling keeps crash-safe transactions without persistent
+      // -wal/-shm sidecars; revisit WAL if multi-process concurrency is added.
       connection.exec(`
-        PRAGMA journal_mode = WAL;
+        PRAGMA journal_mode = DELETE;
         PRAGMA foreign_keys = ON;
         PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS};
       `);
-      runMigrations(connection);
+      runMigrations(connection, this.migrations);
       this.connection = connection;
     } catch (error) {
       connection.close();

@@ -1,0 +1,7 @@
+[
+  { "key": "communication_direct", "value": "Direct and concise", "valueZhCn": "直接简洁", "position": 0 },
+  { "key": "communication_conversational", "value": "Relaxed and conversational", "valueZhCn": "轻松自然", "position": 1 },
+  { "key": "communication_analytical", "value": "Analytical and evidence-led", "valueZhCn": "理性重证据", "position": 2 },
+  { "key": "communication_questioning", "value": "Question-led", "valueZhCn": "善于追问", "position": 3 },
+  { "key": "communication_emotional", "value": "Emotionally expressive", "valueZhCn": "情绪外露", "position": 4 }
+]

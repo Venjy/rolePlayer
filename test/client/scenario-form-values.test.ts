@@ -1,0 +1,85 @@
+import { describe, expect, it } from "vitest";
+import type { Scenario, ScenarioPreset } from "../../src/shared/role-play-catalog";
+import {
+  buildScoringCriteriaForSuccessCriteria,
+  distributeScoringWeights,
+  getScenarioFormInitialValues,
+  normalizeScenarioFormValues,
+  type ScenarioFormValues,
+} from "../../src/client/admin/scenario-form-values";
+
+const timestamp = "2026-07-18T00:00:00.000Z";
+const presets: ScenarioPreset[] = [1, 2, 3].map((id) => ({
+  id,
+  category: "success_criterion",
+  value: `Criterion ${id}`,
+  valueZhCn: `标准 ${id}`,
+  position: id - 1,
+  createdAt: timestamp,
+  updatedAt: timestamp,
+}));
+function chineseValues(): ScenarioFormValues {
+  return {
+    name: "价格异议处理",
+    description: "客户认为报价超出预算。",
+    trainingGoalPresetIds: [4],
+    skillFocusPresetIds: [5],
+    successCriterionPresetIds: [1],
+    scoringCriteria: [
+      { successCriterionPresetId: 1, displayName: "标准 1", weight: 100 },
+    ],
+  };
+}
+const chineseScenario: Scenario = {
+  ...normalizeScenarioFormValues(chineseValues(), "zh", undefined, [1]),
+  goals: ["Clarify the objection"],
+  goalsZhCn: ["澄清真实异议"],
+  suggestedSkillFocus: ["Objection handling"],
+  suggestedSkillFocusZhCn: ["异议处理"],
+  successCriteria: ["Criterion 1"],
+  successCriteriaZhCn: ["标准 1"],
+  scoringCriteria: [{
+    successCriterionPresetId: 1,
+    name: "Criterion 1",
+    nameZhCn: "标准 1",
+    weight: 100,
+  }],
+  id: 1,
+  createdAt: timestamp,
+  updatedAt: timestamp,
+};
+
+describe("scenario form values", () => {
+  it("writes localized free text and stores preset IDs", () => {
+    expect(normalizeScenarioFormValues(chineseValues(), "zh", undefined, [1]))
+      .toMatchObject({
+        name: "",
+        nameZhCn: "价格异议处理",
+        trainingGoalPresetIds: [4],
+        successCriterionPresetIds: [1],
+        scoringCriteria: [{ successCriterionPresetId: 1, weight: 100 }],
+        allowedPersonaIds: [1],
+      });
+  });
+
+  it("preserves Chinese while adding English", () => {
+    const englishForm = getScenarioFormInitialValues(chineseScenario, "en");
+    const updated = normalizeScenarioFormValues(
+      { ...englishForm, name: "Handling a price objection" },
+      "en",
+      chineseScenario,
+    );
+    expect(updated).toMatchObject({
+      name: "Handling a price objection",
+      nameZhCn: "价格异议处理",
+      trainingGoalPresetIds: [4],
+    });
+  });
+
+  it("distributes integer weights evenly and always totals 100", () => {
+    expect(distributeScoringWeights(3)).toEqual([33, 33, 34]);
+    expect(distributeScoringWeights(6)).toEqual([16, 16, 17, 17, 17, 17]);
+    const criteria = buildScoringCriteriaForSuccessCriteria([1, 2, 3], presets, "en");
+    expect(criteria.map(({ weight }) => weight)).toEqual([33, 33, 34]);
+  });
+});

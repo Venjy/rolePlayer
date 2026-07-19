@@ -15,29 +15,22 @@ import type {
   PersonaInput,
   PersonaPreset,
   PersonaPresetCategory,
-  Scenario,
 } from "../../shared/role-play-catalog";
+import { compilePersonaInstructions } from "../../shared/role-play-instructions";
+import { resolvePersonaPresetReferences } from "../../shared/role-play-preset-resolution";
 import {
-  compileRolePlayInstructions,
-  findRolePlayInstructionsLengthIssue,
-} from "../../shared/role-play-instructions";
-import {
-  cleanStringList,
-  getFallbackPersona,
-  getFallbackScenario,
   getGenderOptions,
+  getInterruptFrequencyOptions,
+  getSpeakingPaceOptions,
   getVoiceOptions,
 } from "./admin-options";
 import { useI18n, type AppLocale } from "../i18n";
 import { translate } from "../i18n/locale";
-import {
-  localizePersonaInput,
-  localizePersona,
-  localizeScenario,
-} from "../catalog/catalog-localization";
+import { localizePersonaInput, localizePersona } from "../catalog/catalog-localization";
 import { buildPersonaPresetOptions } from "./persona-preset-options";
 import {
   normalizePersonaFormValues,
+  getPersonaFormInitialValues,
   type PersonaFormValues,
 } from "./persona-form-values";
 import { PromptPreview } from "./PromptPreview";
@@ -46,7 +39,6 @@ import styles from "./AdminConsole.module.css";
 interface PersonaEditorDrawerProps {
   persona?: Persona;
   personaPresets: PersonaPreset[];
-  scenarios: Scenario[];
   busy: boolean;
   onCancel: () => void;
   onSubmit: (input: PersonaInput) => Promise<void>;
@@ -56,23 +48,10 @@ function listRule(
   locale: AppLocale,
   label: string,
   maximum: number,
-  required = false,
 ) {
   return {
     validator: async (_rule: unknown, value: unknown) => {
-      const items = cleanStringList(value);
-      if (required && items.length === 0) {
-        throw new Error(
-          translate(
-            locale,
-            {
-              en: "Select at least one {label}.",
-              zh: "请至少选择一项{label}。",
-            },
-            { label },
-          ),
-        );
-      }
+      const items = Array.isArray(value) ? value : [];
       if (items.length > maximum) {
         throw new Error(
           translate(
@@ -85,18 +64,6 @@ function listRule(
           ),
         );
       }
-      if (items.some((item) => item.length > 160)) {
-        throw new Error(
-          translate(
-            locale,
-            {
-              en: "Each {label} item must be no more than 160 characters.",
-              zh: "{label}单项不能超过 160 个字符。",
-            },
-            { label },
-          ),
-        );
-      }
     },
   };
 }
@@ -104,33 +71,19 @@ function listRule(
 function buildPreviewPersona(
   locale: AppLocale,
   values?: Partial<PersonaFormValues>,
-): PersonaInput {
-  const fallbackPersona = getFallbackPersona(locale);
-  return {
-    name: values?.name?.trim() || fallbackPersona.name,
-    gender: values?.gender ?? fallbackPersona.gender,
-    age: typeof values?.age === "number" ? values.age : null,
-    occupation: values?.occupation?.trim() ?? "",
-    identity: values?.identity?.trim() || fallbackPersona.identity,
-    background: values?.background?.trim() ?? "",
-    personalityTraits:
-      cleanStringList(values?.personalityTraits).length > 0
-        ? cleanStringList(values?.personalityTraits)
-        : fallbackPersona.personalityTraits,
-    communicationStyle:
-      values?.communicationStyle?.trim() ||
-      fallbackPersona.communicationStyle,
-    behaviorNotes: values?.behaviorNotes?.trim() ?? "",
-    motivations: cleanStringList(values?.motivations),
-    concerns: cleanStringList(values?.concerns),
-    voice: values?.voice ?? fallbackPersona.voice,
-  };
+  persona?: Persona,
+  presets: readonly PersonaPreset[] = [],
+) {
+  const initial = getPersonaFormInitialValues(persona, locale, presets);
+  return resolvePersonaPresetReferences(
+    normalizePersonaFormValues({ ...initial, ...values }, locale, persona),
+    presets,
+  );
 }
 
 export function PersonaEditorDrawer({
   persona,
   personaPresets,
-  scenarios,
   busy,
   onCancel,
   onSubmit,
@@ -141,19 +94,18 @@ export function PersonaEditorDrawer({
   const draft = Form.useWatch([], form);
 
   const presetOptions = useMemo(
-    () => buildPersonaPresetOptions(personaPresets, locale, persona),
-    [locale, persona, personaPresets],
+    () => buildPersonaPresetOptions(personaPresets, locale),
+    [locale, personaPresets],
   );
   const requiredPresetLabels: Partial<
     Record<PersonaPresetCategory, string>
   > = {
-    identity: t({ en: "identity", zh: "身份" }),
+    occupation: t({ en: "occupation", zh: "职业" }),
     personality_trait: t({ en: "personality traits", zh: "性格特征" }),
     communication_style: t({ en: "communication style", zh: "沟通风格" }),
+    tone_style: t({ en: "tone style", zh: "语气风格" }),
   };
-  const missingRequiredPresets = persona
-    ? []
-    : Object.entries(requiredPresetLabels)
+  const missingRequiredPresets = Object.entries(requiredPresetLabels)
         .filter(
           ([category]) =>
             presetOptions[category as PersonaPresetCategory].length === 0,
@@ -170,52 +122,18 @@ export function PersonaEditorDrawer({
         )
       : undefined;
 
-  const defaultScenarioId =
-    scenarios.find((scenario) =>
-      persona ? scenario.allowedPersonaIds.includes(persona.id) : false,
-    )?.id ?? scenarios[0]?.id;
-
-  const initialValues: PersonaFormValues = {
-    name: persona?.name ?? "",
-    gender: persona?.gender ?? "unspecified",
-    age: persona?.age ?? null,
-    occupation: persona?.occupation ?? "",
-    identity: persona?.identity ?? "",
-    background: persona?.background ?? "",
-    personalityTraits: persona?.personalityTraits ?? [],
-    communicationStyle: persona?.communicationStyle ?? "",
-    behaviorNotes: persona?.behaviorNotes ?? "",
-    motivations: persona?.motivations ?? [],
-    concerns: persona?.concerns ?? [],
-    voice: persona?.voice ?? "longanqian",
-    previewScenarioId: defaultScenarioId,
-  };
+  const initialValues = getPersonaFormInitialValues(persona, locale, personaPresets);
 
   const preview = useMemo(() => {
-    const selectedScenario = scenarios.find(
-      (scenario) => scenario.id === draft?.previewScenarioId,
-    );
     const previewPersona = localizePersonaInput(
-      buildPreviewPersona(locale, draft),
+      buildPreviewPersona(locale, draft, persona, personaPresets),
       locale,
-      personaPresets,
     );
-    const previewScenario = selectedScenario
-      ? localizeScenario(selectedScenario, locale)
-      : getFallbackScenario(locale);
-    const lengthIssue = findRolePlayInstructionsLengthIssue({
-      persona: previewPersona,
-      scenario: previewScenario,
-    });
     return {
-      prompt: compileRolePlayInstructions({
-        persona: previewPersona,
-        scenario: previewScenario,
-        difficulty: lengthIssue?.difficulty ?? "medium",
-      }),
-      lengthIssue,
+      prompt: compilePersonaInstructions(previewPersona),
+      lengthIssue: null,
     };
-  }, [draft, locale, personaPresets, scenarios]);
+  }, [draft, locale, persona, personaPresets]);
 
   const handleFinish = async (values: PersonaFormValues) => {
     setSubmitError(undefined);
@@ -223,33 +141,11 @@ export function PersonaEditorDrawer({
       setSubmitError(presetInitializationMessage);
       return;
     }
-    const normalizedInput = normalizePersonaFormValues(values);
-
-    if (persona) {
-      for (const scenario of scenarios) {
-        if (!scenario.allowedPersonaIds.includes(persona.id)) continue;
-        const issue = findRolePlayInstructionsLengthIssue({
-          persona: normalizedInput,
-          scenario,
-        });
-        if (issue) {
-          setSubmitError(
-            t(
-              {
-                en: "The Instructions generated with scenario “{name}” are too long ({actual}/{maximum} characters). Shorten the persona configuration.",
-                zh: "与场景“{name}”组合后的 Instructions 过长（{actual}/{maximum} 字符），请精简角色配置。",
-              },
-              {
-                name: localizeScenario(scenario, locale).name,
-                actual: issue.actualLength,
-                maximum: issue.maximumLength,
-              },
-            ),
-          );
-          return;
-        }
-      }
-    }
+    const normalizedInput = normalizePersonaFormValues(
+      values,
+      locale,
+      persona,
+    );
 
     try {
       await onSubmit(normalizedInput);
@@ -342,7 +238,7 @@ export function PersonaEditorDrawer({
           },
         }}
       >
-        <div className={styles.formGrid}>
+        <div className={styles.personaBasicsGrid}>
           <Form.Item
             label={t({ en: "Name", zh: "名字" })}
             name="name"
@@ -372,15 +268,14 @@ export function PersonaEditorDrawer({
           </Form.Item>
           <Form.Item
             extra={t({
-              en: "Choose a preset or leave it blank",
-              zh: "从预设中选择，可不填",
+              en: "Choose the persona's occupation",
+              zh: "选择角色的职业",
             })}
             label={t({ en: "Occupation", zh: "职业" })}
-            name="occupation"
-            rules={[{ max: 120 }]}
+            name="occupationPresetId"
+            rules={[{ required: true }]}
           >
             <Select
-              allowClear
               className={styles.fullWidth}
               notFoundContent={t({
                 en: "No occupation presets available",
@@ -392,28 +287,8 @@ export function PersonaEditorDrawer({
               showSearch
             />
           </Form.Item>
-          <Form.Item
-            className={styles.fullSpan}
-            extra={t({
-              en: "Choose the persona's role and point of view in the practice session",
-              zh: "选择角色在对练中的身份和立场",
-            })}
-            label={t({ en: "Identity", zh: "身份" })}
-            name="identity"
-            rules={[{ required: true, max: 240 }]}
-          >
-            <Select
-              className={styles.fullWidth}
-              notFoundContent={t({
-                en: "No identity presets available",
-                zh: "暂无可用身份预设",
-              })}
-              optionFilterProp="label"
-              options={presetOptions.identity}
-              placeholder={t({ en: "Select an identity", zh: "选择身份" })}
-              showSearch
-            />
-          </Form.Item>
+        </div>
+        <div className={styles.formGrid}>
           <Form.Item
             className={styles.fullSpan}
             label={t({ en: "Background", zh: "背景" })}
@@ -433,17 +308,47 @@ export function PersonaEditorDrawer({
           <Form.Item
             className={styles.fullSpan}
             extra={t({
+              en: "Controls the emotional tone used by this persona across scenarios",
+              zh: "控制该角色在不同场景中保持的情绪与语气倾向",
+            })}
+            label={t({ en: "Tone style", zh: "语气风格" })}
+            name="toneStylePresetId"
+            rules={[{ required: true }]}
+          >
+            <Select
+              className={styles.fullWidth}
+              notFoundContent={t({
+                en: "No tone style presets available",
+                zh: "暂无可用语气风格预设",
+              })}
+              optionFilterProp="label"
+              options={presetOptions.tone_style}
+              placeholder={t({ en: "Select a tone style", zh: "选择语气风格" })}
+              showSearch
+            />
+          </Form.Item>
+          <Form.Item
+            className={styles.fullSpan}
+            extra={t({
               en: "Choose 1–12 presets; search and multiple selection are supported",
               zh: "从预设中选择 1–12 项，可搜索和多选",
             })}
             label={t({ en: "Personality traits", zh: "性格特征" })}
-            name="personalityTraits"
+            name="personalityTraitPresetIds"
             rules={[
+              {
+                required: true,
+                type: "array",
+                min: 1,
+                message: t({
+                  en: "Select at least one personality trait.",
+                  zh: "请至少选择一项性格特征。",
+                }),
+              },
               listRule(
                 locale,
                 t({ en: "personality traits", zh: "性格特征" }),
                 12,
-                true,
               ),
             ]}
           >
@@ -473,8 +378,8 @@ export function PersonaEditorDrawer({
               zh: "从预设中选择措辞、表达习惯和交流方式",
             })}
             label={t({ en: "Communication style", zh: "沟通风格" })}
-            name="communicationStyle"
-            rules={[{ required: true, max: 500 }]}
+            name="communicationStylePresetId"
+            rules={[{ required: true }]}
           >
             <Select
               className={styles.fullWidth}
@@ -513,7 +418,7 @@ export function PersonaEditorDrawer({
               zh: "从预设中选择，最多 10 项",
             })}
             label={t({ en: "Motivations", zh: "动机" })}
-            name="motivations"
+            name="motivationPresetIds"
             rules={[
               listRule(
                 locale,
@@ -547,7 +452,7 @@ export function PersonaEditorDrawer({
               zh: "从预设中选择，最多 10 项",
             })}
             label={t({ en: "Concerns and objections", zh: "顾虑与异议" })}
-            name="concerns"
+            name="concernPresetIds"
             rules={[
               listRule(
                 locale,
@@ -582,37 +487,33 @@ export function PersonaEditorDrawer({
           >
             <Select options={getVoiceOptions(locale)} />
           </Form.Item>
+          <Form.Item
+            label={t({
+              en: "Interjection / challenge tendency",
+              zh: "插话 / 挑战倾向",
+            })}
+            name={["voiceBehavior", "interruptFrequency"]}
+            rules={[{ required: true }]}
+          >
+            <Select options={getInterruptFrequencyOptions(locale)} />
+          </Form.Item>
+          <Form.Item
+            label={t({ en: "Speaking pace", zh: "说话节奏" })}
+            name={["voiceBehavior", "speakingPace"]}
+            rules={[{ required: true }]}
+          >
+            <Select options={getSpeakingPaceOptions(locale)} />
+          </Form.Item>
         </div>
 
         <Divider titlePlacement="start">
           {t({ en: "Instructions check", zh: "提示词检查" })}
         </Divider>
-        {scenarios.length > 0 ? (
-          <Form.Item
-            label={t({ en: "Scenario used for preview", zh: "用于预览的场景" })}
-            name="previewScenarioId"
-          >
-            <Select
-              options={scenarios.map((scenario) => ({
-                value: scenario.id,
-                label: localizeScenario(scenario, locale).name,
-              }))}
-              placeholder={t({
-                en: "Select a preview scenario",
-                zh: "选择预览场景",
-              })}
-            />
-          </Form.Item>
-        ) : null}
         <PromptPreview
-          note={
-            scenarios.length === 0
-              ? t({
-                  en: "There are no scenarios yet, so the preview uses a general sales conversation.",
-                  zh: "目前没有场景，预览暂时使用通用销售沟通场景。",
-                })
-              : undefined
-          }
+          note={t({
+            en: "This preview contains persona Instructions only. The server combines it with the selected scenario when a conversation starts.",
+            zh: "此处只预览角色 Instructions；开始对话时，服务端才会与所选场景拼接。",
+          })}
           lengthIssue={preview.lengthIssue}
           prompt={preview.prompt}
         />

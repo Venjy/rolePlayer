@@ -1,53 +1,131 @@
 import type { DatabaseSync } from "node:sqlite";
+import { z } from "zod";
 import type {
   PersonaInput,
   PersonaPresetCategory,
+  ScenarioInput,
+  ScenarioPresetCategory,
 } from "../../shared/role-play-catalog";
 import {
   MAX_SCENARIO_PERSONAS,
+  personaGenderSchema,
   personaInputSchema,
   personaPresetSchema,
+  scenarioInputSchema,
+  scenarioPresetSchema,
+  voiceBehaviorSchema,
 } from "../../shared/role-play-catalog";
 import { findRolePlayInstructionsLengthIssue } from "../../shared/role-play-instructions";
+import {
+  localizePersonaInput,
+  localizeScenarioInput,
+} from "../../shared/role-play-localization";
+import {
+  resolvePersonaPresetReferences,
+  resolveScenarioPresetReferences,
+} from "../../shared/role-play-preset-resolution";
+import { qwenVoiceSchema } from "../../shared/realtime-protocol";
 import type { ApplicationDatabase } from "../database/database";
-import { CatalogRepository } from "./catalog-repository";
-
-interface InitialPersonaPreset {
-  id: string;
-  category: PersonaPresetCategory;
-  value: string;
-  valueEn: string;
-  position: number;
-}
-
-interface InitialCatalogPersona {
-  id: string;
-  input: PersonaInput;
-}
+import { formatDatabaseTimestamp } from "../database/database-time";
+import {
+  PERSONA_PRESET_TABLE_BY_CATEGORY,
+  SCENARIO_PRESET_TABLE_BY_CATEGORY,
+  type PresetTableDefinition,
+} from "../database/preset-storage";
+import personaCommunicationStyleData from "./initial-data/persona-communication-styles.json";
+import personaConcernData from "./initial-data/persona-concerns.json";
+import personaMotivationData from "./initial-data/persona-motivations.json";
+import personaOccupationData from "./initial-data/persona-occupations.json";
+import personaPersonalityTraitData from "./initial-data/persona-personality-traits.json";
+import personaToneStyleData from "./initial-data/persona-tone-styles.json";
+import personaData from "./initial-data/personas.json";
+import scenarioSkillFocusData from "./initial-data/scenario-skill-focuses.json";
+import scenarioSuccessCriterionData from "./initial-data/scenario-success-criteria.json";
+import scenarioTrainingGoalData from "./initial-data/scenario-training-goals.json";
+import scenarioData from "./initial-data/scenarios.json";
 
 export interface CatalogInitializationResult {
   presetRowsInserted: number;
   presetRowsSkipped: number;
-  presetTranslationsUpdated: number;
+  scenarioPresetRowsInserted: number;
+  scenarioPresetRowsSkipped: number;
   personaRowsInserted: number;
   personaRowsSkipped: number;
+  scenarioRowsInserted: number;
+  scenarioRowsSkipped: number;
   scenarioLinksInserted: number;
   scenarioLinksSkipped: number;
-  defaultScenarioFound: boolean;
+}
+
+interface StarterPreset {
+  key: string;
+  category: PersonaPresetCategory | ScenarioPresetCategory;
+  value: string;
+  valueZhCn: string;
+  position: number;
+}
+
+interface StarterPresetJson {
+  key: string;
+  value: string;
+  valueZhCn: string;
+  position: number;
+}
+
+const starterKeySchema = z.string().trim().min(1).max(100);
+const localizedOptionalText = (maximum: number) => z.string().trim().max(maximum);
+
+const starterPersonaInputSchema = z.object({
+  name: localizedOptionalText(80),
+  nameZhCn: localizedOptionalText(80),
+  gender: personaGenderSchema,
+  age: z.number().int().min(1).max(120).nullable(),
+  occupationPresetKey: starterKeySchema,
+  background: localizedOptionalText(2_000),
+  backgroundZhCn: localizedOptionalText(2_000),
+  personalityTraitPresetKeys: z.array(starterKeySchema).min(1).max(12),
+  communicationStylePresetKey: starterKeySchema,
+  toneStylePresetKey: starterKeySchema,
+  behaviorNotes: localizedOptionalText(2_000),
+  behaviorNotesZhCn: localizedOptionalText(2_000),
+  motivationPresetKeys: z.array(starterKeySchema).max(10),
+  concernPresetKeys: z.array(starterKeySchema).max(10),
+  voice: qwenVoiceSchema,
+  voiceBehavior: voiceBehaviorSchema,
+});
+
+const starterScenarioInputSchema = z.object({
+  name: localizedOptionalText(120),
+  nameZhCn: localizedOptionalText(120),
+  description: localizedOptionalText(2_000),
+  descriptionZhCn: localizedOptionalText(2_000),
+  trainingGoalPresetKeys: z.array(starterKeySchema).min(1).max(10),
+  skillFocusPresetKeys: z.array(starterKeySchema).min(1).max(10),
+  successCriteria: z.array(z.object({
+    presetKey: starterKeySchema,
+    weight: z.number().int().min(0).max(100),
+  })).min(1).max(12),
+  allowedPersonaKeys: z.array(starterKeySchema).max(MAX_SCENARIO_PERSONAS),
+});
+
+interface StarterPersona {
+  key: string;
+  input: z.infer<typeof starterPersonaInputSchema>;
+}
+
+interface StarterScenario {
+  key: string;
+  input: z.infer<typeof starterScenarioInputSchema>;
 }
 
 export class CatalogInitializationInstructionsTooLongError extends Error {
   public constructor(
-    public readonly personaId: string,
-    public readonly personaName: string,
-    public readonly scenarioId: string,
-    public readonly scenarioName: string,
-    public readonly difficulty: "easy" | "medium" | "hard",
+    public readonly personaKey: string,
+    public readonly scenarioKey: string,
     public readonly actualLength: number,
-    public readonly maximumLength: number,
   ) {
     super(
-      `Cannot initialize the link between persona "${personaName}" and scenario "${scenarioName}": ${difficulty} Instructions are too long (${actualLength}/${maximumLength} characters).`,
+      `Starter persona "${personaKey}" and scenario "${scenarioKey}" generate Instructions that are too long (${actualLength} characters).`,
     );
     this.name = "CatalogInitializationInstructionsTooLongError";
   }
@@ -55,289 +133,71 @@ export class CatalogInitializationInstructionsTooLongError extends Error {
 
 export class CatalogInitializationScenarioCapacityError extends Error {
   public constructor(
-    public readonly scenarioId: string,
-    public readonly scenarioName: string,
-    public readonly personaId: string,
-    public readonly currentPersonaCount: number,
-    public readonly maximumPersonaCount: number,
+    public readonly scenarioKey: string,
+    public readonly personaKey: string,
   ) {
     super(
-      `Cannot initialize the link to persona "${personaId}": scenario "${scenarioName}" already has ${currentPersonaCount}/${maximumPersonaCount} compatible personas.`,
+      `Starter scenario "${scenarioKey}" cannot link persona "${personaKey}" because it reached ${MAX_SCENARIO_PERSONAS} compatible personas.`,
     );
     this.name = "CatalogInitializationScenarioCapacityError";
   }
 }
 
-export const DEFAULT_INITIAL_SCENARIO_ID = "scenario_sales_discovery";
+export const DEFAULT_INITIAL_SCENARIO_KEY = "scenario_sales_discovery";
+const SEED_TIMESTAMP = formatDatabaseTimestamp(0);
 
-function presetGroup(
-  category: PersonaPresetCategory,
-  entries: readonly (readonly [id: string, value: string, valueEn: string])[],
-): InitialPersonaPreset[] {
-  return entries.map(([id, value, valueEn], position) => ({
-    id,
-    category,
-    value,
-    valueEn,
-    position,
-  }));
-}
-
-/**
- * Stable, deployment-owned choices for the persona editor. Positions are
- * scoped to a category and are deliberately explicit through array order.
- */
-export const INITIAL_PERSONA_PRESETS: readonly InitialPersonaPreset[] = [
-  ...presetGroup("identity", [
-    [
-      "preset_identity_business_decision_maker",
-      "业务部门的最终决策者",
-      "Final decision-maker for a business unit",
-    ],
-    [
-      "preset_identity_management_recommender",
-      "负责方案评估并向管理层提出建议的业务负责人",
-      "Business leader who evaluates solutions and makes recommendations to management",
-    ],
-    [
-      "preset_identity_procurement_decision_maker",
-      "负责供应商筛选、商务谈判与风险控制的采购决策者",
-      "Procurement decision-maker responsible for supplier selection, commercial negotiations, and risk control",
-    ],
-    [
-      "preset_identity_small_business_owner",
-      "直接负责经营、现金流与最终购买决策的小微企业主",
-      "Small-business owner directly responsible for operations, cash flow, and final purchasing decisions",
-    ],
-    [
-      "preset_identity_technical_evaluator",
-      "负责技术选型、系统集成与信息安全的技术评估者",
-      "Technical evaluator responsible for technology selection, systems integration, and information security",
-    ],
-    [
-      "preset_identity_daily_user_influencer",
-      "产品的日常使用者和内部影响者",
-      "Daily product user and internal influencer",
-    ],
-    [
-      "preset_identity_marketing_decision_maker",
-      "负责增长与品牌建设的市场营销决策者",
-      "Marketing decision-maker responsible for growth and brand building",
-    ],
-    [
-      "preset_identity_people_manager",
-      "关注团队效率与人才发展的管理者",
-      "Manager focused on team efficiency and talent development",
-    ],
-  ]),
-  ...presetGroup("occupation", [
-    ["preset_occupation_marketing_director", "市场营销总监", "Marketing Director"],
-    ["preset_occupation_procurement_manager", "采购经理", "Procurement Manager"],
-    ["preset_occupation_small_business_owner", "小微企业主", "Small-business Owner"],
-    ["preset_occupation_sales_director", "销售总监", "Sales Director"],
-    ["preset_occupation_operations_director", "运营总监", "Operations Director"],
-    ["preset_occupation_hr_manager", "人力资源经理", "Human Resources Manager"],
-    ["preset_occupation_finance_lead", "财务负责人", "Finance Lead"],
-    ["preset_occupation_it_lead", "IT 负责人", "IT Lead"],
-    ["preset_occupation_store_manager", "门店店长", "Store Manager"],
-    [
-      "preset_occupation_customer_success_manager",
-      "客户成功经理",
-      "Customer Success Manager",
-    ],
-    ["preset_occupation_startup_founder", "创业公司创始人", "Startup Founder"],
-    [
-      "preset_occupation_ecommerce_operator",
-      "电商运营负责人",
-      "E-commerce Operations Lead",
-    ],
-  ]),
-  ...presetGroup("personality_trait", [
-    ["preset_trait_pragmatic", "务实", "Pragmatic"],
-    ["preset_trait_cautious", "谨慎", "Cautious"],
-    ["preset_trait_data_driven", "数据驱动", "Data-driven"],
-    ["preset_trait_open_curious", "开放好奇", "Open and curious"],
-    ["preset_trait_detail_oriented", "注重细节", "Detail-oriented"],
-    ["preset_trait_cost_conscious", "成本敏感", "Cost-conscious"],
-    ["preset_trait_results_oriented", "结果导向", "Results-oriented"],
-    ["preset_trait_patient", "耐心", "Patient"],
-    ["preset_trait_assertive", "强势", "Assertive"],
-    ["preset_trait_skeptical", "怀疑精神", "Skeptical"],
-    ["preset_trait_time_pressed", "时间紧迫", "Time-pressed"],
-    ["preset_trait_risk_averse", "风险规避", "Risk-averse"],
-    ["preset_trait_friendly_talkative", "友善健谈", "Friendly and talkative"],
-    ["preset_trait_decisive", "决断果断", "Decisive"],
-    ["preset_trait_conservative", "保守传统", "Conservative and traditional"],
-    ["preset_trait_early_adopter", "乐于尝试新事物", "Eager to try new things"],
-  ]),
-  ...presetGroup("communication_style", [
-    [
-      "preset_communication_data_driven",
-      "表达清晰，会用业务数据追问方案价值与落地路径",
-      "Communicates clearly and uses business data to probe solution value and implementation",
-    ],
-    [
-      "preset_communication_commercial_direct",
-      "简洁直接，围绕价格、合同条款和风险连续追问",
-      "Concise and direct, with persistent questions about pricing, contract terms, and risk",
-    ],
-    [
-      "preset_communication_fast_pragmatic",
-      "节奏快且口语化，只关心能否马上解决问题",
-      "Fast-paced and conversational, focused only on whether the problem can be solved immediately",
-    ],
-    [
-      "preset_communication_friendly_exploratory",
-      "友好健谈，愿意分享背景并接受开放式提问",
-      "Friendly and talkative, willing to share context and engage with open-ended questions",
-    ],
-    [
-      "preset_communication_evidence_first",
-      "谨慎克制，需要看到具体证据后才会表态",
-      "Cautious and reserved, requiring concrete evidence before expressing a view",
-    ],
-    [
-      "preset_communication_challenging",
-      "强势且有挑战性，会打断空泛陈述并要求明确答案",
-      "Assertive and challenging, interrupting vague claims and demanding clear answers",
-    ],
-    [
-      "preset_communication_structured",
-      "条理细致，习惯逐项确认功能、流程和责任边界",
-      "Structured and detail-oriented, checking features, processes, and responsibilities one by one",
-    ],
-    [
-      "preset_communication_plain_language",
-      "不熟悉技术术语，需要使用简单语言和具体案例",
-      "Unfamiliar with technical jargon and needs plain language and concrete examples",
-    ],
-  ]),
-  ...presetGroup("motivation", [
-    ["preset_motivation_lead_generation", "提升获客效率", "Improve lead generation efficiency"],
-    ["preset_motivation_lower_procurement_cost", "降低采购总成本", "Reduce total procurement cost"],
-    ["preset_motivation_team_efficiency", "提高团队工作效率", "Improve team productivity"],
-    ["preset_motivation_reduce_manual_work", "减少重复人工", "Reduce repetitive manual work"],
-    ["preset_motivation_grow_revenue", "尽快提升营收", "Grow revenue quickly"],
-    ["preset_motivation_quick_adoption", "缩短团队上手周期", "Shorten team onboarding time"],
-    ["preset_motivation_prove_roi", "证明投资回报", "Demonstrate return on investment"],
-    ["preset_motivation_customer_experience", "改善客户体验", "Improve customer experience"],
-    ["preset_motivation_reduce_risk", "降低运营风险", "Reduce operational risk"],
-    ["preset_motivation_better_terms", "获得更有利的商务条款", "Secure more favorable commercial terms"],
-    ["preset_motivation_fast_low_cost_launch", "低成本快速上线", "Launch quickly at low cost"],
-    ["preset_motivation_scale_growth", "支持业务规模化增长", "Support scalable business growth"],
-  ]),
-  ...presetGroup("concern", [
-    ["preset_concern_roi", "投入产出比", "Return on investment"],
-    ["preset_concern_over_budget", "价格超出预算", "Price exceeds budget"],
-    ["preset_concern_integration_cost", "系统集成成本", "Systems integration cost"],
-    ["preset_concern_team_adoption", "团队采纳难度", "Difficulty of team adoption"],
-    ["preset_concern_data_security", "数据安全与隐私", "Data security and privacy"],
-    ["preset_concern_supplier_stability", "供应商稳定性", "Supplier stability"],
-    ["preset_concern_contract_support", "合同与售后保障", "Contract terms and after-sales support"],
-    ["preset_concern_implementation_time", "实施周期过长", "Implementation takes too long"],
-    ["preset_concern_migration_learning", "迁移与学习成本", "Migration and learning costs"],
-    ["preset_concern_workflow_disruption", "对现有流程的干扰", "Disruption to existing workflows"],
-    ["preset_concern_product_fit", "功能与实际需求不匹配", "Feature fit with actual needs"],
-    ["preset_concern_cash_flow", "现金流压力", "Cash-flow pressure"],
-    ["preset_concern_support_response", "售后响应速度", "After-sales response time"],
-    ["preset_concern_hidden_fees", "隐性费用", "Hidden fees"],
-  ]),
+export const INITIAL_PERSONA_PRESETS: StarterPreset[] = [
+  ...parsePresetDefinitions(personaOccupationData, "occupation", "persona"),
+  ...parsePresetDefinitions(personaPersonalityTraitData, "personality_trait", "persona"),
+  ...parsePresetDefinitions(personaCommunicationStyleData, "communication_style", "persona"),
+  ...parsePresetDefinitions(personaToneStyleData, "tone_style", "persona"),
+  ...parsePresetDefinitions(personaMotivationData, "motivation", "persona"),
+  ...parsePresetDefinitions(personaConcernData, "concern", "persona"),
 ];
-
-/** Three immediately usable, intentionally different sales prospects. */
-export const INITIAL_CATALOG_PERSONAS: readonly InitialCatalogPersona[] = [
-  {
-    id: "persona_lin_yue",
-    input: personaInputSchema.parse({
-      name: "林悦",
-      gender: "female",
-      age: 34,
-      occupation: "市场营销总监",
-      identity: "负责增长与品牌建设的市场营销决策者",
-      background:
-        "林悦负责一家成长型消费品牌的市场团队。获客成本持续上升，她正在评估能够提升线索质量和团队跟进效率的方案。",
-      personalityTraits: ["数据驱动", "开放好奇", "结果导向"],
-      communicationStyle: "表达清晰，会用业务数据追问方案价值与落地路径",
-      behaviorNotes:
-        "愿意讨论新思路，但会要求销售把价值落实到可衡量指标、实施计划和明确的下一步。",
-      motivations: ["提升获客效率", "证明投资回报", "缩短团队上手周期"],
-      concerns: ["投入产出比", "系统集成成本", "团队采纳难度"],
-      voice: "longanlingxin",
-    }),
-  },
-  {
-    id: "persona_wang_qiang",
-    input: personaInputSchema.parse({
-      name: "王强",
-      gender: "male",
-      age: 46,
-      occupation: "采购经理",
-      identity: "负责供应商筛选、商务谈判与风险控制的采购决策者",
-      background:
-        "王强在一家中型制造企业负责采购。他正在比较多家供应商，内部要求他控制总成本并降低交付和售后风险。",
-      personalityTraits: ["成本敏感", "谨慎", "风险规避"],
-      communicationStyle: "简洁直接，围绕价格、合同条款和风险连续追问",
-      behaviorNotes:
-        "不会因为泛泛的功能介绍做决定。只有在价格依据、交付承诺和风险处理方式清晰时才会继续推进。",
-      motivations: ["降低采购总成本", "降低运营风险", "获得更有利的商务条款"],
-      concerns: ["价格超出预算", "供应商稳定性", "合同与售后保障"],
-      voice: "longanlufeng",
-    }),
-  },
-  {
-    id: "persona_chen_chen",
-    input: personaInputSchema.parse({
-      name: "陈晨",
-      gender: "unspecified",
-      age: 38,
-      occupation: "小微企业主",
-      identity: "直接负责经营、现金流与最终购买决策的小微企业主",
-      background:
-        "陈晨经营一家本地生活服务公司，既管销售也管日常运营。团队人手有限，希望尽快解决重复工作和客户跟进不及时的问题。",
-      personalityTraits: ["务实", "时间紧迫", "结果导向"],
-      communicationStyle: "节奏快且口语化，只关心能否马上解决问题",
-      behaviorNotes:
-        "时间有限，对复杂术语和冗长演示缺乏耐心。只有方案简单、成本可控并能快速见效时才愿意尝试。",
-      motivations: ["尽快提升营收", "减少重复人工", "低成本快速上线"],
-      concerns: ["现金流压力", "迁移与学习成本", "售后响应速度"],
-      voice: "longanxiaoxin",
-    }),
-  },
+export const INITIAL_SCENARIO_PRESETS: StarterPreset[] = [
+  ...parsePresetDefinitions(scenarioTrainingGoalData, "training_goal", "scenario"),
+  ...parsePresetDefinitions(scenarioSkillFocusData, "skill_focus", "scenario"),
+  ...parsePresetDefinitions(scenarioSuccessCriterionData, "success_criterion", "scenario"),
 ];
+export const INITIAL_CATALOG_PERSONAS: StarterPersona[] = personaData.map((definition) => ({
+  key: starterKeySchema.parse(definition.key),
+  input: starterPersonaInputSchema.parse(definition.input),
+}));
+export const INITIAL_CATALOG_SCENARIOS: StarterScenario[] = scenarioData.map((definition) => ({
+  key: starterKeySchema.parse(definition.key),
+  input: starterScenarioInputSchema.parse(definition.input),
+}));
 
-/**
- * Inserts deployment starter data in one transaction. Every insert is
- * conflict-tolerant. The only update is a one-time English-value backfill for
- * a stable seed ID whose translation is blank; non-empty administrator edits
- * remain untouched. Missing links are appended after the scenario's current
- * last position instead of reordering existing compatibility entries.
- */
+assertUniqueStarterKeys();
+
+/** Inserts JSON-defined deployment data using stable keys and generated IDs. */
 export function initializeCatalogData(
   database: ApplicationDatabase,
 ): CatalogInitializationResult {
   const connection = database.raw;
-  const timestamp = new Date().toISOString();
+  const timestamp = formatDatabaseTimestamp();
   const result: CatalogInitializationResult = {
     presetRowsInserted: 0,
     presetRowsSkipped: 0,
-    presetTranslationsUpdated: 0,
+    scenarioPresetRowsInserted: 0,
+    scenarioPresetRowsSkipped: 0,
     personaRowsInserted: 0,
     personaRowsSkipped: 0,
+    scenarioRowsInserted: 0,
+    scenarioRowsSkipped: 0,
     scenarioLinksInserted: 0,
     scenarioLinksSkipped: 0,
-    defaultScenarioFound: false,
   };
 
   connection.exec("BEGIN IMMEDIATE");
   try {
-    insertPersonaPresets(connection, timestamp, result);
-    insertPersonas(connection, timestamp, result);
-    appendDefaultScenarioLinks(
-      connection,
-      new CatalogRepository(database),
-      timestamp,
-      result,
-    );
+    insertPresets(connection, timestamp, result);
+    const personas = resolveStarterPersonas(connection);
+    const scenarios = resolveStarterScenarios(connection);
+    validateStarterInstructions(connection, personas, scenarios);
+    insertPersonas(connection, personas, timestamp, result);
+    insertScenarios(connection, scenarios, timestamp, result);
+    insertScenarioLinks(connection, timestamp, result);
     connection.exec("COMMIT");
     return result;
   } catch (error) {
@@ -346,217 +206,454 @@ export function initializeCatalogData(
   }
 }
 
-function insertPersonaPresets(
+function parsePresetDefinitions(
+  definitions: readonly StarterPresetJson[],
+  category: PersonaPresetCategory | ScenarioPresetCategory,
+  kind: "persona" | "scenario",
+): StarterPreset[] {
+  const schema = kind === "persona" ? personaPresetSchema : scenarioPresetSchema;
+  return definitions.map((definition) => {
+    const key = starterKeySchema.parse(definition.key);
+    const parsed = schema.parse({
+      ...definition,
+      category,
+      id: 1,
+      createdAt: SEED_TIMESTAMP,
+      updatedAt: SEED_TIMESTAMP,
+    });
+    return {
+      key,
+      category: parsed.category,
+      value: parsed.value,
+      valueZhCn: parsed.valueZhCn,
+      position: parsed.position,
+    };
+  });
+}
+
+function insertPresets(
   connection: DatabaseSync,
   timestamp: string,
   result: CatalogInitializationResult,
 ): void {
-  const findExistingById = connection.prepare(
-    `SELECT category, value, value_en
-     FROM persona_presets
-     WHERE id = ?`,
-  );
-  const findExistingByValue = connection.prepare(
-    `SELECT 1 AS present
-     FROM persona_presets
-     WHERE category = ? AND value = ? COLLATE NOCASE
-     LIMIT 1`,
-  );
-  const backfillEnglishValue = connection.prepare(
-    `UPDATE persona_presets
-     SET value_en = ?, updated_at = ?
-     WHERE id = ? AND length(trim(value_en)) = 0`,
-  );
-  const positionIsOccupied = connection.prepare(
-    `SELECT 1 AS present
-     FROM persona_presets
-     WHERE category = ? AND position = ?`,
-  );
-  const findMaximumPosition = connection.prepare(
-    `SELECT MAX(position) AS maximum_position
-     FROM persona_presets
-     WHERE category = ?`,
-  );
-  const insert = connection.prepare(
-    `INSERT INTO persona_presets (
-      id, category, value, value_en, position, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  );
-
-  for (const definition of INITIAL_PERSONA_PRESETS) {
-    const preset = personaPresetSchema.parse({
-      ...definition,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    });
-    const existingById = findExistingById.get(preset.id) as
-      | { category: string; value: string; value_en: string }
-      | undefined;
-    if (existingById) {
-      const stillMatchesSeed =
-        existingById.category === preset.category &&
-        existingById.value === preset.value;
-      if (stillMatchesSeed && existingById.value_en.trim().length === 0) {
-        const write = backfillEnglishValue.run(
-          preset.valueEn,
-          timestamp,
-          preset.id,
-        );
-        result.presetTranslationsUpdated += Number(write.changes);
-      }
-      result.presetRowsSkipped += 1;
-      continue;
-    }
-    if (findExistingByValue.get(preset.category, preset.value)) {
-      result.presetRowsSkipped += 1;
-      continue;
-    }
-
-    let position = preset.position;
-    if (positionIsOccupied.get(preset.category, position)) {
-      const row = findMaximumPosition.get(preset.category) as
-        | { maximum_position: number | null }
-        | undefined;
-      position = (row?.maximum_position ?? -1) + 1;
-    }
-    const write = insert.run(
-      preset.id,
-      preset.category,
-      preset.value,
-      preset.valueEn,
-      position,
-      preset.createdAt,
-      preset.updatedAt,
+  for (const preset of INITIAL_PERSONA_PRESETS) {
+    const inserted = insertPreset(
+      connection,
+      PERSONA_PRESET_TABLE_BY_CATEGORY[preset.category as PersonaPresetCategory],
+      preset,
+      timestamp,
     );
-    result.presetRowsInserted += Number(write.changes);
+    if (inserted) result.presetRowsInserted += 1;
+    else result.presetRowsSkipped += 1;
   }
+  for (const preset of INITIAL_SCENARIO_PRESETS) {
+    const inserted = insertPreset(
+      connection,
+      SCENARIO_PRESET_TABLE_BY_CATEGORY[preset.category as ScenarioPresetCategory],
+      preset,
+      timestamp,
+    );
+    if (inserted) result.scenarioPresetRowsInserted += 1;
+    else result.scenarioPresetRowsSkipped += 1;
+  }
+}
+
+function insertPreset(
+  connection: DatabaseSync,
+  storage: PresetTableDefinition,
+  preset: StarterPreset,
+  timestamp: string,
+): boolean {
+  const chineseColumn = `${storage.valueColumn}_zh_cn`;
+  const write = connection
+    .prepare(
+      `INSERT INTO ${storage.table} (
+        seed_key, ${storage.valueColumn}, ${chineseColumn},
+        position, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(seed_key) DO NOTHING`,
+    )
+    .run(
+      preset.key,
+      preset.value,
+      preset.valueZhCn,
+      preset.position,
+      timestamp,
+      timestamp,
+    );
+  return write.changes > 0;
+}
+
+function resolveStarterPersonas(connection: DatabaseSync) {
+  return INITIAL_CATALOG_PERSONAS.map(({ key, input }) => ({
+    key,
+    input: personaInputSchema.parse({
+      name: input.name,
+      nameZhCn: input.nameZhCn,
+      gender: input.gender,
+      age: input.age,
+      occupationPresetId: readPresetSeedId(
+        connection,
+        PERSONA_PRESET_TABLE_BY_CATEGORY.occupation,
+        input.occupationPresetKey,
+      ),
+      background: input.background,
+      backgroundZhCn: input.backgroundZhCn,
+      personalityTraitPresetIds: input.personalityTraitPresetKeys.map((presetKey) =>
+        readPresetSeedId(
+          connection,
+          PERSONA_PRESET_TABLE_BY_CATEGORY.personality_trait,
+          presetKey,
+        ),
+      ),
+      communicationStylePresetId: readPresetSeedId(
+        connection,
+        PERSONA_PRESET_TABLE_BY_CATEGORY.communication_style,
+        input.communicationStylePresetKey,
+      ),
+      toneStylePresetId: readPresetSeedId(
+        connection,
+        PERSONA_PRESET_TABLE_BY_CATEGORY.tone_style,
+        input.toneStylePresetKey,
+      ),
+      behaviorNotes: input.behaviorNotes,
+      behaviorNotesZhCn: input.behaviorNotesZhCn,
+      motivationPresetIds: input.motivationPresetKeys.map((presetKey) =>
+        readPresetSeedId(
+          connection,
+          PERSONA_PRESET_TABLE_BY_CATEGORY.motivation,
+          presetKey,
+        ),
+      ),
+      concernPresetIds: input.concernPresetKeys.map((presetKey) =>
+        readPresetSeedId(
+          connection,
+          PERSONA_PRESET_TABLE_BY_CATEGORY.concern,
+          presetKey,
+        ),
+      ),
+      voice: input.voice,
+      voiceBehavior: input.voiceBehavior,
+    }),
+  }));
+}
+
+function resolveStarterScenarios(connection: DatabaseSync) {
+  return INITIAL_CATALOG_SCENARIOS.map(({ key, input }) => {
+    const successCriterionPresetIds = input.successCriteria.map(({ presetKey }) =>
+      readPresetSeedId(
+        connection,
+        SCENARIO_PRESET_TABLE_BY_CATEGORY.success_criterion,
+        presetKey,
+      ),
+    );
+    return {
+      key,
+      input: scenarioInputSchema.parse({
+        name: input.name,
+        nameZhCn: input.nameZhCn,
+        description: input.description,
+        descriptionZhCn: input.descriptionZhCn,
+        trainingGoalPresetIds: input.trainingGoalPresetKeys.map((presetKey) =>
+          readPresetSeedId(
+            connection,
+            SCENARIO_PRESET_TABLE_BY_CATEGORY.training_goal,
+            presetKey,
+          ),
+        ),
+        skillFocusPresetIds: input.skillFocusPresetKeys.map((presetKey) =>
+          readPresetSeedId(
+            connection,
+            SCENARIO_PRESET_TABLE_BY_CATEGORY.skill_focus,
+            presetKey,
+          ),
+        ),
+        successCriterionPresetIds,
+        scoringCriteria: input.successCriteria.map((criterion, index) => ({
+          successCriterionPresetId: successCriterionPresetIds[index],
+          weight: criterion.weight,
+        })),
+        allowedPersonaIds: [],
+      }),
+      allowedPersonaKeys: input.allowedPersonaKeys,
+    };
+  });
 }
 
 function insertPersonas(
   connection: DatabaseSync,
+  personas: ReadonlyArray<{ key: string; input: PersonaInput }>,
   timestamp: string,
   result: CatalogInitializationResult,
 ): void {
-  const insert = connection.prepare(
-    `INSERT OR IGNORE INTO personas (
-      id, name, gender, age, occupation, identity, background,
-      personality_traits_json, communication_style, behavior_notes,
-      motivations_json, concerns_json, voice, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  );
-
-  for (const { id, input } of INITIAL_CATALOG_PERSONAS) {
+  const find = connection.prepare("SELECT id FROM personas WHERE seed_key = ?");
+  const insert = connection.prepare(`
+    INSERT INTO personas (
+      seed_key, name, name_zh_cn, gender, age, occupation_preset_id,
+      background, background_zh_cn, communication_style_preset_id,
+      tone_style_preset_id, behavior_notes, behavior_notes_zh_cn, voice,
+      interrupt_frequency, speaking_pace, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(seed_key) DO NOTHING
+  `);
+  for (const { key, input } of personas) {
+    const existing = find.get(key) as { id: number } | undefined;
+    if (existing) {
+      result.personaRowsSkipped += 1;
+      continue;
+    }
     const write = insert.run(
-      id,
-      input.name,
-      input.gender,
-      input.age,
-      input.occupation,
-      input.identity,
-      input.background,
-      JSON.stringify(input.personalityTraits),
-      input.communicationStyle,
-      input.behaviorNotes,
-      JSON.stringify(input.motivations),
-      JSON.stringify(input.concerns),
-      input.voice,
-      timestamp,
-      timestamp,
+      key, input.name, input.nameZhCn, input.gender, input.age,
+      input.occupationPresetId, input.background, input.backgroundZhCn,
+      input.communicationStylePresetId, input.toneStylePresetId,
+      input.behaviorNotes, input.behaviorNotesZhCn, input.voice,
+      input.voiceBehavior.interruptFrequency, input.voiceBehavior.speakingPace,
+      timestamp, timestamp,
     );
-    if (Number(write.changes) === 1) result.personaRowsInserted += 1;
-    else result.personaRowsSkipped += 1;
+    if (!write.changes) {
+      result.personaRowsSkipped += 1;
+      continue;
+    }
+    const personaId = Number(write.lastInsertRowid);
+    insertOrderedReferences(
+      connection, "persona_personality_traits", "persona_id",
+      "personality_trait_preset_id", personaId, input.personalityTraitPresetIds,
+    );
+    insertOrderedReferences(
+      connection, "persona_motivations", "persona_id",
+      "motivation_preset_id", personaId, input.motivationPresetIds,
+    );
+    insertOrderedReferences(
+      connection, "persona_concerns", "persona_id",
+      "concern_preset_id", personaId, input.concernPresetIds,
+    );
+    result.personaRowsInserted += 1;
   }
 }
 
-function appendDefaultScenarioLinks(
+function insertScenarios(
   connection: DatabaseSync,
-  repository: CatalogRepository,
+  scenarios: ReadonlyArray<{
+    key: string;
+    input: ScenarioInput;
+    allowedPersonaKeys: string[];
+  }>,
   timestamp: string,
   result: CatalogInitializationResult,
 ): void {
-  const scenario = repository.getScenario(DEFAULT_INITIAL_SCENARIO_ID);
-  result.defaultScenarioFound = scenario !== null;
-  if (!scenario) {
-    result.scenarioLinksSkipped += INITIAL_CATALOG_PERSONAS.length;
-    return;
-  }
-
-  const personaExists = connection.prepare(
-    "SELECT 1 AS present FROM personas WHERE id = ?",
-  );
-  const linkExists = connection.prepare(
-    `SELECT 1 AS present
-     FROM scenario_personas
-     WHERE scenario_id = ? AND persona_id = ?`,
-  );
-  const maximumPosition = connection
-    .prepare(
-      `SELECT MAX(position) AS maximum_position
-       FROM scenario_personas
-       WHERE scenario_id = ?`,
-    )
-    .get(DEFAULT_INITIAL_SCENARIO_ID) as
-    | { maximum_position: number | null }
-    | undefined;
-  let nextPosition = (maximumPosition?.maximum_position ?? -1) + 1;
-  const linkCountRow = connection
-    .prepare(
-      `SELECT COUNT(*) AS link_count
-       FROM scenario_personas
-       WHERE scenario_id = ?`,
-    )
-    .get(DEFAULT_INITIAL_SCENARIO_ID) as { link_count: number };
-  let currentLinkCount = linkCountRow.link_count;
-  const insertLink = connection.prepare(
-    `INSERT INTO scenario_personas (
-      scenario_id, persona_id, position, created_at
-    ) VALUES (?, ?, ?, ?)`,
-  );
-
-  for (const { id } of INITIAL_CATALOG_PERSONAS) {
-    if (!personaExists.get(id)) {
-      result.scenarioLinksSkipped += 1;
+  const find = connection.prepare("SELECT id FROM scenarios WHERE seed_key = ?");
+  const insert = connection.prepare(`
+    INSERT INTO scenarios (
+      seed_key, name, name_zh_cn, description, description_zh_cn,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(seed_key) DO NOTHING
+  `);
+  for (const { key, input } of scenarios) {
+    const existing = find.get(key) as { id: number } | undefined;
+    if (existing) {
+      result.scenarioRowsSkipped += 1;
       continue;
     }
-    if (linkExists.get(DEFAULT_INITIAL_SCENARIO_ID, id)) {
-      result.scenarioLinksSkipped += 1;
+    const write = insert.run(
+      key, input.name, input.nameZhCn, input.description,
+      input.descriptionZhCn, timestamp, timestamp,
+    );
+    if (!write.changes) {
+      result.scenarioRowsSkipped += 1;
       continue;
     }
-    if (currentLinkCount >= MAX_SCENARIO_PERSONAS) {
-      throw new CatalogInitializationScenarioCapacityError(
-        scenario.id,
-        scenario.name,
-        id,
-        currentLinkCount,
-        MAX_SCENARIO_PERSONAS,
+    const scenarioId = Number(write.lastInsertRowid);
+    insertOrderedReferences(
+      connection, "scenario_training_goals", "scenario_id",
+      "training_goal_preset_id", scenarioId, input.trainingGoalPresetIds,
+    );
+    insertOrderedReferences(
+      connection, "scenario_skill_focuses", "scenario_id",
+      "skill_focus_preset_id", scenarioId, input.skillFocusPresetIds,
+    );
+    const insertSuccess = connection.prepare(`
+      INSERT INTO scenario_success_criteria (
+        scenario_id, success_criterion_preset_id, position, weight
+      ) VALUES (?, ?, ?, ?)
+    `);
+    input.scoringCriteria.forEach((criterion, position) => {
+      insertSuccess.run(
+        scenarioId, criterion.successCriterionPresetId,
+        position, criterion.weight,
       );
-    }
-
-    const persona = repository.getPersona(id);
-    if (!persona) {
-      throw new Error(
-        `Starter persona "${id}" disappeared before its scenario link was initialized.`,
-      );
-    }
-    const lengthIssue = findRolePlayInstructionsLengthIssue({
-      persona,
-      scenario,
     });
-    if (lengthIssue) {
-      throw new CatalogInitializationInstructionsTooLongError(
-        persona.id,
-        persona.name,
-        scenario.id,
-        scenario.name,
-        lengthIssue.difficulty,
-        lengthIssue.actualLength,
-        lengthIssue.maximumLength,
-      );
-    }
+    result.scenarioRowsInserted += 1;
+  }
+}
 
-    insertLink.run(DEFAULT_INITIAL_SCENARIO_ID, id, nextPosition, timestamp);
-    nextPosition += 1;
-    currentLinkCount += 1;
-    result.scenarioLinksInserted += 1;
+function insertScenarioLinks(
+  connection: DatabaseSync,
+  timestamp: string,
+  result: CatalogInitializationResult,
+): void {
+  const personaId = connection.prepare("SELECT id FROM personas WHERE seed_key = ?");
+  const scenarioId = connection.prepare("SELECT id FROM scenarios WHERE seed_key = ?");
+  const exists = connection.prepare(
+    "SELECT 1 AS present FROM scenario_personas WHERE scenario_id = ? AND persona_id = ?",
+  );
+  const count = connection.prepare(
+    "SELECT COUNT(*) AS count FROM scenario_personas WHERE scenario_id = ?",
+  );
+  const maximum = connection.prepare(
+    "SELECT MAX(position) AS position FROM scenario_personas WHERE scenario_id = ?",
+  );
+  const insert = connection.prepare(`
+    INSERT INTO scenario_personas (
+      scenario_id, persona_id, position, created_at
+    ) VALUES (?, ?, ?, ?)
+  `);
+  for (const scenario of INITIAL_CATALOG_SCENARIOS) {
+    const resolvedScenarioId = readSeedId(scenarioId, scenario.key, "scenario");
+    let linkCount = (count.get(resolvedScenarioId) as { count: number }).count;
+    let nextPosition =
+      ((maximum.get(resolvedScenarioId) as { position: number | null }).position ?? -1) + 1;
+    for (const personaKey of scenario.input.allowedPersonaKeys) {
+      const resolvedPersonaId = readSeedId(personaId, personaKey, "persona");
+      if (exists.get(resolvedScenarioId, resolvedPersonaId)) {
+        result.scenarioLinksSkipped += 1;
+        continue;
+      }
+      if (linkCount >= MAX_SCENARIO_PERSONAS) {
+        throw new CatalogInitializationScenarioCapacityError(scenario.key, personaKey);
+      }
+      insert.run(resolvedScenarioId, resolvedPersonaId, nextPosition, timestamp);
+      nextPosition += 1;
+      linkCount += 1;
+      result.scenarioLinksInserted += 1;
+    }
+  }
+}
+
+function validateStarterInstructions(
+  connection: DatabaseSync,
+  personas: ReadonlyArray<{ key: string; input: PersonaInput }>,
+  scenarios: ReadonlyArray<{
+    key: string;
+    input: ScenarioInput;
+    allowedPersonaKeys: string[];
+  }>,
+): void {
+  const personaPresets = readPersonaPresetsForResolution(connection);
+  const scenarioPresets = readScenarioPresetsForResolution(connection);
+  const personaByKey = new Map(personas.map((persona) => [persona.key, persona.input]));
+  for (const scenario of scenarios) {
+    const resolvedScenario = resolveScenarioPresetReferences(scenario.input, scenarioPresets);
+    for (const personaKey of scenario.allowedPersonaKeys) {
+      const persona = personaByKey.get(personaKey);
+      if (!persona) throw new Error(`Starter scenario "${scenario.key}" references unknown persona "${personaKey}".`);
+      const resolvedPersona = resolvePersonaPresetReferences(persona, personaPresets);
+      for (const locale of ["en", "zh"] as const) {
+        const issue = findRolePlayInstructionsLengthIssue({
+          persona: localizePersonaInput(resolvedPersona, locale),
+          scenario: localizeScenarioInput(resolvedScenario, locale),
+        });
+        if (issue) {
+          throw new CatalogInitializationInstructionsTooLongError(
+            personaKey, scenario.key, issue.actualLength,
+          );
+        }
+      }
+    }
+  }
+}
+
+function readPersonaPresetsForResolution(connection: DatabaseSync) {
+  return Object.entries(PERSONA_PRESET_TABLE_BY_CATEGORY).flatMap(([category, storage]) =>
+    readPresetRowsForResolution(connection, storage).map((row) => ({
+      ...row,
+      category: category as PersonaPresetCategory,
+    })),
+  );
+}
+
+function readScenarioPresetsForResolution(connection: DatabaseSync) {
+  return Object.entries(SCENARIO_PRESET_TABLE_BY_CATEGORY).flatMap(([category, storage]) =>
+    readPresetRowsForResolution(connection, storage).map((row) => ({
+      ...row,
+      category: category as ScenarioPresetCategory,
+    })),
+  );
+}
+
+function readPresetRowsForResolution(
+  connection: DatabaseSync,
+  storage: PresetTableDefinition,
+) {
+  const rows = connection.prepare(`
+    SELECT id, ${storage.valueColumn} AS value,
+      ${storage.valueColumn}_zh_cn AS value_zh_cn,
+      position, created_at, updated_at
+    FROM ${storage.table}
+  `).all() as unknown as Array<{
+    id: number;
+    value: string;
+    value_zh_cn: string;
+    position: number;
+    created_at: string;
+    updated_at: string;
+  }>;
+  return rows.map((row) => ({
+    id: row.id,
+    value: row.value,
+    valueZhCn: row.value_zh_cn,
+    position: row.position,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+function readPresetSeedId(
+  connection: DatabaseSync,
+  storage: PresetTableDefinition,
+  key: string,
+): number {
+  const row = connection
+    .prepare(`SELECT id FROM ${storage.table} WHERE seed_key = ?`)
+    .get(key) as { id: number } | undefined;
+  if (!row) throw new Error(`Starter preset "${key}" could not be resolved in ${storage.table}.`);
+  return row.id;
+}
+
+function insertOrderedReferences(
+  connection: DatabaseSync,
+  table: string,
+  ownerColumn: string,
+  presetColumn: string,
+  ownerId: number,
+  presetIds: readonly number[],
+): void {
+  const insert = connection.prepare(
+    `INSERT INTO ${table} (${ownerColumn}, ${presetColumn}, position) VALUES (?, ?, ?)`,
+  );
+  presetIds.forEach((presetId, position) => insert.run(ownerId, presetId, position));
+}
+
+function readSeedId(
+  statement: ReturnType<DatabaseSync["prepare"]>,
+  key: string,
+  entity: "persona" | "scenario",
+): number {
+  const row = statement.get(key) as { id: number } | undefined;
+  if (!row) throw new Error(`Starter ${entity} "${key}" could not be resolved after initialization.`);
+  return row.id;
+}
+
+function assertUniqueStarterKeys(): void {
+  for (const group of [
+    INITIAL_PERSONA_PRESETS,
+    INITIAL_SCENARIO_PRESETS,
+    INITIAL_CATALOG_PERSONAS,
+    INITIAL_CATALOG_SCENARIOS,
+  ]) {
+    const keys = group.map(({ key }) => key);
+    if (new Set(keys).size !== keys.length) {
+      throw new Error("Catalog initializer JSON contains duplicate seed keys.");
+    }
   }
 }

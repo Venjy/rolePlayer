@@ -1,0 +1,7 @@
+[
+  { "key": "goal_discover_needs", "value": "Discover the customer's needs", "valueZhCn": "识别客户需求", "position": 0 },
+  { "key": "goal_clarify_objection", "value": "Clarify the real objection", "valueZhCn": "澄清真实异议", "position": 1 },
+  { "key": "goal_build_value", "value": "Connect value to customer outcomes", "valueZhCn": "建立价值与客户结果的联系", "position": 2 },
+  { "key": "goal_next_step", "value": "Agree on a concrete next step", "valueZhCn": "明确具体下一步", "position": 3 },
+  { "key": "goal_rebuild_trust", "value": "Rebuild customer trust", "valueZhCn": "修复客户信任", "position": 4 }
+]

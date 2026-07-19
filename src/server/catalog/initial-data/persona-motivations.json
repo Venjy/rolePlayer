@@ -1,0 +1,7 @@
+[
+  { "key": "motivation_efficiency", "value": "Improve efficiency", "valueZhCn": "提升效率", "position": 0 },
+  { "key": "motivation_revenue", "value": "Grow revenue", "valueZhCn": "提升营收", "position": 1 },
+  { "key": "motivation_reduce_risk", "value": "Reduce risk", "valueZhCn": "降低风险", "position": 2 },
+  { "key": "motivation_customer_experience", "value": "Improve customer experience", "valueZhCn": "改善客户体验", "position": 3 },
+  { "key": "motivation_save_cost", "value": "Save costs", "valueZhCn": "节省成本", "position": 4 }
+]

@@ -57,7 +57,7 @@ export function createConversation(
 }
 
 export function fetchConversation(
-  id: string,
+  id: number,
   signal?: AbortSignal,
 ): Promise<ConversationDetail> {
   return requestJson(

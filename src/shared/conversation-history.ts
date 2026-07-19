@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { databaseIdSchema } from "./database-id";
 import {
   difficultySchema,
-  personaSchema,
-  scenarioSchema,
+  resolvedPersonaInputSchema,
+  resolvedScenarioInputSchema,
 } from "./role-play-catalog";
 
 const requiredText = (maximum: number) =>
@@ -12,58 +13,61 @@ export const conversationLocaleSchema = z.enum(["en", "zh"]);
 export const conversationMessageRoleSchema = z.enum(["user", "assistant"]);
 
 /**
- * Creates an application-owned conversation before the realtime connection is
- * opened. Persona and scenario values are snapshots, so later catalog edits do
- * not silently change an existing conversation or its restored Instructions.
+ * The client submits only catalog IDs. The server resolves the authoritative
+ * records before it creates immutable bilingual snapshots.
  */
-export const createConversationInputSchema = z
-  .object({
-    persona: personaSchema,
-    scenario: scenarioSchema,
-    difficulty: difficultySchema,
-    locale: conversationLocaleSchema,
-  })
-  .superRefine((value, context) => {
-    if (!value.scenario.allowedPersonaIds.includes(value.persona.id)) {
-      context.addIssue({
-        code: "custom",
-        path: ["persona", "id"],
-        message: "The persona is not compatible with the selected scenario.",
-      });
-    }
-  });
+export const createConversationInputSchema = z.object({
+  personaId: databaseIdSchema,
+  scenarioId: databaseIdSchema,
+  difficulty: difficultySchema,
+  locale: conversationLocaleSchema,
+});
 
 export type CreateConversationInput = z.infer<
   typeof createConversationInputSchema
 >;
 
 export const conversationMessageSchema = z.object({
-  id: requiredText(100),
+  id: databaseIdSchema,
   role: conversationMessageRoleSchema,
   text: requiredText(100_000),
   interrupted: z.boolean(),
-  createdAt: z.string().datetime(),
+  createdAt: z.string().datetime({ offset: true }),
 });
 
 export type ConversationMessage = z.infer<typeof conversationMessageSchema>;
 
 export const conversationSummarySchema = z.object({
-  id: requiredText(100),
+  id: databaseIdSchema,
   personaName: requiredText(80),
   scenarioName: requiredText(120),
   difficulty: difficultySchema,
   locale: conversationLocaleSchema,
   messageCount: z.number().int().min(0),
   lastMessagePreview: z.string().max(240).nullable(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  createdAt: z.string().datetime({ offset: true }),
+  updatedAt: z.string().datetime({ offset: true }),
 });
 
 export type ConversationSummary = z.infer<typeof conversationSummarySchema>;
 
+export const personaSnapshotSchema = resolvedPersonaInputSchema.extend({
+  id: databaseIdSchema,
+  createdAt: z.string().datetime({ offset: true }),
+  updatedAt: z.string().datetime({ offset: true }),
+});
+export type PersonaSnapshot = z.infer<typeof personaSnapshotSchema>;
+
+export const scenarioSnapshotSchema = resolvedScenarioInputSchema.extend({
+  id: databaseIdSchema,
+  createdAt: z.string().datetime({ offset: true }),
+  updatedAt: z.string().datetime({ offset: true }),
+});
+export type ScenarioSnapshot = z.infer<typeof scenarioSnapshotSchema>;
+
 export const conversationDetailSchema = conversationSummarySchema.extend({
-  persona: personaSchema,
-  scenario: scenarioSchema,
+  persona: personaSnapshotSchema,
+  scenario: scenarioSnapshotSchema,
   messages: z.array(conversationMessageSchema),
 });
 

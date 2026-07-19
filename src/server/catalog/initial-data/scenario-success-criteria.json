@@ -1,0 +1,8 @@
+[
+  { "key": "criterion_need", "value": "Uncovers a concrete customer need", "valueZhCn": "发现一项明确的客户需求", "position": 0 },
+  { "key": "criterion_concern", "value": "Identifies the customer's main concern", "valueZhCn": "识别客户的主要顾虑", "position": 1 },
+  { "key": "criterion_value", "value": "Explains value using a relevant outcome", "valueZhCn": "用相关结果解释方案价值", "position": 2 },
+  { "key": "criterion_no_early_discount", "value": "Clarifies the objection before discounting", "valueZhCn": "在打折前先澄清异议", "position": 3 },
+  { "key": "criterion_summary", "value": "Accurately summarizes the customer's position", "valueZhCn": "准确复述客户立场", "position": 4 },
+  { "key": "criterion_next_step", "value": "Agrees on an actionable next step", "valueZhCn": "达成可执行的下一步", "position": 5 }
+]

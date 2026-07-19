@@ -1,63 +1,98 @@
-import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type {
   Persona,
   PersonaInput,
   PersonaPreset,
+  PersonaPresetCategory,
+  ResolvedPersonaInput,
+  ResolvedScenarioInput,
   RolePlayCatalog,
   Scenario,
   ScenarioInput,
+  ScenarioPreset,
+  ScenarioPresetCategory,
 } from "../../shared/role-play-catalog";
 import {
-  personaSchema,
   personaPresetSchema,
+  personaSchema,
+  scenarioPresetSchema,
   scenarioSchema,
 } from "../../shared/role-play-catalog";
 import { findRolePlayInstructionsLengthIssue } from "../../shared/role-play-instructions";
+import {
+  localizePersonaInput,
+  localizeScenarioInput,
+} from "../../shared/role-play-localization";
+import {
+  resolvePersonaPresetReferences,
+  resolveScenarioPresetReferences,
+} from "../../shared/role-play-preset-resolution";
 import { MAX_REALTIME_INSTRUCTIONS_LENGTH } from "../../shared/realtime-protocol";
 import type { ApplicationDatabase } from "../database/database";
+import {
+  formatDatabaseTimestamp,
+  nextDatabaseTimestamp,
+} from "../database/database-time";
+import {
+  PERSONA_PRESET_TABLES,
+  SCENARIO_PRESET_TABLES,
+  type PresetTableDefinition,
+} from "../database/preset-storage";
 
 interface PersonaRow {
-  id: string;
+  id: number;
   name: string;
+  name_zh_cn: string;
   gender: string;
   age: number | null;
+  occupation_preset_id: number;
   occupation: string;
-  identity: string;
+  occupation_zh_cn: string;
   background: string;
-  personality_traits_json: string;
+  background_zh_cn: string;
+  communication_style_preset_id: number;
   communication_style: string;
+  communication_style_zh_cn: string;
+  tone_style_preset_id: number;
+  tone_style: string;
+  tone_style_zh_cn: string;
   behavior_notes: string;
-  motivations_json: string;
-  concerns_json: string;
+  behavior_notes_zh_cn: string;
   voice: string;
+  interrupt_frequency: string;
+  speaking_pace: string;
   created_at: string;
   updated_at: string;
 }
 
 interface ScenarioRow {
-  id: string;
+  id: number;
   name: string;
+  name_zh_cn: string;
   description: string;
-  goals_json: string;
-  suggested_skill_focus_json: string;
-  success_criteria_json: string;
-  scoring_criteria_json: string;
-  voice_behavior_json: string;
+  description_zh_cn: string;
   created_at: string;
   updated_at: string;
 }
 
-interface ScenarioPersonaRow {
-  scenario_id: string;
-  persona_id: string;
+interface LocalizedReferenceRow {
+  owner_id: number;
+  preset_id: number;
+  value: string;
+  value_zh_cn: string;
+  position: number;
+  weight?: number;
 }
 
-interface PersonaPresetRow {
-  id: string;
-  category: string;
+interface ScenarioPersonaRow {
+  scenario_id: number;
+  persona_id: number;
+}
+
+interface PresetRow {
+  id: number;
   value: string;
-  value_en: string;
+  value_zh_cn: string;
   position: number;
   created_at: string;
   updated_at: string;
@@ -74,7 +109,7 @@ export class CatalogNameConflictError extends Error {
 }
 
 export class MissingPersonaReferencesError extends Error {
-  public constructor(public readonly personaIds: readonly string[]) {
+  public constructor(public readonly personaIds: readonly number[]) {
     super(`Unknown compatible persona IDs: ${personaIds.join(", ")}.`);
     this.name = "MissingPersonaReferencesError";
   }
@@ -82,8 +117,8 @@ export class MissingPersonaReferencesError extends Error {
 
 export class PersonaInUseError extends Error {
   public constructor(
-    public readonly personaId: string,
-    public readonly scenarioIds: readonly string[],
+    public readonly personaId: number,
+    public readonly scenarioIds: readonly number[],
   ) {
     super(
       `Persona "${personaId}" is still referenced by scenarios: ${scenarioIds.join(", ")}.`,
@@ -105,271 +140,302 @@ export class RolePlayInstructionsTooLongError extends Error {
   }
 }
 
-/**
- * Owns the short synchronous queries for the editable role-play catalog. The
- * repository uses Fastify's process-owned database rather than opening another
- * connection, keeping SQLite lifecycle and realtime performance predictable.
- */
+/** Owns catalog records and resolves every preset ID into bilingual API data. */
 export class CatalogRepository {
   public constructor(private readonly database: ApplicationDatabase) {}
 
   public listCatalog(): RolePlayCatalog {
-    const personaPresetRows = this.connection
-      .prepare(
-        `SELECT id, category, value, value_en, position, created_at, updated_at
-         FROM persona_presets
-         ORDER BY category, position, id`,
-      )
-      .all() as unknown as PersonaPresetRow[];
-    const personaRows = this.connection
-      .prepare("SELECT * FROM personas ORDER BY name COLLATE NOCASE, id")
-      .all() as unknown as PersonaRow[];
+    const personaPresets = this.listPersonaPresets();
+    const scenarioPresets = this.listScenarioPresets();
+    const personaRows = this.connection.prepare(PERSONA_SELECT).all() as unknown as PersonaRow[];
     const scenarioRows = this.connection
-      .prepare("SELECT * FROM scenarios ORDER BY name COLLATE NOCASE, id")
+      .prepare(
+        `SELECT * FROM scenarios
+         ORDER BY COALESCE(NULLIF(name, ''), name_zh_cn) COLLATE NOCASE, id`,
+      )
       .all() as unknown as ScenarioRow[];
+    const traits = readReferences(
+      this.connection,
+      "persona_personality_traits",
+      "persona_id",
+      "personality_trait_preset_id",
+      "persona_personality_trait_presets",
+      "personality_trait",
+    );
+    const motivations = readReferences(
+      this.connection,
+      "persona_motivations",
+      "persona_id",
+      "motivation_preset_id",
+      "persona_motivation_presets",
+      "motivation",
+    );
+    const concerns = readReferences(
+      this.connection,
+      "persona_concerns",
+      "persona_id",
+      "concern_preset_id",
+      "persona_concern_presets",
+      "concern",
+    );
+    const goals = readReferences(
+      this.connection,
+      "scenario_training_goals",
+      "scenario_id",
+      "training_goal_preset_id",
+      "scenario_training_goal_presets",
+      "training_goal",
+    );
+    const skills = readReferences(
+      this.connection,
+      "scenario_skill_focuses",
+      "scenario_id",
+      "skill_focus_preset_id",
+      "scenario_skill_focus_presets",
+      "skill_focus",
+    );
+    const success = readReferences(
+      this.connection,
+      "scenario_success_criteria",
+      "scenario_id",
+      "success_criterion_preset_id",
+      "scenario_success_criterion_presets",
+      "success_criterion",
+      true,
+    );
     const compatibilityRows = this.connection
       .prepare(
-        `SELECT scenario_id, persona_id
-         FROM scenario_personas
+        `SELECT scenario_id, persona_id FROM scenario_personas
          ORDER BY scenario_id, position`,
       )
       .all() as unknown as ScenarioPersonaRow[];
 
-    const personaIdsByScenario = new Map<string, string[]>();
-    for (const row of compatibilityRows) {
-      const personaIds = personaIdsByScenario.get(row.scenario_id) ?? [];
-      personaIds.push(row.persona_id);
-      personaIdsByScenario.set(row.scenario_id, personaIds);
-    }
-
     return {
-      personaPresets: personaPresetRows.map(mapPersonaPresetRow),
-      personas: personaRows.map(mapPersonaRow),
+      personaPresets,
+      scenarioPresets,
+      personas: personaRows.map((row) =>
+        mapPersonaRow(
+          row,
+          traits.get(row.id) ?? [],
+          motivations.get(row.id) ?? [],
+          concerns.get(row.id) ?? [],
+        ),
+      ),
       scenarios: scenarioRows.map((row) =>
-        mapScenarioRow(row, personaIdsByScenario.get(row.id) ?? []),
+        mapScenarioRow(
+          row,
+          goals.get(row.id) ?? [],
+          skills.get(row.id) ?? [],
+          success.get(row.id) ?? [],
+          compatibilityRows
+            .filter(({ scenario_id }) => scenario_id === row.id)
+            .map(({ persona_id }) => persona_id),
+        ),
       ),
     };
   }
 
-  public getPersona(id: string): Persona | null {
-    const row = this.connection
-      .prepare("SELECT * FROM personas WHERE id = ?")
-      .get(id) as unknown as PersonaRow | undefined;
-    return row ? mapPersonaRow(row) : null;
+  public getPersona(id: number): Persona | null {
+    return this.listCatalog().personas.find((persona) => persona.id === id) ?? null;
   }
 
   public createPersona(input: PersonaInput): Persona {
-    this.assertNameAvailable("persona", input.name);
-
-    const id = `persona_${randomUUID()}`;
-    const timestamp = new Date().toISOString();
-    this.connection
-      .prepare(
-        `INSERT INTO personas (
-          id, name, gender, age, occupation, identity, background,
-          personality_traits_json, communication_style, behavior_notes,
-          motivations_json, concerns_json, voice, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        id,
-        input.name,
-        input.gender,
-        input.age,
-        input.occupation,
-        input.identity,
-        input.background,
-        JSON.stringify(input.personalityTraits),
-        input.communicationStyle,
-        input.behaviorNotes,
-        JSON.stringify(input.motivations),
-        JSON.stringify(input.concerns),
-        input.voice,
-        timestamp,
-        timestamp,
-      );
-
+    this.assertNamesAvailable("persona", input.name, input.nameZhCn);
+    this.resolvePersona(input);
+    const timestamp = formatDatabaseTimestamp();
+    const id = this.inTransaction(() => {
+      const write = this.connection
+        .prepare(
+          `INSERT INTO personas (
+            name, name_zh_cn, gender, age, occupation_preset_id,
+            background, background_zh_cn, communication_style_preset_id,
+            tone_style_preset_id, behavior_notes, behavior_notes_zh_cn,
+            voice, interrupt_frequency, speaking_pace, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.name, input.nameZhCn, input.gender, input.age,
+          input.occupationPresetId, input.background, input.backgroundZhCn,
+          input.communicationStylePresetId, input.toneStylePresetId,
+          input.behaviorNotes, input.behaviorNotesZhCn, input.voice,
+          input.voiceBehavior.interruptFrequency,
+          input.voiceBehavior.speakingPace, timestamp, timestamp,
+        );
+      const generatedId = toDatabaseId(write.lastInsertRowid);
+      this.replacePersonaReferences(generatedId, input);
+      return generatedId;
+    });
     return this.requirePersona(id);
   }
 
-  public updatePersona(id: string, input: PersonaInput): Persona | null {
+  public updatePersona(id: number, input: PersonaInput): Persona | null {
     const existing = this.getPersona(id);
     if (!existing) return null;
-    this.assertNameAvailable("persona", input.name, id);
-    this.assertPersonaPromptsFit(id, input);
-
-    this.connection
-      .prepare(
-        `UPDATE personas
-         SET name = ?, gender = ?, age = ?, occupation = ?, identity = ?,
-             background = ?, personality_traits_json = ?,
-             communication_style = ?, behavior_notes = ?, motivations_json = ?,
-             concerns_json = ?, voice = ?, updated_at = ?
-         WHERE id = ?`,
-      )
-      .run(
-        input.name,
-        input.gender,
-        input.age,
-        input.occupation,
-        input.identity,
-        input.background,
-        JSON.stringify(input.personalityTraits),
-        input.communicationStyle,
-        input.behaviorNotes,
-        JSON.stringify(input.motivations),
-        JSON.stringify(input.concerns),
-        input.voice,
-        nextTimestamp(existing.updatedAt),
-        id,
-      );
-
-    return this.requirePersona(id);
-  }
-
-  public deletePersona(id: string): boolean {
-    const references = this.connection
-      .prepare(
-        `SELECT scenario_id
-         FROM scenario_personas
-         WHERE persona_id = ?
-         ORDER BY scenario_id`,
-      )
-      .all(id) as unknown as Array<{ scenario_id: string }>;
-
-    if (references.length > 0) {
-      throw new PersonaInUseError(
-        id,
-        references.map(({ scenario_id }) => scenario_id),
-      );
-    }
-
-    const result = this.connection
-      .prepare("DELETE FROM personas WHERE id = ?")
-      .run(id);
-    return result.changes > 0;
-  }
-
-  public getScenario(id: string): Scenario | null {
-    const row = this.connection
-      .prepare("SELECT * FROM scenarios WHERE id = ?")
-      .get(id) as unknown as ScenarioRow | undefined;
-    if (!row) return null;
-
-    const compatibilityRows = this.connection
-      .prepare(
-        `SELECT persona_id
-         FROM scenario_personas
-         WHERE scenario_id = ?
-         ORDER BY position`,
-      )
-      .all(id) as unknown as Array<{ persona_id: string }>;
-
-    return mapScenarioRow(
-      row,
-      compatibilityRows.map(({ persona_id }) => persona_id),
-    );
-  }
-
-  public createScenario(input: ScenarioInput): Scenario {
-    this.assertNameAvailable("scenario", input.name);
-    this.assertPersonasExist(input.allowedPersonaIds);
-    this.assertScenarioPromptsFit(input);
-
-    const id = `scenario_${randomUUID()}`;
-    const timestamp = new Date().toISOString();
-    this.inTransaction(() => {
-      this.insertScenario(id, input, timestamp);
-      this.replaceScenarioPersonas(id, input.allowedPersonaIds, timestamp);
-    });
-
-    return this.requireScenario(id);
-  }
-
-  public updateScenario(id: string, input: ScenarioInput): Scenario | null {
-    const existing = this.getScenario(id);
-    if (!existing) return null;
-    this.assertNameAvailable("scenario", input.name, id);
-    this.assertPersonasExist(input.allowedPersonaIds);
-    this.assertScenarioPromptsFit(input);
-
-    const timestamp = nextTimestamp(existing.updatedAt);
+    this.assertNamesAvailable("persona", input.name, input.nameZhCn, id);
+    const resolved = this.resolvePersona(input);
+    this.assertPersonaPromptsFit(id, resolved);
+    const timestamp = nextDatabaseTimestamp(existing.updatedAt);
     this.inTransaction(() => {
       this.connection
         .prepare(
-          `UPDATE scenarios
-           SET name = ?, description = ?, goals_json = ?,
-               suggested_skill_focus_json = ?, success_criteria_json = ?,
-               scoring_criteria_json = ?, voice_behavior_json = ?,
-               updated_at = ?
+          `UPDATE personas SET
+            name = ?, name_zh_cn = ?, gender = ?, age = ?,
+            occupation_preset_id = ?, background = ?, background_zh_cn = ?,
+            communication_style_preset_id = ?, tone_style_preset_id = ?,
+            behavior_notes = ?, behavior_notes_zh_cn = ?, voice = ?,
+            interrupt_frequency = ?, speaking_pace = ?, updated_at = ?
            WHERE id = ?`,
         )
         .run(
-          input.name,
-          input.description,
-          JSON.stringify(input.goals),
-          JSON.stringify(input.suggestedSkillFocus),
-          JSON.stringify(input.successCriteria),
-          JSON.stringify(input.scoringCriteria),
-          JSON.stringify(input.voiceBehavior),
-          timestamp,
-          id,
+          input.name, input.nameZhCn, input.gender, input.age,
+          input.occupationPresetId, input.background, input.backgroundZhCn,
+          input.communicationStylePresetId, input.toneStylePresetId,
+          input.behaviorNotes, input.behaviorNotesZhCn, input.voice,
+          input.voiceBehavior.interruptFrequency,
+          input.voiceBehavior.speakingPace, timestamp, id,
         );
-      this.replaceScenarioPersonas(id, input.allowedPersonaIds, timestamp);
+      this.replacePersonaReferences(id, input);
     });
+    return this.requirePersona(id);
+  }
 
+  public deletePersona(id: number): boolean {
+    const references = this.connection
+      .prepare(
+        "SELECT scenario_id FROM scenario_personas WHERE persona_id = ? ORDER BY scenario_id",
+      )
+      .all(id) as unknown as Array<{ scenario_id: number }>;
+    if (references.length > 0) {
+      throw new PersonaInUseError(id, references.map(({ scenario_id }) => scenario_id));
+    }
+    return this.connection.prepare("DELETE FROM personas WHERE id = ?").run(id).changes > 0;
+  }
+
+  public getScenario(id: number): Scenario | null {
+    return this.listCatalog().scenarios.find((scenario) => scenario.id === id) ?? null;
+  }
+
+  public createScenario(input: ScenarioInput): Scenario {
+    this.assertNamesAvailable("scenario", input.name, input.nameZhCn);
+    this.assertPersonasExist(input.allowedPersonaIds);
+    const resolved = this.resolveScenario(input);
+    this.assertScenarioPromptsFit(resolved);
+    const timestamp = formatDatabaseTimestamp();
+    const id = this.inTransaction(() => {
+      const write = this.connection
+        .prepare(
+          `INSERT INTO scenarios (
+            name, name_zh_cn, description, description_zh_cn, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.name, input.nameZhCn, input.description,
+          input.descriptionZhCn, timestamp, timestamp,
+        );
+      const generatedId = toDatabaseId(write.lastInsertRowid);
+      this.replaceScenarioReferences(generatedId, input);
+      this.replaceScenarioPersonas(generatedId, input.allowedPersonaIds, timestamp);
+      return generatedId;
+    });
     return this.requireScenario(id);
   }
 
-  public deleteScenario(id: string): boolean {
-    const result = this.connection
-      .prepare("DELETE FROM scenarios WHERE id = ?")
-      .run(id);
-    return result.changes > 0;
+  public updateScenario(id: number, input: ScenarioInput): Scenario | null {
+    const existing = this.getScenario(id);
+    if (!existing) return null;
+    this.assertNamesAvailable("scenario", input.name, input.nameZhCn, id);
+    this.assertPersonasExist(input.allowedPersonaIds);
+    const resolved = this.resolveScenario(input);
+    this.assertScenarioPromptsFit(resolved);
+    const timestamp = nextDatabaseTimestamp(existing.updatedAt);
+    this.inTransaction(() => {
+      this.connection
+        .prepare(
+          `UPDATE scenarios SET name = ?, name_zh_cn = ?,
+            description = ?, description_zh_cn = ?, updated_at = ? WHERE id = ?`,
+        )
+        .run(
+          input.name, input.nameZhCn, input.description,
+          input.descriptionZhCn, timestamp, id,
+        );
+      this.replaceScenarioReferences(id, input);
+      this.replaceScenarioPersonas(id, input.allowedPersonaIds, timestamp);
+    });
+    return this.requireScenario(id);
+  }
+
+  public deleteScenario(id: number): boolean {
+    return this.connection.prepare("DELETE FROM scenarios WHERE id = ?").run(id).changes > 0;
   }
 
   private get connection(): DatabaseSync {
     return this.database.raw;
   }
 
-  private requirePersona(id: string): Persona {
+  private listPersonaPresets(): PersonaPreset[] {
+    return PERSONA_PRESET_TABLES.flatMap((storage) =>
+      readPresetRows(this.connection, storage).map((row) =>
+        mapPersonaPresetRow(row, storage.category),
+      ),
+    );
+  }
+
+  private listScenarioPresets(): ScenarioPreset[] {
+    return SCENARIO_PRESET_TABLES.flatMap((storage) =>
+      readPresetRows(this.connection, storage).map((row) =>
+        mapScenarioPresetRow(row, storage.category),
+      ),
+    );
+  }
+
+  private resolvePersona(input: PersonaInput) {
+    return resolvePersonaPresetReferences(input, this.listPersonaPresets());
+  }
+
+  private resolveScenario(input: ScenarioInput) {
+    return resolveScenarioPresetReferences(input, this.listScenarioPresets());
+  }
+
+  private requirePersona(id: number): Persona {
     const persona = this.getPersona(id);
     if (!persona) throw new Error(`Persona "${id}" disappeared after writing.`);
     return persona;
   }
 
-  private requireScenario(id: string): Scenario {
+  private requireScenario(id: number): Scenario {
     const scenario = this.getScenario(id);
     if (!scenario) throw new Error(`Scenario "${id}" disappeared after writing.`);
     return scenario;
   }
 
-  private assertNameAvailable(
+  private assertNamesAvailable(
     entity: "persona" | "scenario",
     name: string,
-    excludedId?: string,
+    nameZhCn: string,
+    excludedId?: number,
   ): void {
     const table = entity === "persona" ? "personas" : "scenarios";
-    const conflict = this.connection
-      .prepare(
-        `SELECT id FROM ${table}
-         WHERE name = ? COLLATE NOCASE AND (? IS NULL OR id <> ?)`,
-      )
-      .get(name, excludedId ?? null, excludedId ?? null);
-    if (conflict) throw new CatalogNameConflictError(entity, name);
+    for (const [column, localizedName] of [["name", name], ["name_zh_cn", nameZhCn]] as const) {
+      if (!localizedName) continue;
+      const conflict = this.connection
+        .prepare(
+          `SELECT id FROM ${table}
+           WHERE ${column} = ? COLLATE NOCASE AND (? IS NULL OR id <> ?)`,
+        )
+        .get(localizedName, excludedId ?? null, excludedId ?? null);
+      if (conflict) throw new CatalogNameConflictError(entity, localizedName);
+    }
   }
 
-  private assertPersonasExist(personaIds: readonly string[]): void {
-    const statement = this.connection.prepare(
-      "SELECT 1 AS present FROM personas WHERE id = ?",
-    );
+  private assertPersonasExist(personaIds: readonly number[]): void {
+    const statement = this.connection.prepare("SELECT 1 AS present FROM personas WHERE id = ?");
     const missing = personaIds.filter((id) => !statement.get(id));
     if (missing.length > 0) throw new MissingPersonaReferencesError(missing);
   }
 
   private assertPersonaPromptsFit(
-    personaId: string,
-    persona: PersonaInput,
+    personaId: number,
+    persona: ResolvedPersonaInput,
   ): void {
     for (const scenario of this.listCatalog().scenarios) {
       if (scenario.allowedPersonaIds.includes(personaId)) {
@@ -378,76 +444,97 @@ export class CatalogRepository {
     }
   }
 
-  private assertScenarioPromptsFit(scenario: ScenarioInput): void {
+  private assertScenarioPromptsFit(scenario: ResolvedScenarioInput): void {
     for (const personaId of scenario.allowedPersonaIds) {
       this.assertPromptFits(this.requirePersona(personaId), scenario);
     }
   }
 
   private assertPromptFits(
-    persona: PersonaInput,
-    scenario: ScenarioInput,
+    persona: ResolvedPersonaInput,
+    scenario: ResolvedScenarioInput,
   ): void {
-    const issue = findRolePlayInstructionsLengthIssue({ persona, scenario });
-    if (issue) {
-      throw new RolePlayInstructionsTooLongError(
-        persona.name,
-        scenario.name,
-        issue.actualLength,
-      );
+    for (const locale of ["zh", "en"] as const) {
+      const localizedPersona = localizePersonaInput(persona, locale);
+      const localizedScenario = localizeScenarioInput(scenario, locale);
+      const issue = findRolePlayInstructionsLengthIssue({
+        persona: localizedPersona,
+        scenario: localizedScenario,
+      });
+      if (issue) {
+        throw new RolePlayInstructionsTooLongError(
+          localizedPersona.name,
+          localizedScenario.name,
+          issue.actualLength,
+        );
+      }
     }
   }
 
-  private insertScenario(
-    id: string,
-    input: ScenarioInput,
-    timestamp: string,
-  ): void {
+  private replacePersonaReferences(personaId: number, input: PersonaInput): void {
+    replaceOrderedReferences(
+      this.connection, "persona_personality_traits", "persona_id",
+      "personality_trait_preset_id", personaId, input.personalityTraitPresetIds,
+    );
+    replaceOrderedReferences(
+      this.connection, "persona_motivations", "persona_id",
+      "motivation_preset_id", personaId, input.motivationPresetIds,
+    );
+    replaceOrderedReferences(
+      this.connection, "persona_concerns", "persona_id",
+      "concern_preset_id", personaId, input.concernPresetIds,
+    );
+  }
+
+  private replaceScenarioReferences(scenarioId: number, input: ScenarioInput): void {
+    replaceOrderedReferences(
+      this.connection, "scenario_training_goals", "scenario_id",
+      "training_goal_preset_id", scenarioId, input.trainingGoalPresetIds,
+    );
+    replaceOrderedReferences(
+      this.connection, "scenario_skill_focuses", "scenario_id",
+      "skill_focus_preset_id", scenarioId, input.skillFocusPresetIds,
+    );
     this.connection
-      .prepare(
-        `INSERT INTO scenarios (
-          id, name, description, goals_json, suggested_skill_focus_json,
-          success_criteria_json, scoring_criteria_json, voice_behavior_json,
-          created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        id,
-        input.name,
-        input.description,
-        JSON.stringify(input.goals),
-        JSON.stringify(input.suggestedSkillFocus),
-        JSON.stringify(input.successCriteria),
-        JSON.stringify(input.scoringCriteria),
-        JSON.stringify(input.voiceBehavior),
-        timestamp,
-        timestamp,
+      .prepare("DELETE FROM scenario_success_criteria WHERE scenario_id = ?")
+      .run(scenarioId);
+    const insert = this.connection.prepare(
+      `INSERT INTO scenario_success_criteria (
+        scenario_id, success_criterion_preset_id, position, weight
+      ) VALUES (?, ?, ?, ?)`,
+    );
+    input.scoringCriteria.forEach((criterion, position) => {
+      insert.run(
+        scenarioId,
+        criterion.successCriterionPresetId,
+        position,
+        criterion.weight,
       );
+    });
   }
 
   private replaceScenarioPersonas(
-    scenarioId: string,
-    personaIds: readonly string[],
+    scenarioId: number,
+    personaIds: readonly number[],
     timestamp: string,
   ): void {
-    this.connection
-      .prepare("DELETE FROM scenario_personas WHERE scenario_id = ?")
-      .run(scenarioId);
+    this.connection.prepare("DELETE FROM scenario_personas WHERE scenario_id = ?").run(scenarioId);
     const insert = this.connection.prepare(
       `INSERT INTO scenario_personas (
         scenario_id, persona_id, position, created_at
       ) VALUES (?, ?, ?, ?)`,
     );
-    personaIds.forEach((personaId, position) => {
-      insert.run(scenarioId, personaId, position, timestamp);
-    });
+    personaIds.forEach((personaId, position) =>
+      insert.run(scenarioId, personaId, position, timestamp),
+    );
   }
 
-  private inTransaction(operation: () => void): void {
+  private inTransaction<T>(operation: () => T): T {
     this.connection.exec("BEGIN IMMEDIATE");
     try {
-      operation();
+      const result = operation();
       this.connection.exec("COMMIT");
+      return result;
     } catch (error) {
       this.connection.exec("ROLLBACK");
       throw error;
@@ -455,33 +542,124 @@ export class CatalogRepository {
   }
 }
 
-function mapPersonaPresetRow(row: PersonaPresetRow): PersonaPreset {
+const PERSONA_SELECT = `
+  SELECT p.*,
+    occupation.occupation, occupation.occupation_zh_cn,
+    communication.communication_style, communication.communication_style_zh_cn,
+    tone.tone_style, tone.tone_style_zh_cn
+  FROM personas AS p
+  JOIN persona_occupation_presets AS occupation
+    ON occupation.id = p.occupation_preset_id
+  JOIN persona_communication_style_presets AS communication
+    ON communication.id = p.communication_style_preset_id
+  JOIN persona_tone_style_presets AS tone
+    ON tone.id = p.tone_style_preset_id
+  ORDER BY COALESCE(NULLIF(p.name, ''), p.name_zh_cn) COLLATE NOCASE, p.id
+`;
+
+function readPresetRows(
+  connection: DatabaseSync,
+  storage: PresetTableDefinition,
+): PresetRow[] {
+  const chineseColumn = `${storage.valueColumn}_zh_cn`;
+  return connection
+    .prepare(
+      `SELECT id, ${storage.valueColumn} AS value,
+        ${chineseColumn} AS value_zh_cn, position, created_at, updated_at
+       FROM ${storage.table} ORDER BY position, id`,
+    )
+    .all() as unknown as PresetRow[];
+}
+
+function readReferences(
+  connection: DatabaseSync,
+  relationTable: string,
+  ownerColumn: string,
+  presetIdColumn: string,
+  presetTable: string,
+  valueColumn: string,
+  hasWeight = false,
+): Map<number, LocalizedReferenceRow[]> {
+  const rows = connection
+    .prepare(
+      `SELECT relation.${ownerColumn} AS owner_id,
+        relation.${presetIdColumn} AS preset_id,
+        preset.${valueColumn} AS value,
+        preset.${valueColumn}_zh_cn AS value_zh_cn,
+        relation.position${hasWeight ? ", relation.weight" : ""}
+       FROM ${relationTable} AS relation
+       JOIN ${presetTable} AS preset ON preset.id = relation.${presetIdColumn}
+       ORDER BY relation.${ownerColumn}, relation.position`,
+    )
+    .all() as unknown as LocalizedReferenceRow[];
+  const grouped = new Map<number, LocalizedReferenceRow[]>();
+  for (const row of rows) {
+    const values = grouped.get(row.owner_id) ?? [];
+    values.push(row);
+    grouped.set(row.owner_id, values);
+  }
+  return grouped;
+}
+
+function mapPersonaPresetRow(
+  row: PresetRow,
+  category: PersonaPresetCategory,
+): PersonaPreset {
   return personaPresetSchema.parse({
-    id: row.id,
-    category: row.category,
-    value: row.value,
-    valueEn: row.value_en,
-    position: row.position,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    id: row.id, category, value: row.value, valueZhCn: row.value_zh_cn,
+    position: row.position, createdAt: row.created_at, updatedAt: row.updated_at,
   });
 }
 
-function mapPersonaRow(row: PersonaRow): Persona {
+function mapScenarioPresetRow(
+  row: PresetRow,
+  category: ScenarioPresetCategory,
+): ScenarioPreset {
+  return scenarioPresetSchema.parse({
+    id: row.id, category, value: row.value, valueZhCn: row.value_zh_cn,
+    position: row.position, createdAt: row.created_at, updatedAt: row.updated_at,
+  });
+}
+
+function mapPersonaRow(
+  row: PersonaRow,
+  traits: readonly LocalizedReferenceRow[],
+  motivations: readonly LocalizedReferenceRow[],
+  concerns: readonly LocalizedReferenceRow[],
+): Persona {
   return personaSchema.parse({
     id: row.id,
     name: row.name,
+    nameZhCn: row.name_zh_cn,
     gender: row.gender,
     age: row.age,
+    occupationPresetId: row.occupation_preset_id,
     occupation: row.occupation,
-    identity: row.identity,
+    occupationZhCn: row.occupation_zh_cn,
     background: row.background,
-    personalityTraits: parseJson(row.personality_traits_json),
+    backgroundZhCn: row.background_zh_cn,
+    personalityTraitPresetIds: traits.map(({ preset_id }) => preset_id),
+    personalityTraits: traits.map(({ value }) => value),
+    personalityTraitsZhCn: traits.map(({ value_zh_cn }) => value_zh_cn),
+    communicationStylePresetId: row.communication_style_preset_id,
     communicationStyle: row.communication_style,
+    communicationStyleZhCn: row.communication_style_zh_cn,
+    toneStylePresetId: row.tone_style_preset_id,
+    toneStyle: row.tone_style,
+    toneStyleZhCn: row.tone_style_zh_cn,
     behaviorNotes: row.behavior_notes,
-    motivations: parseJson(row.motivations_json),
-    concerns: parseJson(row.concerns_json),
+    behaviorNotesZhCn: row.behavior_notes_zh_cn,
+    motivationPresetIds: motivations.map(({ preset_id }) => preset_id),
+    motivations: motivations.map(({ value }) => value),
+    motivationsZhCn: motivations.map(({ value_zh_cn }) => value_zh_cn),
+    concernPresetIds: concerns.map(({ preset_id }) => preset_id),
+    concerns: concerns.map(({ value }) => value),
+    concernsZhCn: concerns.map(({ value_zh_cn }) => value_zh_cn),
     voice: row.voice,
+    voiceBehavior: {
+      interruptFrequency: row.interrupt_frequency,
+      speakingPace: row.speaking_pace,
+    },
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   });
@@ -489,35 +667,57 @@ function mapPersonaRow(row: PersonaRow): Persona {
 
 function mapScenarioRow(
   row: ScenarioRow,
-  allowedPersonaIds: readonly string[],
+  goals: readonly LocalizedReferenceRow[],
+  skills: readonly LocalizedReferenceRow[],
+  success: readonly LocalizedReferenceRow[],
+  allowedPersonaIds: readonly number[],
 ): Scenario {
   return scenarioSchema.parse({
     id: row.id,
     name: row.name,
+    nameZhCn: row.name_zh_cn,
     description: row.description,
-    goals: parseJson(row.goals_json),
-    suggestedSkillFocus: parseJson(row.suggested_skill_focus_json),
-    successCriteria: parseJson(row.success_criteria_json),
-    scoringCriteria: parseJson(row.scoring_criteria_json),
+    descriptionZhCn: row.description_zh_cn,
+    trainingGoalPresetIds: goals.map(({ preset_id }) => preset_id),
+    goals: goals.map(({ value }) => value),
+    goalsZhCn: goals.map(({ value_zh_cn }) => value_zh_cn),
+    skillFocusPresetIds: skills.map(({ preset_id }) => preset_id),
+    suggestedSkillFocus: skills.map(({ value }) => value),
+    suggestedSkillFocusZhCn: skills.map(({ value_zh_cn }) => value_zh_cn),
+    successCriterionPresetIds: success.map(({ preset_id }) => preset_id),
+    successCriteria: success.map(({ value }) => value),
+    successCriteriaZhCn: success.map(({ value_zh_cn }) => value_zh_cn),
+    scoringCriteria: success.map((criterion) => ({
+      successCriterionPresetId: criterion.preset_id,
+      name: criterion.value,
+      nameZhCn: criterion.value_zh_cn,
+      weight: criterion.weight,
+    })),
     allowedPersonaIds,
-    voiceBehavior: parseJson(row.voice_behavior_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   });
 }
 
-function parseJson(value: string): unknown {
-  try {
-    return JSON.parse(value) as unknown;
-  } catch (error) {
-    throw new Error("The role-play catalog contains invalid JSON.", {
-      cause: error,
-    });
-  }
+function replaceOrderedReferences(
+  connection: DatabaseSync,
+  table: string,
+  ownerColumn: string,
+  presetColumn: string,
+  ownerId: number,
+  presetIds: readonly number[],
+): void {
+  connection.prepare(`DELETE FROM ${table} WHERE ${ownerColumn} = ?`).run(ownerId);
+  const insert = connection.prepare(
+    `INSERT INTO ${table} (${ownerColumn}, ${presetColumn}, position) VALUES (?, ?, ?)`,
+  );
+  presetIds.forEach((presetId, position) => insert.run(ownerId, presetId, position));
 }
 
-function nextTimestamp(previousTimestamp: string): string {
-  const now = Date.now();
-  const previous = Date.parse(previousTimestamp);
-  return new Date(Math.max(now, previous + 1)).toISOString();
+function toDatabaseId(value: number | bigint): number {
+  const id = Number(value);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error(`SQLite returned an invalid generated ID: ${String(value)}.`);
+  }
+  return id;
 }

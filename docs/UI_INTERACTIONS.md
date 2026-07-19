@@ -40,9 +40,9 @@ The default surface contains the brand header, compact-history entry below the d
 
 1. a searchable scenario selector;
 2. a searchable persona selector containing only the selected scenario's compatible personas;
-3. an easy/medium/hard segmented difficulty selector.
+3. an Ant Design solid button-style Radio group for easy/medium/hard.
 
-Changing the scenario keeps the currently selected persona only when it remains compatible; otherwise the first compatible persona is selected. The screen summarizes scenario description, goals, suggested skill focus, tone, pace, and interjection behavior, plus persona identity/demographics, traits, communication style, behavior notes, and Qwen voice.
+Changing the scenario keeps the selected persona only when it remains compatible; otherwise the first compatible persona is selected. The screen summarizes scenario description/goals/skill focus plus persona occupation, demographics, traits, communication style, tone, voice, speaking pace, and challenge tendency.
 
 Difficulty and the primary start action appear immediately after the two selectors, before the longer scenario/persona summaries, so the entry point remains discoverable without reading every detail first. The start action is disabled until catalog loading has finished, `/api/health` reports configured Qwen credentials, and a valid compatible scenario/persona pair exists. On start, the app snapshots the persona, scenario, and difficulty; later catalog changes cannot rename or reconfigure that active session.
 
@@ -50,15 +50,15 @@ Difficulty and the primary start action appear immediately after the two selecto
 
 ### Admin console
 
-The admin console contains responsive persona and scenario tabs. Each tab has search, count, paginated responsive cards, create/edit drawers, deletion confirmation, and global/form error feedback.
+The admin console contains responsive persona and scenario tabs. The Back to practice control is immediately left of the upper-left title; language/theme actions remain upper-right. Each tab has search, count, responsive cards, create/edit drawers, deletion confirmation, and global/form error feedback.
 
-Persona editing covers name, gender, age, occupation, identity, background, personality traits, communication style, behavior notes, motivations, concerns, and Qwen voice. Identity, occupation, communication style, traits, motivations, and concerns are populated from `catalog.personaPresets`, filtered by category, and ordered by preset position. Occupation, identity, and communication style are searchable single selects; occupation can be cleared. Traits, motivations, and concerns are searchable multiple selects limited to 12/10/10 items. Name, age, background, and behavior notes remain free-form, while gender and voice retain their fixed selectors.
+Persona editing covers name, gender, age, occupation, background, personality traits, communication style, tone style, behavior notes, motivations, concerns, Qwen voice, speaking pace, and interjection/challenge tendency. Occupation, communication style, tone style, traits, motivations, and concerns come from `catalog.personaPresets`. Name, gender, age, and occupation share one responsive grid: four columns on wide drawers, two at tablet width, and one per row on narrow screens. There is no identity field.
 
-New roles cannot invent arbitrary values in preset-backed fields. If required identity, personality-trait, or communication-style options are absent, the drawer shows a warning, disables save, and directs the operator to run the deployment initializer. Editing remains lossless: persona text absent from the current preset list is appended as an `existing value` option, so historical/custom values remain visible and can be retained even after reference choices change. Saving copies option text into the persona; later preset edits never rewrite existing roles.
+New roles cannot invent arbitrary values in preset-backed persona fields. If required occupation, personality-trait, communication-style, or tone-style options are absent, the drawer disables save and directs the operator to run the initializer. Existing values absent from the current preset list remain visible and savable.
 
-Scenario editing covers name/description, learner goals, suggested skill focus, hidden success criteria, optional weighted scoring criteria, compatible personas, the turn-bound interjection/challenge tendency stored as `interruptFrequency`, speaking pace, and tone style.
+Scenario editing covers name/description, learner goals, suggested skill focus, success criteria, and weights. Selecting success criteria regenerates fixed, read-only scoring item names and evenly distributed integer weights totaling 100. Users can change only percentages. Persona compatibility is a separate card action, not part of scenario creation/editing.
 
-Both drawers compile an Instructions preview from current form values with a selected compatible counterpart. The preview is deterministic and copyable; it does not call another model. It shows the 12,000-character budget and warns when any difficulty for the previewed pair exceeds it. Save validation checks every affected compatible pair. A successful create, update, or delete applies the returned result locally and then reloads the full catalog, so the learner surface reflects the saved result immediately without a rebuild or restart.
+Each drawer compiles only its own deterministic Instructions section and never asks for a counterpart. The server combines persona, scenario, and difficulty only when creating the conversation. A successful mutation reloads the authoritative catalog.
 
 A persona referenced by one or more scenarios cannot be deleted. The admin disables its delete action and names the scenarios that must be edited; the server independently enforces the same conflict. Deleting a scenario deletes only its compatibility links. See `docs/CATALOG_AND_PROMPTS.md` for field and API constraints.
 
@@ -66,7 +66,7 @@ A persona referenced by one or more scenarios cannot be deleted. The admin disab
 
 Inside the learner workspace, the active session uses a three-row CSS grid:
 
-1. Header — selected persona identity, realtime state, playback controls, end-session confirmation, language control, and theme toggle.
+1. Header — selected persona occupation, realtime state, playback controls, end-session confirmation, language control, and theme toggle.
 2. Conversation — the only vertically scrolling region.
 3. Voice composer — the hold-to-talk control, its hint, and the recording overlay anchor.
 
@@ -76,7 +76,7 @@ There is one JSX structure at every width. Current responsive rules are:
 - At 1200 px and above: the persistent history rail consumes 288 px; the chat remains centered in the remaining workspace.
 - Below 1200 px: the history rail becomes a Drawer and a history button appears in the header.
 - At 767 px and below: shell fills the viewport using `100dvh`, without desktop border, radius, margin, or shadow.
-- At 390 px and below: identity and header actions tighten further.
+- At 390 px and below: persona title/occupation and header actions tighten further.
 - The root has a 320 px minimum width.
 - Mobile header and composer include `env(safe-area-inset-top)` and `env(safe-area-inset-bottom)`.
 
@@ -185,7 +185,7 @@ Holding **Hold to interrupt and talk** / **按住打断并说话** performs this
 
 The user can record while Node repairs Qwen's conversation item. Node blocks only the next response creation until repair is acknowledged. See `docs/REALTIME_PROTOCOL.md` for wire ordering and `docs/ARCHITECTURE.md` for the best-effort prefix estimator.
 
-Scenario `interruptFrequency` is not this mechanism. It influences whether the role is patient or uses brief interjections/challenges inside its own model turns. Manual push-to-talk means the model cannot detect and interrupt the learner mid-recording; only the learner can barge in on model playback.
+Persona `voiceBehavior.interruptFrequency` is not this mechanism. It influences whether the role is patient or uses brief interjections/challenges inside its own model turns. Manual push-to-talk means the model cannot detect and interrupt the learner mid-recording; only the learner can barge in on model playback.
 
 ## Waveform feedback
 
@@ -225,7 +225,7 @@ The interface supports English (`en`) and Simplified Chinese (`zh`) from one Rea
 
 Changing language updates the shared i18n context, Ant Design's locale object, `document.documentElement.lang`, and the saved preference. It must not reset catalog selection, close a drawer, reconnect Qwen, dispose audio, or clear an active transcript. User-facing strings include visible copy as well as validation messages, errors, placeholders, tooltips, empty states, and accessible names.
 
-Preset options keep their stable Chinese `value` as the form value and use `valueEn` as the English locale projection. Therefore changing language cannot silently alter a persona payload. Exact preset-backed snapshots are projected to English in learner/admin summaries, prompt previews, and the immutable session configuration created from an English launch; unmatched/custom text stays as authored. Unmodified built-in starter personas and the default scenario have authored translations; once an administrator edits a starter record, its free-form database text takes precedence. No content is sent to an implicit translation service.
+Every localized catalog field is stored as an independent pair: unsuffixed English (`name`, `value`) and Simplified Chinese with `ZhCn` (`nameZhCn`, `valueZhCn`). Fallback remains presentation-only; saving unchanged fallback text must not copy it into the empty language. Starter translations and preset business content come from JSON through explicit SQLite initialization; no translation service is called.
 
 ## Playback and session controls
 
@@ -260,9 +260,10 @@ For layout-only work, `?preview=session` and `?preview=recording` provide develo
 8. While the selected persona is playing audio, hold the barge-in control and confirm playback stops immediately before recording begins.
 9. Scroll more than 120 px above the bottom during streaming; confirm new deltas do not steal the reader's scroll position.
 10. Search/select scenarios and verify the persona options contain only compatible personas; switch easy/medium/hard and confirm the selected state/summary remains usable at every target width.
-11. In the admin console, create/edit both entity types, inspect prompt previews, validate scoring totals and required compatibility, and confirm saved changes appear on the learner launcher immediately.
-12. Verify all six preset categories are ordered and searchable; confirm preset-backed multi-select limits, clearable occupation, and the disabled-save warning when required preset categories are empty.
-13. Edit a persona containing values absent from `personaPresets`; confirm each is shown as an existing option and can be retained without creating a new preset.
+11. In the admin console, create/edit both entity types, inspect standalone prompt previews, confirm criteria generate `33/33/34` for three rows, edit weights, and manage compatibility from its separate action.
+12. Verify persona and scenario preset categories are loaded from `GET /api/catalog`, ordered, localized, and searchable; confirm preset-backed multi-select limits and the disabled-save warning when required persona categories are empty.
+13. Create `张三` in Chinese and confirm the English UI falls back to it; save an unrelated English edit and confirm `name` remains empty; then set English `name` to `Zhang San` and confirm Chinese `nameZhCn` still displays `张三`.
+14. Edit a persona containing values absent from `personaPresets`; confirm each is shown as an existing option and can be retained without creating a new preset.
 14. Attempt to delete a referenced persona and verify the conflict is shown without removing it; unlink it, retry, and verify deletion succeeds.
 15. Finish at least two conversations, confirm newest activity sorts first, resume each from the rail/Drawer, and verify its full transcript and snapshotted persona/scenario/difficulty return before another voice turn.
 16. Edit a catalog persona after creating a conversation, then resume the old conversation and confirm it still uses the old snapshot.

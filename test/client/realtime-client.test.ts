@@ -72,7 +72,7 @@ describe("RealtimeClient connection lifecycle", () => {
   it("allows the server's per-item restoration budget before timing out", async () => {
     const client = createClient();
     const connection = client.connect({
-      conversationId: "conversation_1",
+      conversationId: 1,
       maxHistoryTurns: 2,
     });
     const rejection = expect(connection).rejects.toThrow(
@@ -93,7 +93,7 @@ describe("RealtimeClient connection lifecycle", () => {
   it("clears the startup timer after session.ready", async () => {
     const client = createClient();
     const connection = client.connect({
-      conversationId: "conversation_1",
+      conversationId: 1,
       maxHistoryTurns: 20,
     });
     const socket = FakeWebSocket.instances[0];
@@ -101,7 +101,7 @@ describe("RealtimeClient connection lifecycle", () => {
     socket?.receive({
       type: "session.ready",
       sessionId: "session_1",
-      conversationId: "conversation_1",
+      conversationId: 1,
     });
 
     await connection;
@@ -122,7 +122,7 @@ describe("RealtimeClient connection lifecycle", () => {
       onMalformedMessage: vi.fn(),
     });
     const connection = client.connect({
-      conversationId: "conversation_1",
+      conversationId: 1,
       maxHistoryTurns: 20,
     });
     const rejection = connection.catch((error: unknown) => error);
@@ -160,7 +160,7 @@ describe("RealtimeClient connection lifecycle", () => {
       onMalformedMessage: vi.fn(),
     });
     const connection = client.connect({
-      conversationId: "conversation_1",
+      conversationId: 1,
       maxHistoryTurns: 20,
     });
     const socket = FakeWebSocket.instances[0];
@@ -168,7 +168,7 @@ describe("RealtimeClient connection lifecycle", () => {
     socket?.receive({
       type: "session.ready",
       sessionId: "session_1",
-      conversationId: "conversation_1",
+      conversationId: 1,
     });
     await connection;
 
@@ -191,7 +191,7 @@ describe("RealtimeClient connection lifecycle", () => {
   it("rejects immediately and clears the timer when disconnected before ready", async () => {
     const client = createClient();
     const connection = client.connect({
-      conversationId: "conversation_1",
+      conversationId: 1,
       maxHistoryTurns: 50,
     });
     const rejection = expect(connection).rejects.toThrow(

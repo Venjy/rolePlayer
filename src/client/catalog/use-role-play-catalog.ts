@@ -21,6 +21,7 @@ import type {
 
 const EMPTY_CATALOG: RolePlayCatalog = {
   personaPresets: [],
+  scenarioPresets: [],
   personas: [],
   scenarios: [],
 };
@@ -259,7 +260,7 @@ export function useRolePlayCatalog(
           personas: [...current.personas, persona],
         }),
       ),
-    updatePersona: (id: string, input: PersonaInput) =>
+    updatePersona: (id: number, input: PersonaInput) =>
       mutate(
         () => updatePersona(id, input),
         (current, persona) => ({
@@ -269,7 +270,7 @@ export function useRolePlayCatalog(
           ),
         }),
       ),
-    deletePersona: (id: string) =>
+    deletePersona: (id: number) =>
       mutate(
         () => deletePersona(id),
         (current) => ({
@@ -285,7 +286,7 @@ export function useRolePlayCatalog(
           scenarios: [...current.scenarios, scenario],
         }),
       ),
-    updateScenario: (id: string, input: ScenarioInput) =>
+    updateScenario: (id: number, input: ScenarioInput) =>
       mutate(
         () => updateScenario(id, input),
         (current, scenario) => ({
@@ -295,7 +296,7 @@ export function useRolePlayCatalog(
           ),
         }),
       ),
-    deleteScenario: (id: string) =>
+    deleteScenario: (id: number) =>
       mutate(
         () => deleteScenario(id),
         (current) => ({

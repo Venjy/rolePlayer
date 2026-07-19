@@ -1,0 +1,7 @@
+[
+  { "key": "concern_price", "value": "Price and budget", "valueZhCn": "价格与预算", "position": 0 },
+  { "key": "concern_roi", "value": "Unclear return on investment", "valueZhCn": "投资回报不明确", "position": 1 },
+  { "key": "concern_implementation", "value": "Implementation complexity", "valueZhCn": "实施复杂度", "position": 2 },
+  { "key": "concern_security", "value": "Data security", "valueZhCn": "数据安全", "position": 3 },
+  { "key": "concern_change", "value": "Team resistance to change", "valueZhCn": "团队抵触改变", "position": 4 }
+]

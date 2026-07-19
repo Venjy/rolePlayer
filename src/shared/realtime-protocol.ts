@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { databaseIdSchema } from "./database-id";
 
 export const MAX_REALTIME_INSTRUCTIONS_LENGTH = 12_000;
 
@@ -16,7 +17,7 @@ export const clientControlMessageSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("session.configure"),
-      conversationId: z.string().trim().min(1).max(100),
+      conversationId: databaseIdSchema,
       maxHistoryTurns: z.number().int().min(1).max(50).default(20),
     })
     .strict(),
@@ -52,7 +53,7 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("session.ready"),
     sessionId: z.string(),
-    conversationId: z.string().trim().min(1).max(100),
+    conversationId: databaseIdSchema,
   }),
   z.object({ type: z.literal("session.state"), state: sessionStateSchema }),
   z.object({

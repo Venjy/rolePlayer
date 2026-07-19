@@ -2,26 +2,53 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import type { ZodError } from "zod";
 import { z } from "zod";
 import { createConversationInputSchema } from "../../shared/conversation-history";
+import { databaseIdSchema } from "../../shared/database-id";
 import { MAX_REALTIME_INSTRUCTIONS_LENGTH } from "../../shared/realtime-protocol";
+import { CatalogRepository } from "../catalog/catalog-repository";
 import {
   ConversationInstructionsTooLongError,
   ConversationRepository,
 } from "./conversation-repository";
 
 const idParametersSchema = z.object({
-  id: z.string().trim().min(1).max(100),
+  id: z.coerce.number().pipe(databaseIdSchema),
 });
 
 /** Exposes durable conversation creation and read-only history retrieval. */
 export function registerConversationRoutes(app: FastifyInstance): void {
-  const repository = new ConversationRepository(app.database);
+  const repository = new ConversationRepository(app.conversationDatabase);
+  const catalog = new CatalogRepository(app.catalogDatabase);
 
   app.post("/api/conversations", async (request, reply) => {
     const parsed = createConversationInputSchema.safeParse(request.body);
     if (!parsed.success) return sendValidationError(reply, parsed.error);
 
+    const persona = catalog.getPersona(parsed.data.personaId);
+    const scenario = catalog.getScenario(parsed.data.scenarioId);
+    if (!persona || !scenario) {
+      const message = !persona
+        ? `No persona exists with ID "${parsed.data.personaId}".`
+        : `No scenario exists with ID "${parsed.data.scenarioId}".`;
+      return reply.code(404).send({
+        message,
+        error: { code: "catalog_record_not_found", message },
+      });
+    }
+    if (!scenario.allowedPersonaIds.includes(persona.id)) {
+      const message = "The persona is not compatible with the selected scenario.";
+      return reply.code(400).send({
+        message,
+        error: { code: "incompatible_catalog_selection", message },
+      });
+    }
+
     try {
-      return reply.code(201).send(repository.createConversation(parsed.data));
+      return reply.code(201).send(repository.createConversation({
+        persona,
+        scenario,
+        difficulty: parsed.data.difficulty,
+        locale: parsed.data.locale,
+      }));
     } catch (error) {
       if (error instanceof ConversationInstructionsTooLongError) {
         return reply.code(400).send({

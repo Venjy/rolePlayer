@@ -5,13 +5,13 @@ import type {
 } from "../../shared/role-play-catalog";
 
 export interface CatalogSelection {
-  scenarioId: string | null;
-  personaId: string | null;
+  scenarioId: number | null;
+  personaId: number | null;
 }
 
 export function resolveScenario(
   catalog: RolePlayCatalog,
-  preferredId?: string,
+  preferredId?: number,
 ): Scenario | undefined {
   return (
     catalog.scenarios.find((scenario) => scenario.id === preferredId) ??
@@ -31,7 +31,7 @@ export function getCompatiblePersonas(
 export function resolvePersona(
   catalog: RolePlayCatalog,
   scenario: Scenario | undefined,
-  preferredId?: string,
+  preferredId?: number,
 ): Persona | undefined {
   const compatiblePersonas = getCompatiblePersonas(catalog, scenario);
   return (

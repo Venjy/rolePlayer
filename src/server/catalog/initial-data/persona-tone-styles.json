@@ -1,0 +1,6 @@
+[
+  { "key": "tone_professional", "value": "Professional and composed", "valueZhCn": "专业沉稳", "position": 0 },
+  { "key": "tone_warm", "value": "Warm and approachable", "valueZhCn": "温和亲切", "position": 1 },
+  { "key": "tone_challenging", "value": "Firm and challenging", "valueZhCn": "强势挑剔", "position": 2 },
+  { "key": "tone_humorous", "value": "Humorous and teasing", "valueZhCn": "幽默贫嘴", "position": 3 }
+]

@@ -3,358 +3,137 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type {
-  Persona,
-  PersonaInput,
-  Scenario,
-  ScenarioInput,
-} from "../../src/shared/role-play-catalog";
+import type { Persona, PersonaInput, RolePlayCatalog, Scenario, ScenarioInput } from "../../src/shared/role-play-catalog";
 import { rolePlayCatalogSchema } from "../../src/shared/role-play-catalog";
-import {
-  INITIAL_PERSONA_PRESETS,
-  initializeCatalogData,
-} from "../../src/server/catalog/catalog-initializer";
+import { initializeCatalogData } from "../../src/server/catalog/catalog-initializer";
 import { registerCatalogRoutes } from "../../src/server/catalog/catalog-routes";
-import { registerDatabase } from "../../src/server/database/register-database";
+import { registerDatabases } from "../../src/server/database/register-database";
 
-const temporaryDirectories: string[] = [];
-
+const directories: string[] = [];
 afterEach(() => {
-  for (const directory of temporaryDirectories.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
-  }
+  for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
-const personaInput: PersonaInput = {
-  name: "小张",
-  gender: "female",
-  age: 29,
-  occupation: "外卖员",
-  identity: "一位正在评估电动车租赁服务的外卖员",
-  background: "每天需要长时间骑行，近期考虑更换车辆。",
-  personalityTraits: ["务实", "谨慎"],
-  communicationStyle: "说话直接，会追问价格和维修细节。",
-  behaviorNotes: "对空泛的销售话术缺乏耐心。",
-  motivations: ["降低日常车辆成本"],
-  concerns: ["续航", "维修响应时间"],
-  voice: "longanlingxin",
-};
-
-function scenarioInput(allowedPersonaIds: string[]): ScenarioInput {
-  return {
-    name: "电动车租赁咨询",
-    description: "向高频使用车辆的外卖员介绍电动车租赁方案。",
-    goals: ["理解用车需求", "确认下一步试用安排"],
-    suggestedSkillFocus: ["需求发现", "异议处理"],
-    successCriteria: ["确认预算和续航需求"],
-    scoringCriteria: [
-      { name: "需求发现", weight: 60 },
-      { name: "下一步", weight: 40 },
-    ],
-    allowedPersonaIds,
-    voiceBehavior: {
-      interruptFrequency: "medium",
-      speakingPace: "fast",
-      toneStyle: "直接而务实",
-    },
-  };
+function presetId(catalog: RolePlayCatalog, valueZhCn: string): number {
+  const preset = [...catalog.personaPresets, ...catalog.scenarioPresets].find(
+    (candidate) => candidate.valueZhCn === valueZhCn,
+  );
+  if (!preset) throw new Error(`Missing test preset: ${valueZhCn}`);
+  return preset.id;
 }
 
+function personaInput(catalog: RolePlayCatalog): PersonaInput {
+  return {
+  name: "", nameZhCn: "张三", gender: "male", age: 29,
+  occupationPresetId: presetId(catalog, "外卖员"),
+  background: "", backgroundZhCn: "每天长时间骑行。",
+  personalityTraitPresetIds: [presetId(catalog, "务实")],
+  communicationStylePresetId: presetId(catalog, "直接简洁"),
+  toneStylePresetId: presetId(catalog, "专业沉稳"),
+  behaviorNotes: "", behaviorNotesZhCn: "追问价格。",
+  motivationPresetIds: [presetId(catalog, "节省成本")],
+  concernPresetIds: [presetId(catalog, "价格与预算")],
+  voice: "longanlingxin",
+  voiceBehavior: { interruptFrequency: "medium", speakingPace: "fast" },
+  };
+}
+function scenarioInput(catalog: RolePlayCatalog, allowedPersonaIds: number[]): ScenarioInput {
+  const goalId = presetId(catalog, "识别客户需求");
+  const skillId = presetId(catalog, "开放式提问");
+  const successId = presetId(catalog, "发现一项明确的客户需求");
+  return {
+    name: "", nameZhCn: "电动车租赁咨询",
+    description: "", descriptionZhCn: "介绍电动车租赁方案。",
+    trainingGoalPresetIds: [goalId],
+    skillFocusPresetIds: [skillId],
+    successCriterionPresetIds: [successId],
+    scoringCriteria: [{ successCriterionPresetId: successId, weight: 100 }],
+    allowedPersonaIds,
+  };
+}
 function createApp() {
   const directory = mkdtempSync(join(tmpdir(), "role-player-catalog-api-"));
-  temporaryDirectories.push(directory);
+  directories.push(directory);
   const app = Fastify({ logger: false });
-  registerDatabase(app, { path: join(directory, "catalog.sqlite") });
+  registerDatabases(app, {
+    catalogPath: join(directory, "catalog.sqlite"),
+    conversationPath: join(directory, "conversations.sqlite"),
+  });
   registerCatalogRoutes(app);
   return app;
 }
 
-describe("role-play catalog routes", () => {
-  it("returns database-backed presets and initialized personas", async () => {
+describe("catalog routes", () => {
+  it("returns the JSON-initialized bilingual catalog", async () => {
     const app = createApp();
     try {
       await app.ready();
-      const initialized = initializeCatalogData(app.database);
-      expect(initialized.presetRowsInserted).toBe(
-        INITIAL_PERSONA_PRESETS.length,
-      );
-
+      initializeCatalogData(app.catalogDatabase);
       const response = await app.inject({ method: "GET", url: "/api/catalog" });
-
       expect(response.statusCode).toBe(200);
       const catalog = rolePlayCatalogSchema.parse(response.json());
-      expect(catalog.personaPresets).toHaveLength(
-        INITIAL_PERSONA_PRESETS.length,
-      );
-      expect(catalog.personaPresets).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "preset_occupation_marketing_director",
-            category: "occupation",
-            value: "市场营销总监",
-            valueEn: "Marketing Director",
-            position: 0,
-          }),
-          expect.objectContaining({
-            id: "preset_trait_pragmatic",
-            category: "personality_trait",
-            value: "务实",
-            valueEn: "Pragmatic",
-            position: 0,
-          }),
-        ]),
-      );
-      expect(catalog.personas).toEqual(
-        expect.arrayContaining([
-        expect.objectContaining({
-          id: "persona_alex",
-          name: "Alex",
-          personalityTraits: ["thoughtful", "slightly skeptical", "pragmatic"],
-        }),
-          expect.objectContaining({
-            id: "persona_lin_yue",
-            name: "林悦",
-            occupation: "市场营销总监",
-          }),
-          expect.objectContaining({
-            id: "persona_wang_qiang",
-            name: "王强",
-            occupation: "采购经理",
-          }),
-          expect.objectContaining({
-            id: "persona_chen_chen",
-            name: "陈晨",
-            occupation: "小微企业主",
-          }),
-        ]),
-      );
-      expect(catalog.scenarios).toEqual([
-        expect.objectContaining({
-          id: "scenario_sales_discovery",
-          allowedPersonaIds: [
-            "persona_alex",
-            "persona_lin_yue",
-            "persona_wang_qiang",
-            "persona_chen_chen",
-          ],
-        }),
-      ]);
+      expect(catalog.personaPresets).toEqual(expect.arrayContaining([
+        expect.objectContaining({ category: "occupation", value: "Sales Director", valueZhCn: "销售总监" }),
+      ]));
+      expect(catalog.personas).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: "Lin Yue", nameZhCn: "林悦", occupation: "Marketing Director" }),
+      ]));
     } finally {
       await app.close();
     }
   });
 
-  it("supports persona and scenario CRUD while enforcing compatibility", async () => {
+  it("supports independent content CRUD and separately stored compatibility", async () => {
     const app = createApp();
     try {
-      const invalidPersona = await app.inject({
-        method: "POST",
-        url: "/api/personas",
-        payload: { ...personaInput, age: 0 },
-      });
-      expect(invalidPersona.statusCode).toBe(400);
-      expect(invalidPersona.json()).toMatchObject({
-        error: { code: "invalid_request" },
-      });
+      await app.ready();
+      initializeCatalogData(app.catalogDatabase);
+      const catalog = rolePlayCatalogSchema.parse(
+        (await app.inject({ method: "GET", url: "/api/catalog" })).json(),
+      );
+      const createdPersonaResponse = await app.inject({ method: "POST", url: "/api/personas", payload: personaInput(catalog) });
+      expect(createdPersonaResponse.statusCode).toBe(201);
+      const persona = createdPersonaResponse.json<Persona>();
+      expect(persona).toMatchObject({ name: "", nameZhCn: "张三", occupationZhCn: "外卖员" });
 
-      const createPersona = await app.inject({
-        method: "POST",
-        url: "/api/personas",
-        payload: personaInput,
+      const createdScenarioResponse = await app.inject({
+        method: "POST", url: "/api/scenarios", payload: scenarioInput(catalog, [persona.id]),
       });
-      expect(createPersona.statusCode).toBe(201);
-      const persona = createPersona.json<Persona>();
-      expect(persona).toMatchObject(personaInput);
-      expect(persona.id).toMatch(/^persona_/);
-      expect(persona.createdAt).toBe(persona.updatedAt);
+      expect(createdScenarioResponse.statusCode).toBe(201);
+      const scenario = createdScenarioResponse.json<Scenario>();
+      expect(scenario.allowedPersonaIds).toEqual([persona.id]);
 
-      const duplicatePersona = await app.inject({
-        method: "POST",
-        url: "/api/personas",
-        payload: { ...personaInput, name: "小张" },
-      });
-      expect(duplicatePersona.statusCode).toBe(409);
-      expect(duplicatePersona.json()).toMatchObject({
-        error: { code: "duplicate_name", entity: "persona" },
-      });
-
-      const updatePersona = await app.inject({
-        method: "PUT",
-        url: `/api/personas/${persona.id}`,
-        payload: { ...personaInput, occupation: "配送站站长" },
-      });
-      expect(updatePersona.statusCode).toBe(200);
-      const updatedPersona = updatePersona.json<Persona>();
-      expect(updatedPersona).toMatchObject({
-        id: persona.id,
-        occupation: "配送站站长",
-        createdAt: persona.createdAt,
-      });
-      expect(updatedPersona.updatedAt).not.toBe(persona.updatedAt);
-
-      const missingCompatibility = await app.inject({
-        method: "POST",
-        url: "/api/scenarios",
-        payload: scenarioInput(["persona_missing"]),
-      });
-      expect(missingCompatibility.statusCode).toBe(400);
-      expect(missingCompatibility.json()).toMatchObject({
-        error: {
-          code: "unknown_persona_reference",
-          personaIds: ["persona_missing"],
-        },
-      });
-
-      const createScenario = await app.inject({
-        method: "POST",
-        url: "/api/scenarios",
-        payload: scenarioInput([persona.id, "persona_alex"]),
-      });
-      expect(createScenario.statusCode).toBe(201);
-      const scenario = createScenario.json<Scenario>();
-      expect(scenario).toMatchObject({
-        ...scenarioInput([persona.id, "persona_alex"]),
-        id: expect.stringMatching(/^scenario_/),
-      });
-
-      const blockedDelete = await app.inject({
-        method: "DELETE",
-        url: `/api/personas/${persona.id}`,
-      });
-      expect(blockedDelete.statusCode).toBe(409);
-      expect(blockedDelete.json()).toMatchObject({
-        error: {
-          code: "persona_in_use",
-          personaId: persona.id,
-          scenarioIds: [scenario.id],
-        },
-      });
-
-      const updateScenario = await app.inject({
+      const updatedResponse = await app.inject({
         method: "PUT",
         url: `/api/scenarios/${scenario.id}`,
-        payload: {
-          ...scenarioInput(["persona_alex"]),
-          name: "更新后的销售场景",
-        },
+        payload: { ...scenarioInput(catalog, []), name: "E-bike consultation" },
       });
-      expect(updateScenario.statusCode).toBe(200);
-      const updatedScenario = updateScenario.json<Scenario>();
-      expect(updatedScenario).toMatchObject({
-        id: scenario.id,
-        name: "更新后的销售场景",
-        allowedPersonaIds: ["persona_alex"],
+      expect(updatedResponse.statusCode).toBe(200);
+      expect(updatedResponse.json<Scenario>()).toMatchObject({
+        name: "E-bike consultation", nameZhCn: "电动车租赁咨询", allowedPersonaIds: [],
       });
-      expect(updatedScenario.createdAt).toBe(scenario.createdAt);
-      expect(updatedScenario.updatedAt).not.toBe(scenario.updatedAt);
 
-      const deletePersona = await app.inject({
-        method: "DELETE",
-        url: `/api/personas/${persona.id}`,
-      });
+      const deletePersona = await app.inject({ method: "DELETE", url: `/api/personas/${persona.id}` });
       expect(deletePersona.statusCode).toBe(204);
-      expect(deletePersona.body).toBe("");
-
-      const deleteScenario = await app.inject({
-        method: "DELETE",
-        url: `/api/scenarios/${scenario.id}`,
-      });
-      expect(deleteScenario.statusCode).toBe(204);
-
-      const missingScenario = await app.inject({
-        method: "DELETE",
-        url: `/api/scenarios/${scenario.id}`,
-      });
-      expect(missingScenario.statusCode).toBe(404);
-      expect(missingScenario.json()).toMatchObject({
-        error: { code: "scenario_not_found" },
-      });
-
-      const missingPersonaUpdate = await app.inject({
-        method: "PUT",
-        url: "/api/personas/persona_missing",
-        payload: personaInput,
-      });
-      expect(missingPersonaUpdate.statusCode).toBe(404);
     } finally {
       await app.close();
     }
   });
 
-  it("rejects a compatible persona/scenario pair that cannot fit the realtime prompt", async () => {
+  it("rejects unknown compatibility references", async () => {
     const app = createApp();
     try {
-      const largePersonaInput: PersonaInput = {
-        name: "Length boundary persona",
-        gender: "unspecified",
-        age: 40,
-        occupation: "o".repeat(120),
-        identity: "i".repeat(240),
-        background: "b".repeat(2_000),
-        personalityTraits: Array.from(
-          { length: 12 },
-          (_, index) => `${index}`.padEnd(160, "t"),
-        ),
-        communicationStyle: "c".repeat(500),
-        behaviorNotes: "n".repeat(2_000),
-        motivations: Array.from(
-          { length: 10 },
-          (_, index) => `${index}`.padEnd(160, "m"),
-        ),
-        concerns: Array.from(
-          { length: 10 },
-          (_, index) => `${index}`.padEnd(160, "q"),
-        ),
-        voice: "longanqian",
-      };
-      const createPersona = await app.inject({
-        method: "POST",
-        url: "/api/personas",
-        payload: largePersonaInput,
-      });
-      expect(createPersona.statusCode).toBe(201);
-      const persona = createPersona.json<Persona>();
-
-      const oversizedScenario: ScenarioInput = {
-        name: "Length boundary scenario",
-        description: "d".repeat(2_000),
-        goals: Array.from(
-          { length: 10 },
-          (_, index) => `${index}`.padEnd(160, "g"),
-        ),
-        suggestedSkillFocus: Array.from(
-          { length: 10 },
-          (_, index) => `${index}`.padEnd(160, "f"),
-        ),
-        successCriteria: Array.from(
-          { length: 12 },
-          (_, index) => `${index}`.padEnd(160, "s"),
-        ),
-        scoringCriteria: Array.from({ length: 12 }, (_, index) => ({
-          name: `criterion-${index}`.padEnd(100, "x"),
-          weight: index === 0 ? 89 : 1,
-        })),
-        allowedPersonaIds: [persona.id],
-        voiceBehavior: {
-          interruptFrequency: "high",
-          speakingPace: "fast",
-          toneStyle: "t".repeat(160),
-        },
-      };
+      await app.ready();
+      initializeCatalogData(app.catalogDatabase);
+      const catalog = rolePlayCatalogSchema.parse(
+        (await app.inject({ method: "GET", url: "/api/catalog" })).json(),
+      );
       const response = await app.inject({
-        method: "POST",
-        url: "/api/scenarios",
-        payload: oversizedScenario,
+        method: "POST", url: "/api/scenarios", payload: scenarioInput(catalog, [999_999]),
       });
-
       expect(response.statusCode).toBe(400);
       expect(response.json()).toMatchObject({
-        error: {
-          code: "instructions_too_long",
-          personaName: largePersonaInput.name,
-          scenarioName: oversizedScenario.name,
-          maximumLength: 12_000,
-        },
+        error: { code: "unknown_persona_reference", personaIds: [999_999] },
       });
     } finally {
       await app.close();

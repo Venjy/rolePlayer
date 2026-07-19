@@ -30,7 +30,7 @@ function newestFirst(
   return [...conversations].sort(
     (left, right) =>
       right.updatedAt.localeCompare(left.updatedAt) ||
-      right.id.localeCompare(left.id),
+      right.id - left.id,
   );
 }
 
@@ -181,7 +181,7 @@ export function useConversationHistory() {
     [],
   );
 
-  const load = useCallback(async (id: string): Promise<ConversationDetail> => {
+  const load = useCallback(async (id: number): Promise<ConversationDetail> => {
     if (mountedRef.current) setBusy(true);
     try {
       const conversation = await fetchConversation(id);

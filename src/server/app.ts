@@ -3,14 +3,18 @@ import Fastify from "fastify";
 import { registerCatalogRoutes } from "./catalog/catalog-routes";
 import { getServerConfig, hasQwenConfig } from "./config";
 import { registerConversationRoutes } from "./conversations/conversation-routes";
-import { registerDatabase } from "./database/register-database";
+import { registerDatabases } from "./database/register-database";
 import { registerRealtimeGateway } from "./realtime/realtime-gateway";
 
 export async function buildApp() {
   const config = getServerConfig();
   const app = Fastify({ logger: { level: config.LOG_LEVEL } });
 
-  registerDatabase(app, { path: config.DATABASE_PATH });
+  registerDatabases(app, {
+    catalogPath: config.CATALOG_DATABASE_PATH,
+    conversationPath: config.CONVERSATION_DATABASE_PATH,
+    legacyPath: config.LEGACY_DATABASE_PATH,
+  });
 
   await app.register(cors, {
     origin: config.CLIENT_ORIGIN,
@@ -18,7 +22,10 @@ export async function buildApp() {
 
   app.get("/api/health", async () => ({
     status: "ok",
-    database: "ok",
+    databases: {
+      catalog: "ok",
+      conversations: "ok",
+    },
     qwenConfigured: hasQwenConfig(),
   }));
 
