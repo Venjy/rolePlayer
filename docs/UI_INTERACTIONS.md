@@ -10,14 +10,29 @@ Primary files:
 
 | File | Responsibility |
 | --- | --- |
-| `src/client/App.tsx` | App mode, catalog selection, active-session snapshot, theme, conversation data, audio/realtime orchestration |
+| `src/client/App.tsx` | Root Ant Design providers and application rendering shell only |
+| `src/client/app/use-role-player-app-controller.ts` | Application state and typed composition of catalog, history, runtime, voice, lifecycle, and view props |
+| `src/client/app/AppRouteContent.tsx` | Route-level learner/admin/feedback/active-session rendering |
+| `src/client/realtime/use-realtime-session-runtime.ts` | Realtime/audio connection, server messages, interruption reconciliation, teardown, and recovery |
+| `src/client/realtime/use-realtime-settlement.ts` | Durable learner-turn and assistant-response acknowledgement waiters |
+| `src/client/session/use-conversation-lifecycle.ts` | Serialized start/restore/pause/continue/restart/end and route transitions |
+| `src/client/voice/use-voice-input-controller.ts` | Push-to-talk, long-recording, and free-conversation input orchestration |
+| `src/client/app/` | Localized error presentation, theme preference initialization, and development preview fixtures |
+| `src/client/components/GlobalUtilityHeader.tsx` | Shared semantic home button plus admin, locale, and theme controls |
+| `src/client/session/ActiveSessionView.tsx` | Four-region active-session layout, goals, transcript/free-conversation content |
+| `src/client/session/SessionHeader.tsx` | Persona/status, playback, download, pause, restart, and end controls |
+| `src/client/session/VoiceComposer.tsx` | Paused/continue, push-to-talk, long-recording, and free-conversation composer presentation |
 | `src/client/i18n/` | Locale initialization, translation selection, Ant Design locale, document language, and persistence |
 | `src/client/learner/LearnerLaunchPanel.tsx` | Searchable scenario/persona selection, compatibility, difficulty, summaries, and start action |
 | `src/client/admin/AdminConsole.tsx` | Searchable persona/scenario management tabs and CRUD entry points |
+| `src/client/admin/CatalogEntityCards.tsx` | Localized persona/scenario card presentation and card-level actions |
 | `src/client/admin/PersonaEditorDrawer.tsx` | Database-backed persona choices, legacy-value preservation, validation, and Instructions preview |
 | `src/client/admin/ScenarioEditorDrawer.tsx` | Scenario/compatibility/scoring form, validation, and Instructions preview |
 | `src/client/catalog/use-role-play-catalog.ts` | Catalog loading, mutations, errors, and immediate post-mutation refresh |
-| `src/client/conversations/` | History/feedback REST clients, shared desktop rail/mobile Drawer list, and feedback page |
+| `src/client/conversations/ConversationFeedbackPage.tsx` | Feedback loading, polling, retry/download/delete orchestration, and highlight lifetime |
+| `src/client/conversations/FeedbackReportContent.tsx` | Completed/pending/failed report sections, transcript, and review actions |
+| `src/client/conversations/feedback-presentation.ts` | Pure bilingual duration and stage-specific failure presentation |
+| `src/client/conversations/` | History REST clients plus shared desktop rail/mobile Drawer list |
 | `src/client/styles.css` | Responsive shell, chat bubbles, theme variables, safe-area handling, reduced motion |
 | `src/client/components/ConversationMessage.tsx` | User/assistant message presentation and metadata |
 | `src/client/components/VoiceWaveform.tsx` | Recording timer, level-reactive bars, cancellation instruction |

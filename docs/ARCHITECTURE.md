@@ -63,19 +63,21 @@ During development, Vite runs on port 5173 and proxies `/api` and `/ws` to Fasti
 
 ### `src/client`
 
-- `routing/` owns the native History API route contract for `/`, `/admin`, `/chat/:conversationId`, and `/feedback/:conversationId`; `App.tsx` synchronizes those routes with safe realtime-session transitions.
-- `App.tsx` owns session/UI state, catalog selection, the active-session configuration snapshot, and composition of learner, admin, and chat views.
+- `routing/` owns the native History API route contract for `/`, `/admin`, `/chat/:conversationId`, and `/feedback/:conversationId`; the application controller synchronizes those routes with safe realtime-session transitions.
+- `App.tsx` is intentionally only the root Ant Design provider and rendering shell. It must not accumulate session behavior again.
+- `app/use-role-player-app-controller.ts` owns application state and composes the catalog, history, realtime, voice-input, and lifecycle controllers into typed view props. `app/AppRouteContent.tsx` owns route-level rendering only; the remaining `app/` modules own localized error projection, theme preference initialization, and deterministic preview fixtures.
+- `session/use-conversation-lifecycle.ts` serializes start, restore, pause, continue, restart, end, and route changes around the durable settlement barrier. `session/` also owns shared session types/status labels, the four-region active layout, header controls, and the voice composer. Presentational components must not open sockets, capture audio, or persist messages themselves.
 - `learner/` owns the searchable scenario/persona selectors, compatibility-filtered launch summary, and per-launch difficulty selection.
 - `admin/` owns searchable catalog lists, database-backed persona/scenario preset selection, locale-specific create/edit drawers, validation feedback, compatibility editing, deletion controls, and live Instructions preview.
 - `catalog/` owns the JSON API client, catalog refresh lifecycle, pure bilingual display projection, and selection helpers. It contains no authored business catalog translations.
-- `conversations/` owns history/feedback REST calls, list lifecycle, the shared desktop-rail/mobile-Drawer navigation, and the responsive ended-session coaching page.
+- `conversations/` owns history/feedback REST calls, list lifecycle, the shared desktop-rail/mobile-Drawer navigation, and the responsive ended-session coaching page. Feedback loading/polling remains in `ConversationFeedbackPage`; report sections and pure failure/duration presentation live in focused sibling modules.
 - `i18n/` owns the English/Chinese preference, translation selection, Ant Design locale, document language, and `localStorage` persistence.
+- `components/GlobalUtilityHeader.tsx` renders the shared product/home, admin, locale, and theme controls without owning navigation or preference state.
 - `components/ConversationMessage.tsx` renders user/assistant chat rows.
 - `components/VoiceWaveform.tsx` renders microphone-level recording feedback.
-- `voice/press-to-talk-controller.ts` owns the asynchronous gesture state machine.
-- `voice/use-press-to-talk.ts` maps pointer and keyboard events onto that state machine.
+- `voice/press-to-talk-controller.ts` owns the asynchronous gesture state machine; `voice/use-press-to-talk.ts` maps pointer and keyboard events onto it. `voice/use-voice-input-controller.ts` coordinates push-to-talk, long recording, and free-conversation capture without owning the underlying realtime connection.
 - `audio/` owns microphone permission, AudioContext lifecycle, capture, conversion, and response-aware playback.
-- `realtime/` owns the browser side of the application WebSocket protocol.
+- `realtime/` owns the browser side of the application WebSocket protocol. `use-realtime-settlement.ts` owns user/assistant persistence waiters, while `use-realtime-session-runtime.ts` owns connection creation, server-message projection, playback reconciliation, teardown, and automatic recovery. Keep their acknowledgement ordering intact when extending either module.
 
 React components do not know the upstream Qwen event schema. They use the stable application protocol in `src/shared`.
 
@@ -181,7 +183,7 @@ Localized entity fields use unsuffixed English names and explicit Simplified Chi
 
 Compatibility is a many-to-many relationship with an explicit position per scenario. Scenario writes validate that every referenced persona exists and replace compatibility rows transactionally. Persona deletion is rejected while any scenario references it; scenario deletion cascades its compatibility rows.
 
-When the learner starts a session, `App.tsx` sends only `personaId`, `scenarioId`, the selected locale, and `Difficulty`. `POST /api/conversations` reloads both authoritative catalog records, validates compatibility, resolves every preset ID to bilingual text, stores that resolved snapshot, projects the selected locale on Node, and compiles Instructions with:
+When the learner starts a session, the application controller sends only `personaId`, `scenarioId`, the selected locale, and `Difficulty`. `POST /api/conversations` reloads both authoritative catalog records, validates compatibility, resolves every preset ID to bilingual text, stores that resolved snapshot, projects the selected locale on Node, and compiles Instructions with:
 
 ```ts
 compileRolePlayInstructions({ persona, scenario, difficulty, locale })
