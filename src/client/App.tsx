@@ -180,6 +180,7 @@ interface RuntimeMessageContext {
 interface RuntimeRecoveryRequest extends RuntimeMessageContext {
   error: UiError;
   notify?: boolean;
+  retryLastResponse?: boolean;
 }
 
 // A repair can legally spend up to 10 seconds in each of its terminal,
@@ -229,6 +230,10 @@ const KNOWN_CLIENT_ERRORS: Readonly<Record<string, LocalizedText>> = {
   "The realtime connection closed before pending conversation data was saved.": {
     en: "The realtime connection closed before pending conversation data was saved.",
     zh: "实时连接在待处理的对话数据保存前已关闭。",
+  },
+  "The realtime gateway returned a malformed message.": {
+    en: "The realtime gateway returned a malformed message.",
+    zh: "实时网关返回了格式异常的消息。",
   },
   "Could not send the assistant playback receipt.": {
     en: "Could not confirm how much of the AI response was played.",
@@ -308,6 +313,42 @@ const SERVER_ERROR_LABELS: Readonly<Record<string, LocalizedText>> = {
   RESPONSE_FAILED: {
     en: "The AI customer could not generate a response.",
     zh: "AI 客户无法生成回复。",
+  },
+  RESPONSE_RETRYING: {
+    en: "The AI response failed or was empty. Retrying once.",
+    zh: "AI 回复生成失败或内容为空，正在自动重试一次。",
+  },
+  EMPTY_RESPONSE: {
+    en: "The AI customer returned an empty response after retrying. Please speak again.",
+    zh: "AI 客户重试后仍返回空回复，请重新说一遍。",
+  },
+  RESPONSE_TIMEOUT: {
+    en: "The AI response timed out.",
+    zh: "等待 AI 回复超时。",
+  },
+  RESPONSE_REQUEST_REJECTED: {
+    en: "Qwen rejected the AI response request.",
+    zh: "Qwen 拒绝了本次 AI 回复请求。",
+  },
+  RESPONSE_RETRY_UNAVAILABLE: {
+    en: "The AI response cannot be retried while another turn is active.",
+    zh: "当前仍有一轮对话正在处理，暂时无法重试 AI 回复。",
+  },
+  NO_RESPONSE_TO_RETRY: {
+    en: "There is no unanswered saved user turn to retry.",
+    zh: "没有已保存但尚未回答的用户发言可供重试。",
+  },
+  QWEN_SERVER_ERROR: {
+    en: "Qwen reported a server-side error.",
+    zh: "Qwen 服务端发生错误。",
+  },
+  MALFORMED_UPSTREAM_EVENT: {
+    en: "Qwen returned a malformed realtime event.",
+    zh: "Qwen 返回了格式异常的实时事件。",
+  },
+  INPUT_CLEAR_FAILED: {
+    en: "The cancelled recording could not be cleared safely.",
+    zh: "无法安全清除已取消的录音。",
   },
   UNKNOWN_RESPONSE: {
     en: "The playback response is no longer active.",
@@ -1213,6 +1254,7 @@ export function App() {
             message.responseId,
             true,
           );
+          runtimeRecoveryConsumedRef.current = false;
           void refreshConversationHistorySilently();
           break;
         }
@@ -1268,6 +1310,16 @@ export function App() {
         }
 
         case "error": {
+          const retryLastResponse =
+            message.code !== "TRANSCRIPTION_FAILED" &&
+            (message.code === "RESPONSE_TIMEOUT" ||
+              message.code === "RESPONSE_REQUEST_REJECTED" ||
+              message.code === "QWEN_SERVER_ERROR" ||
+              message.code === "MALFORMED_UPSTREAM_EVENT" ||
+              message.code === "UPSTREAM_CLOSED" ||
+              activeResponseIdRef.current !== undefined ||
+              pendingAssistantResponseIdRef.current !== undefined ||
+              userCommitPendingRef.current);
           if (message.code === "PLAYBACK_BACKPRESSURE") {
             const responseId = activeResponseIdRef.current;
             if (responseId) {
@@ -1332,6 +1384,7 @@ export function App() {
                     ...context,
                     error: displayError,
                     notify: false,
+                    retryLastResponse,
                   })
                 : false;
               if (!queued) {
@@ -1345,6 +1398,12 @@ export function App() {
             } else {
               void teardownSessionRuntime();
             }
+          } else if (
+            message.code === "EMPTY_RESPONSE" ||
+            message.code === "RESPONSE_FAILED" ||
+            message.code === "NO_RESPONSE_TO_RETRY"
+          ) {
+            runtimeRecoveryConsumedRef.current = false;
           }
           break;
         }
@@ -1501,6 +1560,28 @@ export function App() {
     const isCurrentRuntime = () =>
       componentMountedRef.current && runtimeEpochRef.current === runtimeEpoch;
     let realtime: RealtimeClient | undefined;
+    const recoverAfterLocalRuntimeFailure = (
+      error: UiError,
+      retryLastResponse: boolean,
+    ) => {
+      if (!isCurrentRuntime()) return;
+      if (!conversationStartedRef.current) {
+        reportContextualError(error);
+        return;
+      }
+      const queued = queueRuntimeRecovery({
+        conversationId: conversation.id,
+        runtimeEpoch,
+        error,
+        retryLastResponse,
+      });
+      if (!queued) {
+        showSessionError(error);
+        void teardownSessionRuntime(true, true);
+        setRuntimeRecoveryFailed(true);
+        setSessionState("ended");
+      }
+    };
     stageConversationView(conversation);
 
     await cleanupPromiseRef.current;
@@ -1531,10 +1612,10 @@ export function App() {
           }
           realtime.sendAudio(buffer);
         } catch (error) {
-          reportContextualError(readableError(error));
-          void audio.cancelCapture();
-          recordingRef.current = false;
-          setIsRecording(false);
+          recoverAfterLocalRuntimeFailure(
+            readableError(error),
+            userCommitPendingRef.current,
+          );
         }
       },
       onInputLevel: (level) => {
@@ -1565,7 +1646,12 @@ export function App() {
         tryFinalizeAssistant(responseId);
       },
       onError: (error) => {
-        if (isCurrentRuntime()) reportContextualError(readableError(error));
+        recoverAfterLocalRuntimeFailure(
+          readableError(error),
+          activeResponseIdRef.current !== undefined ||
+            pendingAssistantResponseIdRef.current !== undefined ||
+            userCommitPendingRef.current,
+        );
       },
       onCaptureSettings: (settings) => {
         // This contains only effective processing flags/sample shape, never a
@@ -1595,21 +1681,25 @@ export function App() {
         onAudio: (responseId, buffer) => {
           if (!isCurrentRuntime() || realtimeRef.current !== realtime) return;
           void audio.enqueuePcm24(responseId, buffer).catch((error: unknown) => {
-            if (isCurrentRuntime()) {
-              reportContextualError(readableError(error));
-            }
+            recoverAfterLocalRuntimeFailure(readableError(error), true);
           });
         },
         onMalformedMessage: () => {
           if (!isCurrentRuntime() || realtimeRef.current !== realtime) return;
-          reportContextualError({
-            en: "The server returned an unrecognized realtime message.",
-            zh: "服务端返回了无法识别的实时消息。",
-          });
+          recoverAfterLocalRuntimeFailure(
+            {
+              en: "The realtime gateway returned a malformed message.",
+              zh: "实时网关返回了格式异常的消息。",
+            },
+            activeResponseIdRef.current !== undefined ||
+              pendingAssistantResponseIdRef.current !== undefined ||
+              userCommitPendingRef.current,
+          );
         },
         onClose: (event) => {
           if (!isCurrentRuntime() || realtimeRef.current !== realtime) return;
           void refreshConversationHistorySilently();
+          const retryLastResponse = true;
           const closeError: LocalizedText = {
             en: `The realtime connection closed unexpectedly (${event.code}).`,
             zh: `实时连接意外关闭（${event.code}）。`,
@@ -1636,6 +1726,7 @@ export function App() {
               conversationId: conversation.id,
               runtimeEpoch,
               error: closeError,
+              retryLastResponse,
             });
             if (!queued) {
               showSessionError(closeError);
@@ -1719,6 +1810,9 @@ export function App() {
       await teardownSessionRuntime(true, true);
       recoveryEpoch = runtimeEpochRef.current;
       const conversation = await loadConversation(request.conversationId);
+      const shouldRetryLastResponse =
+        request.retryLastResponse === true &&
+        conversation.messages.at(-1)?.role === "user";
       if (!componentMountedRef.current) return;
       if (runtimeEpochRef.current !== recoveryEpoch) {
         if (
@@ -1733,16 +1827,20 @@ export function App() {
       }
       activationStarted = true;
       await activateConversation(conversation);
-      const recoveredEpoch = runtimeEpochRef.current;
-      runtimeRecoveryStabilityTimerRef.current = window.setTimeout(() => {
-        if (
-          runtimeEpochRef.current === recoveredEpoch &&
-          sessionEstablishedRef.current
-        ) {
-          runtimeRecoveryConsumedRef.current = false;
-        }
-        runtimeRecoveryStabilityTimerRef.current = undefined;
-      }, RUNTIME_RECOVERY_STABILITY_MS);
+      if (shouldRetryLastResponse) {
+        realtimeRef.current?.retryResponse();
+      } else {
+        const recoveredEpoch = runtimeEpochRef.current;
+        runtimeRecoveryStabilityTimerRef.current = window.setTimeout(() => {
+          if (
+            runtimeEpochRef.current === recoveredEpoch &&
+            sessionEstablishedRef.current
+          ) {
+            runtimeRecoveryConsumedRef.current = false;
+          }
+          runtimeRecoveryStabilityTimerRef.current = undefined;
+        }, RUNTIME_RECOVERY_STABILITY_MS);
+      }
     } catch (error) {
       if (
         !componentMountedRef.current ||
@@ -1797,6 +1895,7 @@ export function App() {
         zh: "语音连接当前不可用。",
       },
       notify: false,
+      retryLastResponse: true,
     });
     if (queued) messageApi.destroy(SESSION_ERROR_MESSAGE_KEY);
   }, [activeConversationId, messageApi, queueRuntimeRecovery]);

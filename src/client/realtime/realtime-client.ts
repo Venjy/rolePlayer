@@ -91,6 +91,17 @@ export class RealtimeClient {
       };
       this.abortPendingConnection = abortThisConnection;
 
+      const handleMalformedMessage = () => {
+        const error = new Error(
+          "The realtime gateway returned a malformed message.",
+        );
+        this.handlers.onMalformedMessage();
+        if (!settled) {
+          abortThisConnection(error);
+          socket.close(1002, "Malformed realtime message");
+        }
+      };
+
       socket.onopen = () => {
         this.send({
           type: "session.configure",
@@ -107,7 +118,7 @@ export class RealtimeClient {
         }
 
         if (typeof event.data !== "string") {
-          this.handlers.onMalformedMessage();
+          handleMalformedMessage();
           return;
         }
 
@@ -115,13 +126,13 @@ export class RealtimeClient {
         try {
           value = JSON.parse(event.data);
         } catch {
-          this.handlers.onMalformedMessage();
+          handleMalformedMessage();
           return;
         }
 
         const parsed = serverMessageSchema.safeParse(value);
         if (!parsed.success) {
-          this.handlers.onMalformedMessage();
+          handleMalformedMessage();
           return;
         }
 
@@ -237,6 +248,10 @@ export class RealtimeClient {
 
   public cancelResponse(): void {
     this.send({ type: "response.cancel" });
+  }
+
+  public retryResponse(): void {
+    this.send({ type: "response.retry" });
   }
 
   public completePlayback(responseId: string): void {

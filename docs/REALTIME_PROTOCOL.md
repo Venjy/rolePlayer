@@ -106,11 +106,16 @@ socket is not resumed. Node performs this ordered handshake:
    sending the next item.
 5. Emit `session.ready` only after every history item is acknowledged.
 
-Restoration never sends `response.create`, so reconnecting cannot make the model
-answer old text. With no persisted messages, readiness follows
-`session.updated` as before. An upstream error, close, or acknowledgement timeout
-during restoration fails configuration rather than starting with partial
-context; timeout handling also terminates the upstream socket.
+Ordinary history restoration never sends `response.create`, so opening an old
+chat cannot unexpectedly make the model answer old text. One exception is a
+serialized recovery of an interrupted model/service request: after the fresh
+session reaches `session.ready`, the browser may send `response.retry`. Node
+accepts it only when SQLite confirms that the latest finalized message is an
+unanswered user turn, then requests one new response without recommitting audio.
+With no persisted messages, readiness follows `session.updated` as before. An
+upstream error, close, or acknowledgement timeout during restoration fails
+configuration rather than starting with partial context; timeout handling also
+terminates the upstream socket.
 
 ### Start input
 
@@ -180,6 +185,19 @@ This cancels the latest response with no trusted playback duration. It is a
 fallback for a response that has not exposed a `responseId` to the browser yet;
 its retained transcript is therefore treated as zero-confidence. Once the
 browser knows the response ID, it uses `playback.interrupted` instead.
+
+### Retry an unanswered finalized user turn
+
+```json
+{ "type": "response.retry" }
+```
+
+This message exists only for runtime recovery. The browser sends it after a
+fresh replacement socket has restored SQLite history and reached
+`session.ready`. The gateway reloads the conversation and rejects the request
+unless its latest finalized message has role `user`; the browser therefore
+cannot create duplicate assistant turns after a completed exchange. Node maps
+an accepted request to `response.create` only—never to another audio commit.
 
 ### Playback completed
 
@@ -449,7 +467,37 @@ unheard assistant suffix.
 }
 ```
 
-Unknown Qwen events are ignored. Malformed application events are rejected. A Qwen `server_error`, upstream close, failed/empty finalized user transcription, or authoritative SQLite write failure ends the current browser connection. Continuing on that same Qwen context after transcription failure could persist an assistant without the user turn that prompted it, so the failed socket is never reused.
+Unknown Qwen event types are ignored for forward compatibility. Known Qwen
+events are validated for the correlation IDs, status, transcript, and delta
+fields consumed by the adapter; invalid JSON or a malformed known event fails
+the session instead of leaving a state-machine promise pending. Malformed
+browser application events are rejected. A Qwen `server_error`, upstream close,
+failed/empty finalized user transcription, authoritative SQLite write failure,
+or unsafe protocol payload ends the current browser connection. Continuing on
+that same Qwen context after transcription failure could persist an assistant
+without the user turn that prompted it, so the failed socket is never reused.
+
+Each response request has two watchdogs. Qwen must emit `response.created`
+within 30 seconds, and an active response must produce another recognized
+progress event at least every 30 seconds. The progress deadline is refreshed by
+assistant item, transcript, audio, and terminal-part events, so it does not cap
+the total length of a healthy streaming answer. The 30-second value matches the
+bounded wait used by Alibaba Cloud's current push-to-talk example while avoiding
+a hard duration limit on a long response.
+
+For a terminal `failed` response, malformed PCM, an inactivity timeout, or a
+nominally `completed` response missing either non-empty transcript text or
+playable audio, Node suppresses further output and uses the same delete/rollback
+repair barrier as an interruption. After Qwen confirms the failed assistant item
+is absent from context, Node calls `response.create` once more for the same
+committed user turn. The audio is never recommitted. If the second response also
+fails or is empty, Node cleans it up, reports a recoverable, specific error, and
+returns to ready so the learner can speak again. If the first request never
+reaches `response.created`, or the Qwen service/socket itself becomes uncertain,
+the browser performs its existing one-shot fresh-session rebuild; after history
+restoration it requests the unanswered saved user turn once through
+`response.retry`. A failed replacement remains on the chat surface with the
+manual reconnect action rather than looping indefinitely.
 
 The browser treats transport severity and UI navigation as separate concerns.
 If the visible conversation has never reached `session.ready`, an error fails
@@ -487,6 +535,9 @@ conversation.item.deleted
 response.audio_transcript.delta
 response.audio_transcript.done
 response.audio.delta
+response.audio.done
+response.content_part.done
+response.output_item.done
 response.done
 error
 ```

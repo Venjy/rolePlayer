@@ -75,6 +75,10 @@ describe("realtime protocol", () => {
 
   it("validates playback receipts and reconciliation events", () => {
     expect(
+      clientControlMessageSchema.parse({ type: "response.retry" }),
+    ).toEqual({ type: "response.retry" });
+
+    expect(
       clientControlMessageSchema.parse({
         type: "playback.interrupted",
         responseId: "resp_1",

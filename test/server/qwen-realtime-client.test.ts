@@ -73,6 +73,7 @@ function createClient(
       onEvent: vi.fn(),
       onClose: vi.fn(),
       onMalformedEvent: vi.fn(),
+      onProtocolError: vi.fn(),
     },
     socketFactory,
   );
@@ -127,6 +128,7 @@ describe("QwenRealtimeClient", () => {
         onEvent,
         onClose: vi.fn(),
         onMalformedEvent: vi.fn(),
+        onProtocolError: vi.fn(),
       },
       socketFactory,
     );
@@ -273,7 +275,10 @@ describe("QwenRealtimeClient", () => {
 
     socket.emitJson({
       type: "error",
-      error: { message: "History item was rejected." },
+      error: {
+        type: "invalid_request_error",
+        message: "History item was rejected.",
+      },
     });
 
     await expect(connection).rejects.toThrow("History item was rejected.");
@@ -305,5 +310,73 @@ describe("QwenRealtimeClient", () => {
     await vi.advanceTimersByTimeAsync(15_000);
     await rejection;
     expect(socket.readyState).toBe(WebSocket.CLOSED);
+  });
+
+  it("rejects a malformed known event during configuration without waiting for timeout", async () => {
+    const socket = new FakeQwenSocket();
+    const onMalformedEvent = vi.fn();
+    const client = new QwenRealtimeClient(
+      {
+        apiKey: "test-secret",
+        endpoint: "ws://qwen.example/realtime",
+        model: "qwen-audio-3.0-realtime-plus",
+        workspaceId: undefined,
+      },
+      {
+        onEvent: vi.fn(),
+        onClose: vi.fn(),
+        onMalformedEvent,
+        onProtocolError: vi.fn(),
+      },
+      () => socket as unknown as WebSocket,
+    );
+    const connection = client.connect(sessionConfiguration);
+
+    socket.emitJson({ type: "session.created", session: {} });
+
+    await expect(connection).rejects.toThrow(
+      "session.created is missing session.id.",
+    );
+    expect(onMalformedEvent).toHaveBeenCalledWith(
+      expect.any(String),
+      "session.created is missing session.id.",
+    );
+  });
+
+  it("reports malformed known runtime events but preserves unknown event compatibility", async () => {
+    const socket = new FakeQwenSocket();
+    const onEvent = vi.fn();
+    const onProtocolError = vi.fn();
+    const client = new QwenRealtimeClient(
+      {
+        apiKey: "test-secret",
+        endpoint: "ws://qwen.example/realtime",
+        model: "qwen-audio-3.0-realtime-plus",
+        workspaceId: undefined,
+      },
+      {
+        onEvent,
+        onClose: vi.fn(),
+        onMalformedEvent: vi.fn(),
+        onProtocolError,
+      },
+      createSocketFactory(socket),
+    );
+    await client.connect(sessionConfiguration);
+
+    socket.emitJson({ type: "provider.future_event", data: { version: 2 } });
+    expect(onEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: "provider.future_event" }),
+    );
+    expect(onProtocolError).not.toHaveBeenCalled();
+
+    socket.emitJson({
+      type: "response.done",
+      response: { id: "resp_broken" },
+    });
+    expect(onProtocolError).toHaveBeenCalledWith(
+      "response.done has an invalid response.id or status.",
+    );
+    client.close();
   });
 });

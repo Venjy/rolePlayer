@@ -83,6 +83,7 @@ export async function registerRealtimeGateway(
     const connectionToken = Symbol("realtime-connection");
     let connectedConversationId: number | undefined;
     let browserClosed = false;
+    let upstreamClosureExpected = false;
     let configureStarted = false;
     let successDetected = false;
     let successAssessmentQueue = Promise.resolve();
@@ -164,14 +165,17 @@ export async function registerRealtimeGateway(
 
         qwen = new QwenRealtimeClient(getQwenConfig(), {
           onEvent: (event) => controller?.handleQwenEvent(event),
-          onMalformedEvent: (raw) => {
+          onMalformedEvent: (raw, reason) => {
             request.log.warn(
-              { payloadLength: raw.length },
-              "Ignoring malformed Qwen event",
+              { payloadLength: raw.length, reason },
+              "Qwen returned a malformed known event",
             );
           },
+          onProtocolError: (message) => {
+            controller?.failUpstreamProtocol(message);
+          },
           onClose: (code, reason) => {
-            if (browserClosed) return;
+            if (browserClosed || upstreamClosureExpected) return;
             sendError(
               "UPSTREAM_CLOSED",
               `The Qwen connection closed (${code}${reason ? `: ${reason}` : ""}).`,
@@ -258,6 +262,7 @@ export async function registerRealtimeGateway(
               });
           },
           closeWithError: () => {
+            upstreamClosureExpected = true;
             qwen?.close();
             if (browser.readyState === WebSocket.OPEN) {
               browser.close(1011, "Context repair failed");
@@ -297,6 +302,7 @@ export async function registerRealtimeGateway(
         sendError("SESSION_CONFIGURATION_FAILED", errorMessage, false);
         send({ type: "session.state", state: "ended" });
         browserClosed = true;
+        upstreamClosureExpected = true;
         qwen?.close();
         if (browser.readyState === WebSocket.OPEN) {
           browser.close(1011, "Session configuration failed");
@@ -334,6 +340,21 @@ export async function registerRealtimeGateway(
         return;
       }
 
+      if (message.type === "response.retry") {
+        const conversationId = connectedConversationId;
+        const current = conversationId === undefined
+          ? null
+          : conversations.getConversation(conversationId);
+        if (current?.messages.at(-1)?.role !== "user") {
+          sendError(
+            "NO_RESPONSE_TO_RETRY",
+            "There is no unanswered saved user turn to retry.",
+            true,
+          );
+          return;
+        }
+      }
+
       controller.handleControl(message);
     };
 
@@ -362,6 +383,7 @@ export async function registerRealtimeGateway(
 
     browser.on("close", () => {
       browserClosed = true;
+      upstreamClosureExpected = true;
       successAssessmentAbort.abort();
       controller?.dispose();
       qwen?.close();

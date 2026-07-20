@@ -90,6 +90,10 @@ React components do not know the upstream Qwen event schema. They use the stable
 - input validation and audio frame limits;
 - Qwen authentication and WebSocket lifecycle;
 - translation between application messages and Qwen events;
+- structural validation for every consumed Qwen event while ignoring unknown
+  future event types;
+- 30-second response-start and streaming-progress watchdogs plus one bounded,
+  context-repaired retry for failed, empty, or malformed-audio responses;
 - suppression of late audio after cancellation;
 - completed-response speech-rate samples;
 - interrupted assistant-item reconciliation;
@@ -196,6 +200,27 @@ serialized same-conversation rebuild from finalized SQLite text. Runtime epochs 
 callbacks harmless. A failed rebuild leaves the durable chat surface open with
 the composer changed to a manual reconnect action; only a connection that has
 never been ready returns to the launcher.
+
+Response failures have a narrower first line of recovery than socket failures.
+When Qwen returns `failed`, a completed response lacks either transcript or
+audio, PCM is malformed, or streaming makes no progress for 30 seconds, Node
+suppresses the failed output, deletes its assistant item through the normal
+context-repair acknowledgement barrier, and issues one more `response.create`
+for the same already-committed user item. It never recommits microphone audio.
+A second failed/empty attempt is cleaned up and reported as recoverable so the
+learner can speak again. Waiting for the initial `response.created` also has a
+30-second deadline; because a missing acknowledgement leaves upstream state
+uncertain, that path uses the fresh-session recovery instead of sending a
+possibly duplicate request on the old socket.
+
+When a fatal service/socket failure occurs after the learner turn is already
+durable, the replacement session restores SQLite text first. The browser then
+sends `response.retry`; the gateway accepts it only if the latest persisted
+message is still an unanswered user turn. This makes the visible retry useful
+without causing ordinary history navigation to generate new speech. A response
+retry failure does not recursively reconnect forever: the current fault chain
+remains consumed until an assistant response is persisted, and a second fatal
+failure exposes the existing manual reconnect action.
 
 The conversation repository stores the exact snapshot in normalized snapshot tables together with compiled text and selected voice. Browser `session.configure` sends only the durable conversation ID and a bounded history-turn limit. Node selects that recent user-turn window in SQLite, reloads the stored Instructions/voice, opens a new Qwen WebSocket, and injects the finalized user/assistant text with `conversation.item.create`. It emits `session.ready` only after Qwen acknowledges every injected item. This is semantic text-context restoration, not revival of an expired Qwen session; original audio tone/emotion is not restored. The active snapshot also supplies the persona name shown in chat, and later catalog edits affect only new conversations.
 
@@ -360,6 +385,8 @@ Recommended additions, in order:
 3. define automatic retention rules and ownership-aware deletion for a future authenticated deployment;
 4. add structured post-session evaluation with a text model;
 5. add catalog audit/version history and tenant ownership when product requirements require them;
-6. add bounded retry/backoff and offline-state controls on top of the current one-shot same-conversation runtime recovery;
+6. add network-aware exponential backoff and an explicit offline state on top
+   of the current bounded response retry and one-shot same-conversation runtime
+   recovery;
 7. add metrics, rate limiting, quotas, and cost controls;
 8. add production static serving and a single Docker image with persistent SQLite storage.

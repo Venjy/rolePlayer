@@ -189,6 +189,7 @@ Use `--interrupt-during-generation` to exercise the cancellation path. With no t
 - Response-aware playback receipts and best-effort interrupted-response reconciliation
 - Separate SQLite catalog/conversation files, Fastify lifecycle ownership, rollback-journal transactions without persistent WAL/SHM sidecars, foreign keys, busy timeout, append-only migrations, durable catalog CRUD, and an explicit transactional/idempotent catalog initializer
 - Phase-aware error handling: a first-time startup failure returns to the launcher; once ready, the chat stays visible, errors use a five-second Ant Design message at the top, fatal failures rebuild safely from finalized SQLite text, and a failed rebuild can be retried from the composer
+- Bounded realtime response recovery: 30-second start/progress watchdogs, validation of consumed Qwen events, one context-cleaned retry for failed/empty/malformed-audio AI turns, and recovery-time retry of an unanswered finalized learner turn without recommitting audio
 
 ## Persistence status
 

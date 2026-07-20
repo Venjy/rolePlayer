@@ -160,6 +160,25 @@ connection that never became ready falls back to the launcher. Recovery is
 guarded by both the runtime epoch and component lifetime, so a stale load cannot
 open a socket after navigation or unmount.
 
+Model response failures are bounded before escalating to that socket recovery.
+If an AI turn fails, stalls for 30 seconds without a recognized progress event,
+contains malformed PCM, or completes without both transcript and playable
+audio, the current draft/playback is discarded and a five-second message says
+that one automatic retry is in progress. Node first removes the failed assistant
+item from Qwen context, then requests one replacement without resending learner
+audio. If the replacement also fails or is empty, a specific five-second error
+asks the learner to speak again and the composer returns to ready. A service or
+connection failure rebuilds the socket once; if SQLite contains the unanswered
+learner turn, the replacement connection retries it after restoration. It does
+not loop on repeated failure, and the existing manual reconnect action remains
+the final fallback.
+
+Malformed gateway messages after readiness and local microphone/playback engine
+failures use the same serialized runtime recovery instead of leaving a draft,
+playback queue, or processing indicator stuck. A malformed message received
+before first readiness rejects startup immediately. Unknown future Qwen event
+types remain intentionally invisible to the UI.
+
 ## Hold-to-talk contract
 
 The primary control is a hold gesture, not a click/toggle recorder. It supports mouse, touch, pen, Space, and Enter.
@@ -333,8 +352,19 @@ For layout-only work, `?preview=session`, `?preview=paused`, `?preview=recording
 21. Release immediately after pressing or submit silence; confirm the active chat remains visible, an Ant Design error message appears at the top and disappears after five seconds, and input becomes available again—directly for a recoverable short-input error or after the same-conversation rebuild for failed transcription.
 22. Force a pre-`session.ready` configuration failure and confirm the partial chat never opens: the app returns to the launcher and shows the startup error there.
 23. After a session has become ready, force both its runtime connection and the automatic replacement connection to fail; confirm the chat remains visible, the top error message disappears after five seconds, and the composer becomes **Retry voice connection** and can restore the same conversation. Confirm the header's end-session action still requires confirmation.
-24. Complete at least two spoken turns and download audio, text, and both. Confirm the MP3 is a single alternating-speaker timeline, the ZIP contains one MP3 and one TXT, and a text-only historical conversation disables audio choices. Interrupt an assistant mid-sentence and confirm neither export contains its unheard text or audio suffix.
-25. End a conversation, open its feedback route, and choose **Try again**. Confirm the app creates a different conversation ID with the same scenario, persona, and difficulty, opens its chat route, and does not copy the old transcript.
-26. End another conversation while feedback is still generating, delete it through the bottom confirmation, and confirm its history item, direct feedback route, transcript/audio, and eventual feedback result are all gone. Confirm active conversations cannot be deleted through the API.
-27. Click multiple highlighted moments, including the same moment twice, and confirm each target transcript row scrolls to the center, pulses visibly in both themes, and clears after about two seconds. With reduced motion enabled, confirm the target uses a temporary static highlight instead.
-28. End one conversation with at least three finalized learner turns and confirm the completed report contains at least three distinct clickable moments. End another after only one short learner turn (for example, “hello”) and confirm the report still completes, the moments card explains in the current UI language why three moments cannot be generated, and no duplicate or invented cards appear.
+24. Force `response.failed`, a completed response with no transcript/audio, and
+    a 30-second response-progress stall. Confirm each failed draft/audio queue is
+    removed, one retry message appears, the same learner audio is not committed
+    twice, and a successful retry persists exactly one assistant turn. Force the
+    retry to fail as well and confirm a specific message appears and the composer
+    returns to ready without a retry loop.
+25. Force a malformed known Qwen event and a malformed gateway message both
+    before and after first readiness. Confirm startup fails immediately in the
+    first case; in the second case the durable chat remains visible and uses the
+    bounded recovery/manual-reconnect flow. Confirm an unknown Qwen event type is
+    ignored.
+26. Complete at least two spoken turns and download audio, text, and both. Confirm the MP3 is a single alternating-speaker timeline, the ZIP contains one MP3 and one TXT, and a text-only historical conversation disables audio choices. Interrupt an assistant mid-sentence and confirm neither export contains its unheard text or audio suffix.
+27. End a conversation, open its feedback route, and choose **Try again**. Confirm the app creates a different conversation ID with the same scenario, persona, and difficulty, opens its chat route, and does not copy the old transcript.
+28. End another conversation while feedback is still generating, delete it through the bottom confirmation, and confirm its history item, direct feedback route, transcript/audio, and eventual feedback result are all gone. Confirm active conversations cannot be deleted through the API.
+29. Click multiple highlighted moments, including the same moment twice, and confirm each target transcript row scrolls to the center, pulses visibly in both themes, and clears after about two seconds. With reduced motion enabled, confirm the target uses a temporary static highlight instead.
+30. End one conversation with at least three finalized learner turns and confirm the completed report contains at least three distinct clickable moments. End another after only one short learner turn (for example, “hello”) and confirm the report still completes, the moments card explains in the current UI language why three moments cannot be generated, and no duplicate or invented cards appear.

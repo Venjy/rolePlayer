@@ -3,8 +3,11 @@ import WebSocket, { type RawData } from "ws";
 import type { QwenConfig } from "../config";
 import type {
   QwenConversationHistoryItem,
-  QwenServerEvent,
   QwenSessionConfiguration,
+} from "./qwen-types";
+import {
+  parseQwenServerEvent,
+  type QwenServerEvent,
 } from "./qwen-types";
 
 const CONNECTION_TIMEOUT_MS = 15_000;
@@ -12,7 +15,8 @@ const CONNECTION_TIMEOUT_MS = 15_000;
 export interface QwenRealtimeClientHandlers {
   onEvent: (event: QwenServerEvent) => void;
   onClose: (code: number, reason: string) => void;
-  onMalformedEvent: (raw: string) => void;
+  onMalformedEvent: (raw: string, reason: string) => void;
+  onProtocolError: (message: string) => void;
 }
 
 export type QwenSocketFactory = (
@@ -137,14 +141,26 @@ export class QwenRealtimeClient {
 
       this.socket.on("message", (data: RawData) => {
         const raw = data.toString();
-        let event: QwenServerEvent;
+        let value: unknown;
 
         try {
-          event = JSON.parse(raw) as QwenServerEvent;
+          value = JSON.parse(raw) as unknown;
         } catch {
-          this.handlers.onMalformedEvent(raw);
+          const reason = "Qwen returned invalid JSON.";
+          this.handlers.onMalformedEvent(raw, reason);
+          if (!settled) settleWithError(new Error(reason));
+          else this.handlers.onProtocolError(reason);
           return;
         }
+
+        const parsed = parseQwenServerEvent(value);
+        if (!parsed.success) {
+          this.handlers.onMalformedEvent(raw, parsed.reason);
+          if (!settled) settleWithError(new Error(parsed.reason));
+          else this.handlers.onProtocolError(parsed.reason);
+          return;
+        }
+        const event = parsed.event;
 
         if (event.type === "session.created") {
           sessionId = event.session?.id ?? "unknown";
@@ -233,6 +249,11 @@ export class QwenRealtimeClient {
   public commitAudioAndCreateResponse(): void {
     this.assertReady();
     this.send({ type: "input_audio_buffer.commit" });
+    this.createResponse();
+  }
+
+  public createResponse(): void {
+    this.assertReady();
     this.send({
       type: "response.create",
       response: { modalities: ["audio", "text"] },

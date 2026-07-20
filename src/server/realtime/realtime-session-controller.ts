@@ -15,6 +15,9 @@ import {
 const REPAIR_TIMEOUT_MS = 10_000;
 const USER_TRANSCRIPTION_TIMEOUT_MS = 30_000;
 const INPUT_CLEAR_TIMEOUT_MS = 5_000;
+const RESPONSE_START_TIMEOUT_MS = 30_000;
+const RESPONSE_PROGRESS_TIMEOUT_MS = 30_000;
+const MAX_RESPONSE_ATTEMPTS = 2;
 // Keep a single long turn from consuming the process indefinitely. A turn that
 // crosses this boundary remains usable in realtime, but its audio is omitted so
 // the conversation cannot be advertised as a complete audio download.
@@ -52,13 +55,22 @@ interface ResponseRecord {
   userTurn?: UserTurnPersistence;
   waitingForUserPersistence?: boolean;
   successAssessmentRequested?: boolean;
+  timeout?: NodeJS.Timeout;
 }
 
 interface UserTurnPersistence {
   status: "pending" | "persisted";
+  responseAttempts: number;
   itemId?: string;
   audio?: Buffer;
   timeout?: NodeJS.Timeout;
+}
+
+interface ResponseFailureContinuation {
+  action: "retry" | "give_up";
+  userTurn: UserTurnPersistence;
+  code: "EMPTY_RESPONSE" | "RESPONSE_FAILED" | "RESPONSE_TIMEOUT";
+  message: string;
 }
 
 interface RepairJob {
@@ -71,6 +83,7 @@ interface RepairJob {
   estimate?: PrefixEstimate;
   originalItemId?: string;
   replacementItemId?: string;
+  afterRepair?: ResponseFailureContinuation;
   timeout?: NodeJS.Timeout;
 }
 
@@ -132,6 +145,7 @@ export class RealtimeSessionController {
   private inputClearTimeout?: NodeJS.Timeout;
   private pendingCommit = false;
   private awaitingResponseCreation = false;
+  private responseCreationTimeout?: NodeJS.Timeout;
   private cancelWhenResponseCreated = false;
   private activeGenerationResponseId?: string;
   private lastSentState?: SessionState;
@@ -162,6 +176,9 @@ export class RealtimeSessionController {
       case "input.clear":
         this.clearInput();
         break;
+      case "response.retry":
+        this.retryPersistedUserResponse();
+        break;
       case "response.cancel":
         this.interruptLatestResponse();
         break;
@@ -172,6 +189,10 @@ export class RealtimeSessionController {
         this.interruptResponse(message.responseId, message.safePlayedMs);
         break;
     }
+  }
+
+  public failUpstreamProtocol(message: string): void {
+    this.terminateWithError("MALFORMED_UPSTREAM_EVENT", message);
   }
 
   public appendAudio(pcm: Buffer): void {
@@ -194,7 +215,10 @@ export class RealtimeSessionController {
       }
     } catch (error) {
       this.handlers.error(error, "Failed to forward browser audio");
-      this.sendError("AUDIO_FORWARD_FAILED", "Could not forward microphone audio.", true);
+      this.terminateWithError(
+        "AUDIO_FORWARD_FAILED",
+        "Could not forward microphone audio.",
+      );
     }
   }
 
@@ -238,6 +262,7 @@ export class RealtimeSessionController {
         break;
 
       case "response.audio_transcript.delta":
+      case "response.text.delta":
         this.handleAssistantTranscriptDelta(event);
         break;
 
@@ -245,8 +270,18 @@ export class RealtimeSessionController {
         this.handleAssistantTranscriptDone(event);
         break;
 
+      case "response.text.done":
+        this.handleAssistantTextDone(event);
+        break;
+
       case "response.audio.delta":
         this.handleAssistantAudio(event);
+        break;
+
+      case "response.audio.done":
+      case "response.content_part.done":
+      case "response.output_item.done":
+        this.touchResponseForEvent(event);
         break;
 
       case "response.done":
@@ -264,12 +299,16 @@ export class RealtimeSessionController {
 
   public dispose(): void {
     if (this.repair?.timeout) clearTimeout(this.repair.timeout);
+    if (this.responseCreationTimeout) clearTimeout(this.responseCreationTimeout);
     if (this.pendingUserTurn?.timeout) {
       clearTimeout(this.pendingUserTurn.timeout);
     }
     if (this.inputClearTimeout) clearTimeout(this.inputClearTimeout);
     this.resetInputAudioCapture();
-    for (const response of this.responses.values()) response.audioChunks = [];
+    for (const response of this.responses.values()) {
+      if (response.timeout) clearTimeout(response.timeout);
+      response.audioChunks = [];
+    }
   }
 
   private startInput(): void {
@@ -311,7 +350,16 @@ export class RealtimeSessionController {
 
     this.inputActive = false;
     if (this.inputBytes < INPUT_CHUNK_BYTES) {
-      this.qwen.clearAudio();
+      try {
+        this.qwen.clearAudio();
+      } catch (error) {
+        this.handlers.error(error, "Failed to clear a too-short user recording");
+        this.terminateWithError(
+          "INPUT_CLEAR_FAILED",
+          "Could not clear the too-short recording from Qwen.",
+        );
+        return;
+      }
       this.resetInputAudioCapture();
       this.sendError(
         "RECORDING_TOO_SHORT",
@@ -368,6 +416,7 @@ export class RealtimeSessionController {
       : undefined;
     const userTurn: UserTurnPersistence = {
       status: "pending",
+      responseAttempts: 0,
       ...(userAudio ? { audio: userAudio } : {}),
     };
     this.resetInputAudioCapture();
@@ -377,19 +426,117 @@ export class RealtimeSessionController {
       );
     }, USER_TRANSCRIPTION_TIMEOUT_MS);
     this.pendingUserTurn = userTurn;
-    this.responseUserTurnAwaitingCreation = userTurn;
-    try {
-      this.qwen.commitAudioAndCreateResponse();
-    } catch (error) {
-      this.handlers.error(error, "Failed to commit user audio");
-      this.failUserTranscription("Could not submit the user audio turn.");
+    this.startResponseAttempt(userTurn, true);
+  }
+
+  private retryPersistedUserResponse(): void {
+    if (
+      this.inputActive ||
+      this.pendingCommit ||
+      this.pendingUserTurn ||
+      this.repair ||
+      this.awaitingResponseCreation ||
+      this.activeGenerationResponseId ||
+      this.responses.size > 0
+    ) {
+      this.sendError(
+        "RESPONSE_RETRY_UNAVAILABLE",
+        "The AI response cannot be retried while another turn is active.",
+        true,
+      );
       return;
     }
+
+    // This control is accepted by the gateway only when SQLite confirms that
+    // the latest durable message is an unanswered learner turn. Treat it as
+    // the one remaining attempt in this new upstream session.
+    this.startResponseAttempt(
+      {
+        status: "persisted",
+        responseAttempts: MAX_RESPONSE_ATTEMPTS - 1,
+      },
+      false,
+    );
+  }
+
+  private startResponseAttempt(
+    userTurn: UserTurnPersistence,
+    commitAudio: boolean,
+  ): void {
+    if (this.terminated) return;
+    userTurn.responseAttempts += 1;
+    this.responseUserTurnAwaitingCreation = userTurn;
+    this.awaitingResponseCreation = true;
+    try {
+      if (commitAudio) this.qwen.commitAudioAndCreateResponse();
+      else this.qwen.createResponse();
+    } catch (error) {
+      this.awaitingResponseCreation = false;
+      this.responseUserTurnAwaitingCreation = undefined;
+      this.handlers.error(error, "Failed to request a Qwen response");
+      if (commitAudio) {
+        this.failUserTranscription("Could not submit the user audio turn.");
+      } else {
+        this.terminateWithError(
+          "RESPONSE_REQUEST_REJECTED",
+          "Could not request the AI response retry.",
+        );
+      }
+      return;
+    }
+    this.armResponseCreationTimeout();
     this.sendState("processing");
   }
 
+  private armResponseCreationTimeout(): void {
+    this.clearResponseCreationTimeout();
+    this.responseCreationTimeout = setTimeout(() => {
+      this.responseCreationTimeout = undefined;
+      this.awaitingResponseCreation = false;
+      this.responseUserTurnAwaitingCreation = undefined;
+      this.terminateWithError(
+        "RESPONSE_TIMEOUT",
+        "Timed out while waiting for Qwen to start the AI response.",
+      );
+    }, RESPONSE_START_TIMEOUT_MS);
+  }
+
+  private clearResponseCreationTimeout(): void {
+    if (this.responseCreationTimeout) clearTimeout(this.responseCreationTimeout);
+    this.responseCreationTimeout = undefined;
+  }
+
+  private armResponseProgressTimeout(record: ResponseRecord): void {
+    if (record.timeout) clearTimeout(record.timeout);
+    record.timeout = setTimeout(() => {
+      record.timeout = undefined;
+      if (record.generation !== "generating") return;
+      this.beginResponseFailure(
+        record,
+        "RESPONSE_TIMEOUT",
+        "The AI response stopped making progress and timed out.",
+      );
+    }, RESPONSE_PROGRESS_TIMEOUT_MS);
+  }
+
+  private touchResponseProgress(record: ResponseRecord): void {
+    if (record.generation === "generating" && !record.interruption) {
+      this.armResponseProgressTimeout(record);
+    }
+  }
+
+  private clearResponseProgressTimeout(record: ResponseRecord): void {
+    if (record.timeout) clearTimeout(record.timeout);
+    record.timeout = undefined;
+  }
+
   private handleResponseCreated(event: QwenServerEvent): void {
-    const responseId = event.response?.id ?? "unknown";
+    const responseId = event.response?.id;
+    if (!responseId) {
+      this.failUpstreamProtocol("Qwen response.created did not include a response ID.");
+      return;
+    }
+    this.clearResponseCreationTimeout();
     const record: ResponseRecord = {
       responseId,
       generation: "generating",
@@ -407,6 +554,7 @@ export class RealtimeSessionController {
     this.responses.set(responseId, record);
     this.awaitingResponseCreation = false;
     this.activeGenerationResponseId = responseId;
+    this.armResponseProgressTimeout(record);
 
     if (this.cancelWhenResponseCreated) {
       this.cancelWhenResponseCreated = false;
@@ -431,6 +579,7 @@ export class RealtimeSessionController {
 
     const record = this.responses.get(event.response_id);
     if (!record) return;
+    this.touchResponseProgress(record);
     record.assistantItemId = item.id;
     this.responseIdByItemId.set(item.id, event.response_id);
   }
@@ -453,6 +602,7 @@ export class RealtimeSessionController {
     if (!responseId) return;
     const record = this.responses.get(responseId);
     if (!record) return;
+    this.touchResponseProgress(record);
     record.assistantItemId = item.id;
     record.previousItemId = event.previous_item_id;
     this.responseIdByItemId.set(item.id, responseId);
@@ -501,6 +651,7 @@ export class RealtimeSessionController {
   private handleAssistantTranscriptDelta(event: QwenServerEvent): void {
     const record = this.responseForEvent(event);
     if (!record) return;
+    this.touchResponseProgress(record);
     if (event.item_id) this.rememberItem(record, event.item_id);
     record.transcript += event.delta ?? "";
 
@@ -517,6 +668,7 @@ export class RealtimeSessionController {
   private handleAssistantTranscriptDone(event: QwenServerEvent): void {
     const record = this.responseForEvent(event);
     if (!record) return;
+    this.touchResponseProgress(record);
     if (event.item_id) this.rememberItem(record, event.item_id);
     if (event.transcript !== undefined) record.transcript = event.transcript;
 
@@ -530,11 +682,27 @@ export class RealtimeSessionController {
     }
   }
 
+  private handleAssistantTextDone(event: QwenServerEvent): void {
+    this.handleAssistantTranscriptDone({
+      ...event,
+      transcript: event.text ?? "",
+    });
+  }
+
   private handleAssistantAudio(event: QwenServerEvent): void {
     const record = this.responseForEvent(event);
     if (!record || !event.delta) return;
+    this.touchResponseProgress(record);
     if (event.item_id) this.rememberItem(record, event.item_id);
     const audio = Buffer.from(event.delta, "base64");
+    if (audio.length === 0 || audio.length % 2 !== 0) {
+      this.beginResponseFailure(
+        record,
+        "RESPONSE_FAILED",
+        "Qwen returned malformed PCM audio for the AI response.",
+      );
+      return;
+    }
     record.audioBytes += audio.length;
     if (record.audioCaptureComplete) {
       if (record.audioBytes <= MAX_CAPTURED_MESSAGE_AUDIO_BYTES) {
@@ -567,6 +735,7 @@ export class RealtimeSessionController {
     if (!responseId) return;
     const record = this.responses.get(responseId);
     if (!record) return;
+    this.clearResponseProgressTimeout(record);
 
     for (const item of event.response?.output ?? []) {
       if (item.type === "message" && item.role === "assistant" && item.id) {
@@ -588,6 +757,36 @@ export class RealtimeSessionController {
       return;
     }
 
+    if (status === "failed") {
+      this.beginResponseFailure(
+        record,
+        "RESPONSE_FAILED",
+        event.response?.status_details?.error?.message ??
+          "Qwen could not generate a response.",
+      );
+      return;
+    }
+
+    if (status === "completed" && !record.transcript.trim()) {
+      this.beginResponseFailure(
+        record,
+        "EMPTY_RESPONSE",
+        record.audioBytes > 0
+          ? "Qwen completed the AI response without a transcript."
+          : "Qwen completed the AI response without text or audio.",
+      );
+      return;
+    }
+
+    if (status === "completed" && record.audioBytes === 0) {
+      this.beginResponseFailure(
+        record,
+        "EMPTY_RESPONSE",
+        "Qwen completed the AI response without playable audio.",
+      );
+      return;
+    }
+
     this.handlers.send({
       type: "response.done",
       responseId,
@@ -597,27 +796,64 @@ export class RealtimeSessionController {
         : {}),
     });
 
-    if (status === "failed") {
-      this.sendError(
-        "RESPONSE_FAILED",
-        event.response?.status_details?.error?.message ??
-          "Qwen could not generate a response.",
-        true,
-      );
+    if (status === "cancelled") {
       this.sendState(this.inputActive ? "listening" : "ready");
-    } else if (status === "cancelled") {
-      this.sendState(this.inputActive ? "listening" : "ready");
-    } else if (record.playback === "completed") {
-      this.finalizeCompletedPlayback(record);
-    }
-
-    if (status === "completed") this.maybeAssessScenarioSuccess(record);
-
-    if (status !== "completed") {
       this.removeResponse(record);
+    } else {
+      if (record.playback === "completed") {
+        this.finalizeCompletedPlayback(record);
+      }
+      this.maybeAssessScenarioSuccess(record);
     }
 
     this.maybeFlushCommit();
+  }
+
+  private beginResponseFailure(
+    record: ResponseRecord,
+    code: ResponseFailureContinuation["code"],
+    message: string,
+  ): void {
+    if (this.terminated || record.interruption) return;
+    this.clearResponseProgressTimeout(record);
+    record.suppressOutput = true;
+    if (this.activeGenerationResponseId === record.responseId) {
+      this.activeGenerationResponseId = undefined;
+    }
+    this.awaitingResponseCreation = false;
+    this.handlers.send({
+      type: "response.done",
+      responseId: record.responseId,
+      status: "failed",
+      reason:
+        code === "RESPONSE_TIMEOUT"
+          ? "timeout"
+          : code === "EMPTY_RESPONSE"
+            ? "empty_response"
+            : "generation_failed",
+    });
+
+    const userTurn = record.userTurn;
+    if (!userTurn) {
+      this.terminateWithError(code, message);
+      return;
+    }
+
+    const canRetry = userTurn.responseAttempts < MAX_RESPONSE_ATTEMPTS;
+    const continuation: ResponseFailureContinuation = {
+      action: canRetry ? "retry" : "give_up",
+      userTurn,
+      code,
+      message,
+    };
+    if (canRetry) {
+      this.sendError(
+        "RESPONSE_RETRYING",
+        "The AI response failed or was empty. Retrying once.",
+        true,
+      );
+    }
+    this.requestInterruption(record, 0, continuation);
   }
 
   private handleQwenError(event: QwenServerEvent): void {
@@ -642,11 +878,26 @@ export class RealtimeSessionController {
       return;
     }
 
-    const recoverable = event.error?.type !== "server_error";
+    if (event.error?.type === "server_error") {
+      this.terminateWithError(
+        "QWEN_SERVER_ERROR",
+        event.error.message ?? "Qwen reported a server-side failure.",
+      );
+      return;
+    }
+
+    if (this.awaitingResponseCreation) {
+      this.terminateWithError(
+        "RESPONSE_REQUEST_REJECTED",
+        event.error?.message ?? "Qwen rejected the AI response request.",
+      );
+      return;
+    }
+
     this.sendError(
       event.error?.code ?? "QWEN_ERROR",
       event.error?.message ?? "Qwen returned an unknown error.",
-      recoverable,
+      true,
     );
   }
 
@@ -744,6 +995,7 @@ export class RealtimeSessionController {
   private requestInterruption(
     record: ResponseRecord,
     safePlayedMs: number,
+    afterRepair?: ResponseFailureContinuation,
   ): void {
     if (record.playback === "completed") return;
     if (record.interruption) {
@@ -756,13 +1008,18 @@ export class RealtimeSessionController {
 
     record.playback = "interrupted";
     record.suppressOutput = true;
+    this.clearResponseProgressTimeout(record);
     record.interruption = {
       safePlayedMs,
       transcript: record.transcript,
       audioBytes: record.audioBytes,
       generationCompleted: record.generation === "completed",
     };
-    this.repair = { responseId: record.responseId, stage: "waiting_terminal" };
+    this.repair = {
+      responseId: record.responseId,
+      stage: "waiting_terminal",
+      ...(afterRepair ? { afterRepair } : {}),
+    };
     this.armRepairTimeout();
 
     if (record.generation === "generating") {
@@ -873,8 +1130,22 @@ export class RealtimeSessionController {
       strategy: repair.estimate.strategy,
       confidence: repair.estimate.confidence,
     });
+    const afterRepair = repair.afterRepair;
     this.removeResponse(record);
     this.repair = undefined;
+
+    if (afterRepair?.action === "retry") {
+      this.startResponseAttempt(afterRepair.userTurn, false);
+      return;
+    }
+
+    if (afterRepair?.action === "give_up") {
+      this.sendError(
+        afterRepair.code,
+        `${afterRepair.message} The automatic retry also failed; please speak again.`,
+        true,
+      );
+    }
     this.sendState(
       this.inputActive ? "listening" : this.pendingCommit ? "processing" : "ready",
     );
@@ -883,8 +1154,24 @@ export class RealtimeSessionController {
 
   private failContextRepair(message: string): void {
     this.clearRepairTimeout();
+    this.terminateWithError("CONTEXT_STATE_UNCERTAIN", message);
+  }
+
+  private terminateWithError(code: string, message: string): void {
+    if (this.terminated) return;
     this.terminated = true;
-    this.sendError("CONTEXT_STATE_UNCERTAIN", message, false);
+    this.clearResponseCreationTimeout();
+    this.clearRepairTimeout();
+    if (this.pendingUserTurn?.timeout) {
+      clearTimeout(this.pendingUserTurn.timeout);
+      this.pendingUserTurn.timeout = undefined;
+    }
+    if (this.inputClearTimeout) clearTimeout(this.inputClearTimeout);
+    this.inputClearTimeout = undefined;
+    for (const response of this.responses.values()) {
+      this.clearResponseProgressTimeout(response);
+    }
+    this.sendError(code, message, false);
     this.sendState("ended");
     this.handlers.closeWithError(message);
   }
@@ -894,12 +1181,18 @@ export class RealtimeSessionController {
     return responseId ? this.responses.get(responseId) : undefined;
   }
 
+  private touchResponseForEvent(event: QwenServerEvent): void {
+    const record = this.responseForEvent(event);
+    if (record) this.touchResponseProgress(record);
+  }
+
   private rememberItem(record: ResponseRecord, itemId: string): void {
     record.assistantItemId = itemId;
     this.responseIdByItemId.set(itemId, record.responseId);
   }
 
   private removeResponse(record: ResponseRecord): void {
+    this.clearResponseProgressTimeout(record);
     this.responses.delete(record.responseId);
     if (record.assistantItemId) this.responseIdByItemId.delete(record.assistantItemId);
   }
@@ -1066,10 +1359,7 @@ export class RealtimeSessionController {
     this.responseUserTurnAwaitingCreation = undefined;
     this.resetInputAudioCapture();
     this.clearRepairTimeout();
-    this.terminated = true;
-    this.sendError("TRANSCRIPTION_FAILED", message, false);
-    this.sendState("ended");
-    this.handlers.closeWithError(message);
+    this.terminateWithError("TRANSCRIPTION_FAILED", message);
   }
 
   private failInputClear(message: string): void {
@@ -1077,10 +1367,7 @@ export class RealtimeSessionController {
     if (this.inputClearTimeout) clearTimeout(this.inputClearTimeout);
     this.inputClearTimeout = undefined;
     this.inputClearPending = false;
-    this.terminated = true;
-    this.sendError("INPUT_CLEAR_FAILED", message, false);
-    this.sendState("ended");
-    this.handlers.closeWithError(message);
+    this.terminateWithError("INPUT_CLEAR_FAILED", message);
   }
 
   private persistMessage(message: RealtimePersistedMessage): boolean {
@@ -1090,12 +1377,9 @@ export class RealtimeSessionController {
     } catch (error) {
       this.handlers.error(error, "Failed to persist authoritative conversation text");
       this.clearRepairTimeout();
-      this.terminated = true;
       const failureMessage =
         "The authoritative conversation history could not be saved.";
-      this.sendError("HISTORY_PERSISTENCE_FAILED", failureMessage, false);
-      this.sendState("ended");
-      this.handlers.closeWithError(failureMessage);
+      this.terminateWithError("HISTORY_PERSISTENCE_FAILED", failureMessage);
       return false;
     }
   }

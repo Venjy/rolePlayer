@@ -24,6 +24,7 @@ export const clientControlMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("input.start") }),
   z.object({ type: z.literal("input.commit") }),
   z.object({ type: z.literal("input.clear") }),
+  z.object({ type: z.literal("response.retry") }),
   z.object({ type: z.literal("response.cancel") }),
   z.object({
     type: z.literal("playback.completed"),

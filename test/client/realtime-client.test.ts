@@ -186,6 +186,34 @@ describe("RealtimeClient connection lifecycle", () => {
       }),
     );
     expect(socket?.readyState).toBe(FakeWebSocket.OPEN);
+
+    client.retryResponse();
+    expect(socket?.sent.at(-1)).toBe(JSON.stringify({ type: "response.retry" }));
+  });
+
+  it("rejects a malformed gateway event immediately during startup", async () => {
+    const onMalformedMessage = vi.fn();
+    const client = new RealtimeClient({
+      onMessage: vi.fn(),
+      onAudio: vi.fn(),
+      onClose: vi.fn(),
+      onMalformedMessage,
+    });
+    const connection = client.connect({
+      conversationId: 1,
+      maxHistoryTurns: 20,
+    });
+    const socket = FakeWebSocket.instances[0];
+    socket?.open();
+
+    socket?.receive({ unexpected: true });
+
+    await expect(connection).rejects.toThrow(
+      "The realtime gateway returned a malformed message.",
+    );
+    expect(onMalformedMessage).toHaveBeenCalledOnce();
+    expect(socket?.readyState).toBe(FakeWebSocket.CLOSED);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("waits for the server clear acknowledgement before completing cancellation", async () => {

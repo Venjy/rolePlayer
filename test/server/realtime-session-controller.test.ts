@@ -26,6 +26,7 @@ type FakeQwenOperation =
       input: { itemId: string; previousItemId?: string; text: string };
     }
   | { type: "commit" }
+  | { type: "retry" }
   | { type: "clear" };
 
 class FakeQwenClient {
@@ -54,6 +55,10 @@ class FakeQwenClient {
     this.operations.push({ type: "commit" });
   }
 
+  public createResponse(): void {
+    this.operations.push({ type: "retry" });
+  }
+
   public clearAudio(): void {
     this.operations.push({ type: "clear" });
   }
@@ -73,6 +78,7 @@ const activeControllers: RealtimeSessionController[] = [];
 
 afterEach(() => {
   for (const controller of activeControllers.splice(0)) controller.dispose();
+  vi.useRealTimers();
 });
 
 function createHarness(options?: {
@@ -166,6 +172,66 @@ function completeResponse(
           status: "completed",
           role: "assistant",
           content: [{ type: "audio", transcript: TRANSCRIPT }],
+        },
+      ],
+    },
+  });
+}
+
+function commitAndPersistUserTurn(
+  harness: Harness,
+  itemId = PREVIOUS_ITEM_ID,
+): void {
+  harness.controller.handleControl({ type: "input.start" });
+  harness.controller.appendAudio(Buffer.alloc(INPUT_CHUNK_BYTES));
+  harness.controller.handleControl({ type: "input.commit" });
+  harness.controller.handleQwenEvent({
+    type: "input_audio_buffer.committed",
+    item_id: itemId,
+  });
+  harness.controller.handleQwenEvent({
+    type: "conversation.item.input_audio_transcription.completed",
+    item_id: itemId,
+    transcript: "I need help handling this objection.",
+  });
+}
+
+function startEmptyResponse(
+  controller: RealtimeSessionController,
+  responseId: string,
+  itemId: string,
+): void {
+  const item: QwenConversationItem = {
+    id: itemId,
+    type: "message",
+    status: "in_progress",
+    role: "assistant",
+    content: [],
+  };
+  controller.handleQwenEvent({
+    type: "response.created",
+    response: { id: responseId },
+  });
+  controller.handleQwenEvent({
+    type: "response.output_item.added",
+    response_id: responseId,
+    item,
+  });
+  controller.handleQwenEvent({
+    type: "conversation.item.created",
+    previous_item_id: PREVIOUS_ITEM_ID,
+    item,
+  });
+  controller.handleQwenEvent({
+    type: "response.done",
+    response: {
+      id: responseId,
+      status: "completed",
+      output: [
+        {
+          ...item,
+          status: "completed",
+          content: [],
         },
       ],
     },
@@ -353,6 +419,159 @@ describe("RealtimeSessionController context reconciliation", () => {
 
     expect(harness.qwen.operations).toEqual([]);
     expect(harness.closeWithError).not.toHaveBeenCalled();
+  });
+});
+
+describe("RealtimeSessionController response resilience", () => {
+  it("fails the uncertain session when response creation times out", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness();
+    commitAndPersistUserTurn(harness);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(harness.sent).toContainEqual({
+      type: "error",
+      code: "RESPONSE_TIMEOUT",
+      message: "Timed out while waiting for Qwen to start the AI response.",
+      recoverable: false,
+    });
+    expect(harness.closeWithError).toHaveBeenCalledOnce();
+  });
+
+  it("cancels a stalled response, repairs it, and retries once", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness();
+    commitAndPersistUserTurn(harness);
+    harness.controller.handleQwenEvent({
+      type: "response.created",
+      response: { id: "resp_stalled" },
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(harness.qwen.operations.at(-1)).toEqual({ type: "cancel" });
+    expect(harness.sent).toContainEqual(
+      expect.objectContaining({
+        type: "error",
+        code: "RESPONSE_RETRYING",
+        recoverable: true,
+      }),
+    );
+
+    harness.controller.handleQwenEvent({
+      type: "response.done",
+      response: { id: "resp_stalled", status: "cancelled", output: [] },
+    });
+
+    expect(harness.qwen.operations.at(-1)).toEqual({ type: "retry" });
+    expect(harness.closeWithError).not.toHaveBeenCalled();
+  });
+
+  it("retries an empty response once, then returns ready with a helpful error", () => {
+    const harness = createHarness();
+    commitAndPersistUserTurn(harness);
+
+    startEmptyResponse(harness.controller, "resp_empty_1", "item_empty_1");
+    expect(harness.qwen.operations.at(-1)).toEqual({
+      type: "delete",
+      itemId: "item_empty_1",
+    });
+    harness.controller.handleQwenEvent({
+      type: "conversation.item.deleted",
+      item_id: "item_empty_1",
+    });
+    expect(harness.qwen.operations.at(-1)).toEqual({ type: "retry" });
+
+    startEmptyResponse(harness.controller, "resp_empty_2", "item_empty_2");
+    expect(harness.qwen.operations.at(-1)).toEqual({
+      type: "delete",
+      itemId: "item_empty_2",
+    });
+    harness.controller.handleQwenEvent({
+      type: "conversation.item.deleted",
+      item_id: "item_empty_2",
+    });
+
+    expect(
+      harness.qwen.operations.filter(({ type }) => type === "retry"),
+    ).toHaveLength(1);
+    expect(harness.sent).toContainEqual(
+      expect.objectContaining({
+        type: "error",
+        code: "EMPTY_RESPONSE",
+        recoverable: true,
+      }),
+    );
+    expect(harness.sent.at(-1)).toEqual({
+      type: "session.state",
+      state: "ready",
+    });
+    expect(harness.closeWithError).not.toHaveBeenCalled();
+  });
+
+  it("retries an explicit Qwen response.failed event", () => {
+    const harness = createHarness();
+    commitAndPersistUserTurn(harness);
+    harness.controller.handleQwenEvent({
+      type: "response.created",
+      response: { id: "resp_failed" },
+    });
+
+    harness.controller.handleQwenEvent({
+      type: "response.done",
+      response: {
+        id: "resp_failed",
+        status: "failed",
+        status_details: {
+          type: "failed",
+          error: { message: "TTS unavailable" },
+        },
+        output: [],
+      },
+    });
+
+    expect(harness.qwen.operations.at(-1)).toEqual({ type: "retry" });
+    expect(harness.sent).toContainEqual(
+      expect.objectContaining({
+        type: "error",
+        code: "RESPONSE_RETRYING",
+        recoverable: true,
+      }),
+    );
+  });
+
+  it("treats a Qwen server_error as a fatal service failure", () => {
+    const harness = createHarness();
+
+    harness.controller.handleQwenEvent({
+      type: "error",
+      error: {
+        type: "server_error",
+        code: "service_unavailable",
+        message: "LLM connection failed",
+      },
+    });
+
+    expect(harness.sent).toContainEqual({
+      type: "error",
+      code: "QWEN_SERVER_ERROR",
+      message: "LLM connection failed",
+      recoverable: false,
+    });
+    expect(harness.closeWithError).toHaveBeenCalledOnce();
+  });
+
+  it("starts one final attempt for a gateway-approved saved user turn", () => {
+    const harness = createHarness();
+
+    harness.controller.handleControl({ type: "response.retry" });
+
+    expect(harness.qwen.operations).toEqual([{ type: "retry" }]);
+    expect(harness.sent.at(-1)).toEqual({
+      type: "session.state",
+      state: "processing",
+    });
   });
 });
 
