@@ -68,7 +68,7 @@ export interface SplitLegacyDatabaseResult {
 }
 
 /**
- * Copies the normalized version-19 one-file schema into two fresh databases.
+ * Copies the normalized version-20 one-file schema into two fresh databases.
  * Existing target files are never merged or overwritten.
  */
 export function splitLegacyDatabase(

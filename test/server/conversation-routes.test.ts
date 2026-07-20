@@ -937,6 +937,85 @@ describe("conversation history routes", () => {
     }
   });
 
+  it("generates textual coaching without a score when no rubric is configured", async () => {
+    let receivedInput: FeedbackGenerationInput | undefined;
+    const feedbackGenerator: ConversationFeedbackGenerator = {
+      model: "text-only-test-coach",
+      generate: async (input) => {
+        receivedInput = input;
+        const learnerMessage = input.messages.find(({ role }) => role === "user");
+        if (!learnerMessage) throw new Error("Expected a learner message.");
+        return {
+          overallAssessment: "The learner opened the conversation clearly.",
+          overallAssessmentZhCn: "学员清晰地开启了对话。",
+          strengths: [{
+            text: "The opening question was easy to understand.",
+            textZhCn: "开场问题清晰易懂。",
+          }],
+          improvementAreas: [],
+          coachingTips: [],
+          criterionScores: [],
+          moments: [{
+            messageId: learnerMessage.id,
+            kind: "strength" as const,
+            title: "Clear opening",
+            titleZhCn: "清晰开场",
+            assessment: "The learner established a clear starting point.",
+            assessmentZhCn: "学员建立了清晰的对话起点。",
+            suggestedApproach: "",
+            suggestedApproachZhCn: "",
+          }],
+        };
+      },
+    };
+    const app = createApp({ feedbackGenerator });
+    try {
+      await app.ready();
+      const repository = new ConversationRepository(app.conversationDatabase);
+      const createInput = getCreateInput(app);
+      const conversation = repository.createConversation({
+        ...createInput,
+        scenario: {
+          ...createInput.scenario,
+          scoringCriteria: [],
+        },
+      });
+      repository.appendMessage({
+        conversationId: conversation.id,
+        role: "user",
+        text: "Could you tell me what brought you to this conversation?",
+        interrupted: false,
+        sourceItemId: "text-only-feedback-user",
+      });
+
+      await app.inject({
+        method: "POST",
+        url: `/api/conversations/${conversation.id}/end`,
+      });
+      let feedbackView:
+        | ReturnType<typeof conversationFeedbackViewSchema.parse>
+        | undefined;
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const response = await app.inject({
+          method: "GET",
+          url: `/api/conversations/${conversation.id}/feedback`,
+        });
+        feedbackView = conversationFeedbackViewSchema.parse(response.json());
+        if (feedbackView.feedback.status === "completed") break;
+      }
+
+      expect(receivedInput?.criteria).toEqual([]);
+      expect(feedbackView?.feedback).toMatchObject({
+        status: "completed",
+        overallScore: null,
+        criterionScores: [],
+        overallAssessment: "The learner opened the conversation clearly.",
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
   it("regenerates an opened report created by an older coaching prompt", async () => {
     let generationCount = 0;
     const feedbackGenerator: ConversationFeedbackGenerator = {

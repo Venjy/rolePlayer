@@ -128,6 +128,52 @@ describe("catalog routes", () => {
     }
   });
 
+  it("persists optional scenario guidance without inventing scoring weights", async () => {
+    const app = createApp();
+    try {
+      await app.ready();
+      initializeCatalogData(app.catalogDatabase);
+      const catalog = rolePlayCatalogSchema.parse(
+        (await app.inject({ method: "GET", url: "/api/catalog" })).json(),
+      );
+      const successId = presetId(catalog, "发现一项明确的客户需求");
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/scenarios",
+        payload: {
+          name: "Optional rubric scenario",
+          nameZhCn: "可选评分场景",
+          description: "A scenario that has guidance but no numeric rubric.",
+          descriptionZhCn: "包含达成标准但不进行数字评分的场景。",
+          trainingGoalPresetIds: [],
+          skillFocusPresetIds: [],
+          successCriterionPresetIds: [successId],
+          voiceBehavior: {},
+          scoringCriteria: [],
+          allowedPersonaIds: [],
+        },
+      });
+      expect(response.statusCode).toBe(201);
+      expect(response.json<Scenario>()).toMatchObject({
+        trainingGoalPresetIds: [],
+        skillFocusPresetIds: [],
+        successCriterionPresetIds: [successId],
+        scoringCriteria: [],
+      });
+      expect(
+        app.catalogDatabase.raw
+          .prepare(
+            `SELECT success_criterion_preset_id, weight
+             FROM scenario_success_criteria
+             WHERE scenario_id = ?`,
+          )
+          .all(response.json<Scenario>().id),
+      ).toEqual([{ success_criterion_preset_id: successId, weight: null }]);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("rejects unknown compatibility references", async () => {
     const app = createApp();
     try {

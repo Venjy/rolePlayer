@@ -10,6 +10,7 @@ import {
   createConversationFeedbackSchema,
 } from "./conversation-feedback-migration";
 import { addConversationSessionLifecycleColumns } from "./conversation-session-lifecycle-migration";
+import { makeScenarioScoringWeightsOptional } from "./optional-scenario-scoring-migration";
 
 const createMigrationTable = `
   CREATE TABLE schema_migrations (
@@ -259,6 +260,11 @@ export const CATALOG_DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
         CHECK (gender IN ('female', 'male'));
       UPDATE qwen_voices SET gender = 'male' WHERE voice = 'longanlufeng';
     `,
+  },
+  {
+    version: 9,
+    name: "make_scenario_scoring_weights_optional",
+    up: makeScenarioScoringWeightsOptional,
   },
 ];
 

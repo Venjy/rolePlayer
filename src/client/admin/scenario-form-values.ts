@@ -24,6 +24,7 @@ export interface ScenarioFormValues {
   successCriterionPresetIds: number[];
   toneStylePresetId?: number;
   voiceBehavior: ScenarioInput["voiceBehavior"];
+  scoringEnabled: boolean;
   scoringCriteria: ScoringCriterionFormValue[];
 }
 
@@ -80,6 +81,7 @@ export function getScenarioFormInitialValues(
     successCriterionPresetIds: scenario?.successCriterionPresetIds ?? [],
     toneStylePresetId: scenario?.toneStylePresetId,
     voiceBehavior: scenario?.voiceBehavior ?? {},
+    scoringEnabled: Boolean(scenario?.scoringCriteria.length),
     scoringCriteria:
       scenario?.scoringCriteria.map((criterion) => {
         const resolved = presets.find(
@@ -127,10 +129,12 @@ export function normalizeScenarioFormValues(
     successCriterionPresetIds: values.successCriterionPresetIds,
     toneStylePresetId: values.toneStylePresetId,
     voiceBehavior: values.voiceBehavior ?? {},
-    scoringCriteria: values.scoringCriteria.map((criterion) => ({
-      successCriterionPresetId: criterion.successCriterionPresetId,
-      weight: criterion.weight,
-    })),
+    scoringCriteria: values.scoringEnabled
+      ? values.scoringCriteria.map((criterion) => ({
+          successCriterionPresetId: criterion.successCriterionPresetId,
+          weight: criterion.weight,
+        }))
+      : [],
     allowedPersonaIds: scenario?.allowedPersonaIds ?? [...defaultAllowedPersonaIds],
   };
 }

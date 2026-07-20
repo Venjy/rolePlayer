@@ -166,4 +166,26 @@ describe("role-play Instructions", () => {
     expect(instructions).toContain("Hidden scoring weights:\n- Agree on a next step: 50%");
     expect(instructions).not.toContain("\n- : 50%");
   });
+
+  it("omits every optional scenario guidance section when no values are configured", () => {
+    const instructions = compileScenarioInstructions({
+      ...scenario,
+      goals: [],
+      goalsZhCn: [],
+      suggestedSkillFocus: [],
+      suggestedSkillFocusZhCn: [],
+      successCriteria: [],
+      successCriteriaZhCn: [],
+      scoringCriteria: [],
+      toneStyle: "",
+      toneStyleZhCn: "",
+      voiceBehavior: {},
+    }, "en");
+
+    expect(instructions).toContain("Scenario: Price objection");
+    expect(instructions).not.toContain("Learner goals:");
+    expect(instructions).not.toContain("Suggested skill focus:");
+    expect(instructions).not.toContain("Hidden success criteria:");
+    expect(instructions).not.toContain("Hidden scoring weights:");
+  });
 });

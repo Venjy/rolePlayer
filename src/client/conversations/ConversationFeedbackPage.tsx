@@ -353,17 +353,19 @@ export function ConversationFeedbackPage({
       {renderHeader(`${scenarioName} · ${personaName}`)}
 
       <section className={styles.content}>
-        <Card className={styles.summaryCard}>
-          <div className={styles.scoreArea}>
-            {feedback.overallScore === null ? (
-              <Progress type="circle" percent={0} status="active" format={() => "—"} />
-            ) : (
+        <Card
+          className={`${styles.summaryCard} ${
+            feedback.overallScore === null ? styles.summaryCardWithoutScore : ""
+          }`}
+        >
+          {feedback.overallScore !== null && (
+            <div className={styles.scoreArea}>
               <Progress type="circle" percent={feedback.overallScore} format={(score) => `${score}`} />
-            )}
-            <Typography.Text type="secondary">
-              {t({ en: "Overall score", zh: "综合得分" })}
-            </Typography.Text>
-          </div>
+              <Typography.Text type="secondary">
+                {t({ en: "Overall score", zh: "综合得分" })}
+              </Typography.Text>
+            </div>
+          )}
           <div className={styles.assessment}>
             <Typography.Title level={3}>
               {t({ en: "Overall assessment", zh: "整体评价" })}
@@ -446,28 +448,30 @@ export function ConversationFeedbackPage({
               </Card>
             </div>
 
-            <Card title={t({ en: "Score breakdown", zh: "评分明细" })}>
-              <div className={styles.criteriaGrid}>
-                {feedback.criterionScores.map((criterion) => (
-                  <div key={criterion.criterionPosition} className={styles.criterion}>
-                    <Flex justify="space-between" align="center" gap={12}>
-                      <Typography.Text strong>
-                        {localizedText(criterion.name, criterion.nameZhCn, locale)}
-                      </Typography.Text>
-                      <Tag>{criterion.weight}%</Tag>
-                    </Flex>
-                    <Progress percent={criterion.score} />
-                    <Typography.Paragraph type="secondary">
-                      {localizedText(
-                        criterion.rationale,
-                        criterion.rationaleZhCn,
-                        locale,
-                      )}
-                    </Typography.Paragraph>
-                  </div>
-                ))}
-              </div>
-            </Card>
+            {feedback.criterionScores.length > 0 && (
+              <Card title={t({ en: "Score breakdown", zh: "评分明细" })}>
+                <div className={styles.criteriaGrid}>
+                  {feedback.criterionScores.map((criterion) => (
+                    <div key={criterion.criterionPosition} className={styles.criterion}>
+                      <Flex justify="space-between" align="center" gap={12}>
+                        <Typography.Text strong>
+                          {localizedText(criterion.name, criterion.nameZhCn, locale)}
+                        </Typography.Text>
+                        <Tag>{criterion.weight}%</Tag>
+                      </Flex>
+                      <Progress percent={criterion.score} />
+                      <Typography.Paragraph type="secondary">
+                        {localizedText(
+                          criterion.rationale,
+                          criterion.rationaleZhCn,
+                          locale,
+                        )}
+                      </Typography.Paragraph>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
 
             <Card title={t({ en: "Actionable coaching tips", zh: "可执行的改进建议" })}>
               <List

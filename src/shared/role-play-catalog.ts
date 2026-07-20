@@ -318,12 +318,12 @@ export const scenarioInputSchema = z
     nameZhCn: optionalText(120),
     description: optionalText(2_000),
     descriptionZhCn: optionalText(2_000),
-    trainingGoalPresetIds: uniqueIdList(10, 1),
-    skillFocusPresetIds: uniqueIdList(10, 1),
-    successCriterionPresetIds: uniqueIdList(12, 1),
+    trainingGoalPresetIds: uniqueIdList(10),
+    skillFocusPresetIds: uniqueIdList(10),
+    successCriterionPresetIds: uniqueIdList(12),
     toneStylePresetId: databaseIdSchema.optional(),
     voiceBehavior: voiceBehaviorSchema.partial().default({}),
-    scoringCriteria: z.array(scoringCriterionInputSchema).min(1).max(12),
+    scoringCriteria: z.array(scoringCriterionInputSchema).max(12),
     // Compatibility is managed separately from scenario content editing.
     allowedPersonaIds: z.array(databaseIdSchema).max(MAX_SCENARIO_PERSONAS),
   })
@@ -350,6 +350,7 @@ export const scenarioInputSchema = z
     }
 
     if (
+      value.scoringCriteria.length > 0 &&
       value.scoringCriteria.length !== value.successCriterionPresetIds.length
     ) {
       context.addIssue({
@@ -448,7 +449,7 @@ export const scenarioSchema = scenarioInputSchema.safeExtend({
   successCriteriaZhCn: shortTextList(12),
   toneStyle: optionalText(500),
   toneStyleZhCn: optionalText(500),
-  scoringCriteria: z.array(scoringCriterionSchema).min(1).max(12),
+  scoringCriteria: z.array(scoringCriterionSchema).max(12),
   id: databaseIdSchema,
   createdAt: z.string().datetime({ offset: true }),
   updatedAt: z.string().datetime({ offset: true }),
@@ -469,7 +470,7 @@ export const resolvedScenarioInputSchema = z.object({
   toneStyle: optionalText(500),
   toneStyleZhCn: optionalText(500),
   voiceBehavior: voiceBehaviorSchema.partial(),
-  scoringCriteria: z.array(localizedScoringCriterionSchema).min(1).max(12),
+  scoringCriteria: z.array(localizedScoringCriterionSchema).max(12),
   allowedPersonaIds: z.array(databaseIdSchema).max(MAX_SCENARIO_PERSONAS),
 });
 export type ResolvedScenarioInput = z.infer<typeof resolvedScenarioInputSchema>;

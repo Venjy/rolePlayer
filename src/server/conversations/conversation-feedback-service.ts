@@ -389,12 +389,14 @@ export class ConversationFeedbackRepository {
     validateGeneratedFeedbackReferences(generated, input);
     const current = this.require(conversationId);
     const timestamp = nextDatabaseTimestamp(current.updatedAt);
-    const overallScore = Math.round(
-      generated.criterionScores.reduce((total, criterion) => {
-        const expected = input.criteria[criterion.criterionPosition];
-        return total + criterion.score * (expected?.weight ?? 0) / 100;
-      }, 0),
-    );
+    const overallScore = input.criteria.length === 0
+      ? null
+      : Math.round(
+          generated.criterionScores.reduce((total, criterion) => {
+            const expected = input.criteria[criterion.criterionPosition];
+            return total + criterion.score * (expected?.weight ?? 0) / 100;
+          }, 0),
+        );
 
     this.connection.exec("BEGIN IMMEDIATE");
     try {

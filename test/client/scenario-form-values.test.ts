@@ -32,6 +32,7 @@ function chineseValues(): ScenarioFormValues {
     successCriterionPresetIds: [1],
     toneStylePresetId: 6,
     voiceBehavior: { interruptFrequency: "medium", speakingPace: "normal" },
+    scoringEnabled: true,
     scoringCriteria: [
       { successCriterionPresetId: 1, displayName: "标准 1", weight: 100 },
     ],
@@ -85,6 +86,29 @@ describe("scenario form values", () => {
         scoringCriteria: [{ successCriterionPresetId: 1, weight: 100 }],
         allowedPersonaIds: [1],
       });
+  });
+
+  it("keeps selected success criteria while omitting optional scoring weights", () => {
+    const normalized = normalizeScenarioFormValues(
+      { ...chineseValues(), scoringEnabled: false },
+      "zh",
+      undefined,
+      [1],
+    );
+    expect(normalized).toMatchObject({
+      successCriterionPresetIds: [1],
+      scoringCriteria: [],
+    });
+  });
+
+  it("starts a blank scenario with scoring disabled", () => {
+    expect(getScenarioFormInitialValues(undefined, "zh", presets)).toMatchObject({
+      trainingGoalPresetIds: [],
+      skillFocusPresetIds: [],
+      successCriterionPresetIds: [],
+      scoringEnabled: false,
+      scoringCriteria: [],
+    });
   });
 
   it("preserves Chinese while adding English", () => {

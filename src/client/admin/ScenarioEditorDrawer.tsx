@@ -11,6 +11,7 @@ import {
   InputNumber,
   Select,
   Space,
+  Switch,
   Typography,
 } from "antd";
 import {
@@ -55,18 +56,6 @@ function listRule(locale: AppLocale, label: string, maximum: number) {
   return {
     validator: async (_rule: unknown, value: unknown) => {
       const items = Array.isArray(value) ? value : [];
-      if (items.length === 0) {
-        throw new Error(
-          translate(
-            locale,
-            {
-              en: "Enter at least one {label}.",
-              zh: "请至少填写一项{label}。",
-            },
-            { label },
-          ),
-        );
-      }
       if (items.length > maximum) {
         throw new Error(
           translate(
@@ -98,13 +87,16 @@ export function ScenarioEditorDrawer({
   const [generatedScenario, setGeneratedScenario] = useState<ScenarioInput>();
   const generationAbortRef = useRef<AbortController | null>(null);
   const generationRequestRef = useRef(0);
-  const draft = Form.useWatch([], form);
   const baseScenario = generatedScenario ?? scenario;
   const locked = busy || generating;
   const initialValues = useMemo(
     () => getScenarioFormInitialValues(baseScenario, locale, scenarioPresets),
     [baseScenario, locale, scenarioPresets],
   );
+  const draft = Form.useWatch([], form);
+  const selectedSuccessCriterionIds =
+    Form.useWatch("successCriterionPresetIds", form) ??
+    initialValues.successCriterionPresetIds;
 
   const preview = useMemo(() => {
     const previewInput = normalizeScenarioFormValues(
@@ -120,17 +112,37 @@ export function ScenarioEditorDrawer({
     return compileScenarioInstructions(previewScenario, locale);
   }, [baseScenario, defaultAllowedPersonaIds, draft, initialValues, locale, scenarioPresets]);
 
-  const handleValuesChange = (changed: Partial<ScenarioFormValues>) => {
-    if (!changed.successCriterionPresetIds) return;
-    const successCriteria = changed.successCriterionPresetIds;
-    form.setFieldValue(
-      "scoringCriteria",
-      buildScoringCriteriaForSuccessCriteria(
-        successCriteria,
-        scenarioPresets,
-        locale,
-      ),
-    );
+  const handleValuesChange = (
+    changed: Partial<ScenarioFormValues>,
+    values: ScenarioFormValues,
+  ) => {
+    if (changed.successCriterionPresetIds) {
+      const successCriteria = changed.successCriterionPresetIds;
+      if (successCriteria.length === 0) {
+        form.setFieldsValue({ scoringEnabled: false, scoringCriteria: [] });
+      } else if (values.scoringEnabled) {
+        form.setFieldValue(
+          "scoringCriteria",
+          buildScoringCriteriaForSuccessCriteria(
+            successCriteria,
+            scenarioPresets,
+            locale,
+          ),
+        );
+      }
+    }
+    if (changed.scoringEnabled !== undefined) {
+      form.setFieldValue(
+        "scoringCriteria",
+        changed.scoringEnabled
+          ? buildScoringCriteriaForSuccessCriteria(
+              values.successCriterionPresetIds ?? [],
+              scenarioPresets,
+              locale,
+            )
+          : [],
+      );
+    }
   };
 
   const handleFinish = async (values: ScenarioFormValues) => {
@@ -322,18 +334,7 @@ export function ScenarioEditorDrawer({
           <Form.Item
             label={t({ en: "Training goals", zh: "训练目标" })}
             name="trainingGoalPresetIds"
-            rules={[
-              {
-                required: true,
-                type: "array",
-                min: 1,
-                message: t({
-                  en: "Select at least one training goal.",
-                  zh: "请至少选择一项训练目标。",
-                }),
-              },
-              listRule(locale, t({ en: "training goal", zh: "训练目标" }), 10),
-            ]}
+            rules={[listRule(locale, t({ en: "training goal", zh: "训练目标" }), 10)]}
           >
             <Select
               maxCount={10}
@@ -344,18 +345,7 @@ export function ScenarioEditorDrawer({
           <Form.Item
             label={t({ en: "Focus skills", zh: "重点技能" })}
             name="skillFocusPresetIds"
-            rules={[
-              {
-                required: true,
-                type: "array",
-                min: 1,
-                message: t({
-                  en: "Select at least one focus skill.",
-                  zh: "请至少选择一项重点技能。",
-                }),
-              },
-              listRule(locale, t({ en: "focus skill", zh: "重点技能" }), 10),
-            ]}
+            rules={[listRule(locale, t({ en: "focus skill", zh: "重点技能" }), 10)]}
           >
             <Select
               maxCount={10}
@@ -366,23 +356,12 @@ export function ScenarioEditorDrawer({
           <Form.Item
             className={styles.fullSpan}
             extra={t({
-              en: "The selected criteria become the scoring items below.",
-              zh: "所选成功标准会自动成为下方评分项。",
+              en: "Optional. These criteria guide goal detection and can also be used for scoring.",
+              zh: "可选。成功标准用于目标达成检测，也可以作为评分项。",
             })}
             label={t({ en: "Success criteria", zh: "成功标准" })}
             name="successCriterionPresetIds"
-            rules={[
-              {
-                required: true,
-                type: "array",
-                min: 1,
-                message: t({
-                  en: "Select at least one success criterion.",
-                  zh: "请至少选择一项成功标准。",
-                }),
-              },
-              listRule(locale, t({ en: "success criterion", zh: "成功标准" }), 12),
-            ]}
+            rules={[listRule(locale, t({ en: "success criterion", zh: "成功标准" }), 12)]}
           >
             <Select
               maxCount={12}
@@ -395,6 +374,17 @@ export function ScenarioEditorDrawer({
         <Divider titlePlacement="start">
           {t({ en: "Scoring configuration", zh: "评分配置" })}
         </Divider>
+        <Form.Item
+          extra={t({
+            en: "Optional. When disabled, feedback contains coaching text without a numerical score.",
+            zh: "可选。关闭后仍会生成文字复盘，但不会显示数字评分。",
+          })}
+          label={t({ en: "Enable scoring weights", zh: "启用评分权重" })}
+          name="scoringEnabled"
+          valuePropName="checked"
+        >
+          <Switch disabled={selectedSuccessCriterionIds.length === 0} />
+        </Form.Item>
         <Form.List
           name="scoringCriteria"
           rules={[
@@ -449,8 +439,12 @@ export function ScenarioEditorDrawer({
               {fields.length === 0 ? (
                 <Typography.Text type="secondary">
                   {t({
-                    en: "Select success criteria to generate scoring weights.",
-                    zh: "选择成功标准后会自动生成评分权重。",
+                    en: selectedSuccessCriterionIds.length === 0
+                      ? "Select success criteria before enabling scoring."
+                      : "Scoring weights are not configured.",
+                    zh: selectedSuccessCriterionIds.length === 0
+                      ? "请先选择成功标准，再启用评分权重。"
+                      : "当前未配置评分权重。",
                   })}
                 </Typography.Text>
               ) : null}

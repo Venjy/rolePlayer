@@ -31,6 +31,10 @@
   padding: clamp(24px, 4vw, 40px);
 }
 
+.summaryCardWithoutScore :global(.ant-card-body) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .scoreArea {
   display: grid;
   justify-items: center;

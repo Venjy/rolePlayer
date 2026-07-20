@@ -98,15 +98,40 @@ describe("role-play catalog field requirements", () => {
     });
   });
 
+  it("accepts a scenario without goals, skill focus, success criteria, or scoring", () => {
+    expect(
+      scenarioInputSchema.safeParse({
+        ...minimalScenario,
+        trainingGoalPresetIds: [],
+        skillFocusPresetIds: [],
+        successCriterionPresetIds: [],
+        scoringCriteria: [],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("accepts success criteria without numerical scoring weights", () => {
+    expect(
+      scenarioInputSchema.safeParse({
+        ...minimalScenario,
+        scoringCriteria: [],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects partial scoring weights", () => {
+    expect(
+      scenarioInputSchema.safeParse({
+        ...minimalScenario,
+        successCriterionPresetIds: [3, 4],
+        scoringCriteria: [{ successCriterionPresetId: 3, weight: 100 }],
+      }).success,
+    ).toBe(false);
+  });
+
   it.each([
     ["name", { name: "" }],
     ["description", { description: "" }],
-    ["training goals", { trainingGoalPresetIds: [] }],
-    ["focus skills", { skillFocusPresetIds: [] }],
-    [
-      "success criteria",
-      { successCriterionPresetIds: [], scoringCriteria: [] },
-    ],
   ])("rejects a scenario without required %s", (_label, update) => {
     expect(
       scenarioInputSchema.safeParse({ ...minimalScenario, ...update }).success,

@@ -209,6 +209,48 @@ describe("QwenConversationFeedbackGenerator", () => {
     ]);
   });
 
+  it("generates a textual assessment with no criterion scores for an empty rubric", async () => {
+    const generated = {
+      evaluationSubject: "learner_salesperson",
+      overallAssessment: "The learner made a clear start.",
+      overallAssessmentZhCn: "学员做出了清晰的开场。",
+      strengths: [],
+      improvementAreas: [],
+      coachingTips: [],
+      criterionScores: [],
+      moments: [],
+    };
+    const fetchMock = vi.fn(async (
+      _requestInput: string | URL | Request,
+      _requestInit?: RequestInit,
+    ) => {
+      void _requestInput;
+      void _requestInit;
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify(generated) } }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const generator = new QwenConversationFeedbackGenerator({
+      apiKey: "test-key",
+      endpoint: "https://example.test/chat/completions",
+      model: "qwen-plus",
+      timeoutMs: 10_000,
+    });
+
+    await expect(generator.generate({ ...input, criteria: [] })).resolves.toMatchObject({
+      overallAssessment: generated.overallAssessment,
+      criterionScores: [],
+    });
+    const requestBody = JSON.parse(
+      String(fetchMock.mock.calls[0]?.[1]?.body),
+    ) as { messages: Array<{ content: string }> };
+    const prompt = JSON.parse(requestBody.messages[1]?.content ?? "{}") as {
+      constraints?: { expectedCriterionPositions?: number[] };
+    };
+    expect(prompt.constraints?.expectedCriterionPositions).toEqual([]);
+  });
+
   it("retries until a conversation with enough learner turns has at least three valid moments", async () => {
     let requestCount = 0;
     const fetchMock = vi.fn(

@@ -83,7 +83,7 @@ interface LocalizedReferenceRow {
   value: string;
   value_zh_cn: string;
   position: number;
-  weight?: number;
+  weight?: number | null;
 }
 
 interface ScenarioPersonaRow {
@@ -565,12 +565,18 @@ export class CatalogRepository {
         scenario_id, success_criterion_preset_id, position, weight
       ) VALUES (?, ?, ?, ?)`,
     );
-    input.scoringCriteria.forEach((criterion, position) => {
+    const weightByPresetId = new Map(
+      input.scoringCriteria.map((criterion) => [
+        criterion.successCriterionPresetId,
+        criterion.weight,
+      ]),
+    );
+    input.successCriterionPresetIds.forEach((presetId, position) => {
       insert.run(
         scenarioId,
-        criterion.successCriterionPresetId,
+        presetId,
         position,
-        criterion.weight,
+        weightByPresetId.get(presetId) ?? null,
       );
     });
   }
@@ -756,12 +762,16 @@ function mapScenarioRow(
     successCriterionPresetIds: success.map(({ preset_id }) => preset_id),
     successCriteria: success.map(({ value }) => value),
     successCriteriaZhCn: success.map(({ value_zh_cn }) => value_zh_cn),
-    scoringCriteria: success.map((criterion) => ({
-      successCriterionPresetId: criterion.preset_id,
-      name: criterion.value,
-      nameZhCn: criterion.value_zh_cn,
-      weight: criterion.weight,
-    })),
+    scoringCriteria: success.flatMap((criterion) =>
+      criterion.weight === null || criterion.weight === undefined
+        ? []
+        : [{
+            successCriterionPresetId: criterion.preset_id,
+            name: criterion.value,
+            nameZhCn: criterion.value_zh_cn,
+            weight: criterion.weight,
+          }],
+    ),
     allowedPersonaIds,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

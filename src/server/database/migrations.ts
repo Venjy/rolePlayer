@@ -10,6 +10,7 @@ import {
   createCombinedConversationFeedbackSchema,
 } from "./conversation-feedback-migration";
 import { addCombinedConversationSessionLifecycleColumns } from "./conversation-session-lifecycle-migration";
+import { makeScenarioScoringWeightsOptional } from "./optional-scenario-scoring-migration";
 
 /**
  * A migration is immutable after it has reached a deployed environment.
@@ -1524,6 +1525,11 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
     version: 19,
     name: "add_conversation_pause_and_active_duration",
     up: addCombinedConversationSessionLifecycleColumns,
+  },
+  {
+    version: 20,
+    name: "make_scenario_scoring_weights_optional",
+    up: makeScenarioScoringWeightsOptional,
   },
 ];
 
