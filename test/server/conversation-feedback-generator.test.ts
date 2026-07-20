@@ -38,6 +38,65 @@ const input: FeedbackGenerationInput = {
   ],
 };
 
+const threeTurnInput: FeedbackGenerationInput = {
+  ...input,
+  messages: [
+    ...input.messages,
+    {
+      id: 13,
+      role: "user",
+      text: "这个问题每周会造成多少时间损失？",
+      interrupted: false,
+    },
+    {
+      id: 14,
+      role: "assistant",
+      text: "团队每周大约浪费十个小时。",
+      interrupted: false,
+    },
+    {
+      id: 15,
+      role: "user",
+      text: "如果能解决，下一步需要谁参与评估？",
+      interrupted: false,
+    },
+  ],
+};
+
+function generatedFeedbackWithMoments(momentCount: number) {
+  const learnerMessages = threeTurnInput.messages.filter(
+    ({ role }) => role === "user",
+  );
+  return {
+    evaluationSubject: "learner_salesperson",
+    overallAssessment: "The learner used a structured discovery approach.",
+    overallAssessmentZhCn: "学员采用了结构化的需求探索方式。",
+    strengths: [],
+    improvementAreas: [],
+    coachingTips: [],
+    criterionScores: [{
+      criterionPosition: 0,
+      score: 80,
+      rationale: "The learner explored the current problem and its impact.",
+      rationaleZhCn: "学员探索了当前问题及其影响。",
+    }],
+    moments: learnerMessages.slice(0, momentCount).map((message, index) => ({
+      messageId: message.id,
+      speaker: "learner_salesperson",
+      evidenceQuote: message.text,
+      contextMessageId: null,
+      contextQuote: "",
+      kind: index === 0 ? "strength" as const : "improvement" as const,
+      title: `Moment ${index + 1}`,
+      titleZhCn: `关键时刻 ${index + 1}`,
+      assessment: `This observation is grounded in learner turn ${index + 1}.`,
+      assessmentZhCn: `这项观察基于学员的第 ${index + 1} 轮发言。`,
+      suggestedApproach: index === 0 ? "" : "Ask one focused follow-up.",
+      suggestedApproachZhCn: index === 0 ? "" : "进行一次聚焦追问。",
+    })),
+  };
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -148,6 +207,59 @@ describe("QwenConversationFeedbackGenerator", () => {
       }),
       expect.objectContaining({ messageId: 12, speaker: "ai_customer" }),
     ]);
+  });
+
+  it("retries until a conversation with enough learner turns has at least three valid moments", async () => {
+    let requestCount = 0;
+    const fetchMock = vi.fn(
+      async (requestInput: string | URL | Request, requestInit?: RequestInit) => {
+        void requestInput;
+        void requestInit;
+        requestCount += 1;
+        const generated = generatedFeedbackWithMoments(
+          requestCount === 1 ? 2 : 3,
+        );
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify(generated) } }],
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const generator = new QwenConversationFeedbackGenerator({
+      apiKey: "test-key",
+      endpoint: "https://example.test/chat/completions",
+      model: "qwen-plus",
+      timeoutMs: 10_000,
+    });
+
+    await expect(generator.generate(threeTurnInput)).resolves.toMatchObject({
+      moments: expect.arrayContaining([
+        expect.objectContaining({ messageId: 11 }),
+        expect.objectContaining({ messageId: 13 }),
+        expect.objectContaining({ messageId: 15 }),
+      ]),
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const firstBody = JSON.parse(
+      String(fetchMock.mock.calls[0]?.[1]?.body),
+    ) as { messages: Array<{ content: string }> };
+    const firstPrompt = JSON.parse(firstBody.messages[1]?.content ?? "{}") as {
+      constraints?: { moments?: string };
+    };
+    expect(firstPrompt.constraints?.moments).toContain(
+      "Return 3-3 valid highlights",
+    );
+
+    const retryBody = JSON.parse(
+      String(fetchMock.mock.calls[1]?.[1]?.body),
+    ) as { messages: Array<{ content: string }> };
+    const retryPrompt = JSON.parse(retryBody.messages[1]?.content ?? "{}") as {
+      retryCorrection?: string;
+    };
+    expect(retryPrompt.retryCorrection).toContain(
+      "at least 3 are required",
+    );
   });
 
   it("drops an invalid highlight link without retrying or losing the core report", async () => {

@@ -34,7 +34,10 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { ConversationFeedbackView } from "../../shared/conversation-feedback";
+import {
+  MIN_FEEDBACK_MOMENT_COUNT,
+  type ConversationFeedbackView,
+} from "../../shared/conversation-feedback";
 import type {
   ConversationDetail,
   ConversationDownloadFormat,
@@ -317,6 +320,8 @@ export function ConversationFeedbackPage({
   );
   const userTurns = conversation.messages.filter(({ role }) => role === "user").length;
   const feedbackPending = feedback.status === "pending" || feedback.status === "processing";
+  const conversationTooShortForMinimumMoments =
+    userTurns < MIN_FEEDBACK_MOMENT_COUNT;
   const audioAvailable = conversation.audioAvailable;
   const failurePresentation = getFeedbackFailurePresentation(
     feedback.errorCode,
@@ -488,48 +493,63 @@ export function ConversationFeedbackPage({
               />
             </Card>
 
-            {feedback.moments.length > 0 && (
+            {(feedback.moments.length > 0
+              || conversationTooShortForMinimumMoments) && (
               <Card title={t({ en: "Highlighted moments", zh: "关键时刻" })}>
-                <div className={styles.momentsGrid}>
-                  {feedback.moments.map((moment) => (
-                  <button
-                    key={moment.position}
-                    type="button"
-                    className={styles.moment}
-                    onClick={() => revealTranscriptMessage(moment.messageId)}
-                  >
-                    <Tag color={moment.kind === "strength" ? "success" : "warning"}>
-                      {moment.kind === "strength"
-                        ? t({ en: "Strong moment", zh: "亮点" })
-                        : t({ en: "Could improve", zh: "可改进" })}
-                    </Tag>
-                    <Typography.Text strong>
-                      {localizedText(moment.title, moment.titleZhCn, locale)}
-                    </Typography.Text>
-                    <Typography.Text className={styles.momentText}>
-                      {localizedText(
-                        moment.assessment,
-                        moment.assessmentZhCn,
-                        locale,
-                      )}
-                    </Typography.Text>
-                    {localizedText(
-                      moment.suggestedApproach,
-                      moment.suggestedApproachZhCn,
-                      locale,
-                    ) && (
-                      <Typography.Text className={styles.momentText} type="secondary">
-                        {t({ en: "Try: ", zh: "可以这样做：" })}
-                        {localizedText(
-                          moment.suggestedApproach,
-                          moment.suggestedApproachZhCn,
-                          locale,
-                        )}
-                      </Typography.Text>
-                    )}
-                  </button>
-                  ))}
-                </div>
+                <Flex vertical gap={16}>
+                  {conversationTooShortForMinimumMoments && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      title={t({
+                        en: `This conversation has only ${userTurns} ${userTurns === 1 ? "learner turn" : "learner turns"}, so there is not enough distinct evidence to generate at least ${MIN_FEEDBACK_MOMENT_COUNT} highlighted moments.`,
+                        zh: `本次对话只有 ${userTurns} 轮有效学员发言，对话证据太少，无法生成至少 ${MIN_FEEDBACK_MOMENT_COUNT} 个互不重复的关键时刻。`,
+                      })}
+                    />
+                  )}
+                  {feedback.moments.length > 0 && (
+                    <div className={styles.momentsGrid}>
+                      {feedback.moments.map((moment) => (
+                        <button
+                          key={moment.position}
+                          type="button"
+                          className={styles.moment}
+                          onClick={() => revealTranscriptMessage(moment.messageId)}
+                        >
+                          <Tag color={moment.kind === "strength" ? "success" : "warning"}>
+                            {moment.kind === "strength"
+                              ? t({ en: "Strong moment", zh: "亮点" })
+                              : t({ en: "Could improve", zh: "可改进" })}
+                          </Tag>
+                          <Typography.Text strong>
+                            {localizedText(moment.title, moment.titleZhCn, locale)}
+                          </Typography.Text>
+                          <Typography.Text className={styles.momentText}>
+                            {localizedText(
+                              moment.assessment,
+                              moment.assessmentZhCn,
+                              locale,
+                            )}
+                          </Typography.Text>
+                          {localizedText(
+                            moment.suggestedApproach,
+                            moment.suggestedApproachZhCn,
+                            locale,
+                          ) && (
+                            <Typography.Text className={styles.momentText} type="secondary">
+                              {t({ en: "Try: ", zh: "可以这样做：" })}
+                              {localizedText(
+                                moment.suggestedApproach,
+                                moment.suggestedApproachZhCn,
+                                locale,
+                              )}
+                            </Typography.Text>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </Flex>
               </Card>
             )}
           </>

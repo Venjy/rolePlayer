@@ -24,7 +24,7 @@ import {
   ConversationRepository,
 } from "./conversation-repository";
 
-export const FEEDBACK_PROMPT_VERSION = "sales-coach-v4-bilingual-learner-only";
+export const FEEDBACK_PROMPT_VERSION = "sales-coach-v5-minimum-three-moments";
 
 interface FeedbackReportRow {
   conversation_id: number;
@@ -617,6 +617,7 @@ export class ConversationFeedbackService {
       try {
         this.repository.complete(conversationId, generated, this.generator.model);
       } catch (error) {
+        if (error instanceof FeedbackGenerationError) throw error;
         throw new FeedbackGenerationError(
           error instanceof Error
             ? `The generated feedback could not be saved: ${error.message}`

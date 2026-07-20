@@ -5,6 +5,9 @@ import {
   conversationLocaleSchema,
 } from "./conversation-history";
 
+/** Acceptance-criteria minimum when distinct learner turns make it possible. */
+export const MIN_FEEDBACK_MOMENT_COUNT = 3;
+
 export const feedbackStatusSchema = z.enum([
   "pending",
   "processing",

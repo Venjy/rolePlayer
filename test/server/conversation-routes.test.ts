@@ -782,8 +782,12 @@ describe("conversation history routes", () => {
       model: "test-coach",
       generate: async (input) => {
         receivedInput = input;
-        const highlightedMessage = input.messages[0];
-        if (!highlightedMessage) throw new Error("Expected a transcript message.");
+        const highlightedMessages = input.messages
+          .filter(({ role }) => role === "user")
+          .slice(0, 3);
+        if (highlightedMessages.length < 3) {
+          throw new Error("Expected at least three learner messages.");
+        }
         return {
           overallAssessment: "A focused discovery conversation.",
           overallAssessmentZhCn: "这是一次聚焦的需求探索对话。",
@@ -815,7 +819,7 @@ describe("conversation history routes", () => {
             rationale: `Evidence for ${criterion.name}.`,
             rationaleZhCn: `关于${criterion.nameZhCn}的证据。`,
           })),
-          moments: Array.from({ length: 3 }, (_, index) => ({
+          moments: highlightedMessages.map((highlightedMessage, index) => ({
             messageId: highlightedMessage.id,
             kind: index === 0 ? "strength" as const : "improvement" as const,
             title: `Moment ${index + 1}`,
@@ -834,21 +838,28 @@ describe("conversation history routes", () => {
       const repository = new ConversationRepository(app.conversationDatabase);
       const createInput = { ...getCreateInput(app), locale: "zh" as const };
       const conversation = repository.createConversation(createInput);
-      const userMessage = repository.appendMessage({
-        conversationId: conversation.id,
-        role: "user",
-        text: "How much time does manual qualification take today?",
-        interrupted: false,
-        sourceItemId: "feedback-user",
-      });
-      repository.appendMessage({
-        conversationId: conversation.id,
-        role: "assistant",
-        text: "Around ten hours each week.",
-        interrupted: false,
-        sourceItemId: "feedback-assistant",
-        responseId: "feedback-response",
-      });
+      const userMessages = [];
+      for (let turn = 1; turn <= 3; turn += 1) {
+        userMessages.push(repository.appendMessage({
+          conversationId: conversation.id,
+          role: "user",
+          text: turn === 1
+            ? "How much time does manual qualification take today?"
+            : `What measurable impact should we explore in follow-up ${turn}?`,
+          interrupted: false,
+          sourceItemId: `feedback-user-${turn}`,
+        }));
+        repository.appendMessage({
+          conversationId: conversation.id,
+          role: "assistant",
+          text: `Customer answer ${turn}.`,
+          interrupted: false,
+          sourceItemId: `feedback-assistant-${turn}`,
+          responseId: `feedback-response-${turn}`,
+        });
+      }
+      const userMessage = userMessages[0];
+      if (!userMessage) throw new Error("Expected the first learner message.");
 
       const endResponse = await app.inject({
         method: "POST",

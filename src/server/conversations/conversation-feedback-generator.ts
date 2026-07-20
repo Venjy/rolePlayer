@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { FeedbackConfig } from "../config";
+import { MIN_FEEDBACK_MOMENT_COUNT } from "../../shared/conversation-feedback";
 import type { ConversationMessage } from "../../shared/conversation-history";
 
 const feedbackMomentSchema = z.object({
@@ -24,8 +25,10 @@ const generatedFeedbackMomentSchema = feedbackMomentSchema.extend({
  * The assessment and criterion scores are the durable core of a report.
  * Supporting lists may legitimately be empty in a very short conversation,
  * so they default to empty instead of rejecting an otherwise useful report.
- * Highlight moments are parsed separately because their deep links are an
- * optional enhancement and must never make the core report fail.
+ * Highlight moments are parsed separately because each deep link needs
+ * transcript-grounding validation. When at least three distinct learner turns
+ * exist, the acceptance criteria make three valid moments part of the report
+ * contract; shorter conversations keep the useful core without invented cards.
  */
 const generatedFeedbackCoreSchema = z.object({
   overallAssessment: z.string().trim().min(1).max(2_000),
@@ -178,17 +181,8 @@ export class QwenConversationFeedbackGenerator
             controller.signal,
             validationCorrection,
           );
-          try {
-            validateGeneratedFeedbackReferences(generated, input);
-            return generated;
-          } catch (error) {
-            if (attempt === MAX_INVALID_OUTPUT_ATTEMPTS) {
-              const sanitized = discardInvalidFeedbackMoments(generated, input);
-              validateGeneratedFeedbackReferences(sanitized, input);
-              return sanitized;
-            }
-            throw error;
-          }
+          validateGeneratedFeedbackReferences(generated, input);
+          return generated;
         } catch (error) {
           if (
             error instanceof FeedbackGenerationError &&
@@ -331,8 +325,8 @@ function buildFeedbackRequest(
     6,
     new Set(allowedLearnerMessageIds).size,
   );
-  const momentCountInstruction = maximumMomentCount >= 3
-    ? `Return 3-${maximumMomentCount} highlights when the transcript contains enough distinct evidence; otherwise return fewer.`
+  const momentCountInstruction = maximumMomentCount >= MIN_FEEDBACK_MOMENT_COUNT
+    ? `Return ${MIN_FEEDBACK_MOMENT_COUNT}-${maximumMomentCount} valid highlights. At least ${MIN_FEEDBACK_MOMENT_COUNT} are required because the transcript contains enough distinct learner turns; do not return fewer.`
     : `Return 0-${maximumMomentCount} highlights. This is a short transcript, so do not invent or duplicate highlights to reach a minimum.`;
   return JSON.stringify({
     task:
@@ -482,6 +476,29 @@ export function validateGeneratedFeedbackReferences(
       "feedback_invalid_output",
     );
   }
+  const momentMessageIds = generated.moments.map(({ messageId }) => messageId);
+  if (new Set(momentMessageIds).size !== momentMessageIds.length) {
+    throw new FeedbackGenerationError(
+      "Every feedback moment must reference a distinct learner message.",
+      "feedback_invalid_output",
+    );
+  }
+  const maximumMomentCount = Math.min(6, messageIds.size);
+  if (generated.moments.length > maximumMomentCount) {
+    throw new FeedbackGenerationError(
+      `The feedback contains ${generated.moments.length} highlighted moments, but this transcript supports at most ${maximumMomentCount}.`,
+      "feedback_invalid_output",
+    );
+  }
+  if (
+    messageIds.size >= MIN_FEEDBACK_MOMENT_COUNT
+    && generated.moments.length < MIN_FEEDBACK_MOMENT_COUNT
+  ) {
+    throw new FeedbackGenerationError(
+      `The feedback contains ${generated.moments.length} valid highlighted moment(s), but at least ${MIN_FEEDBACK_MOMENT_COUNT} are required for this transcript.`,
+      "feedback_invalid_output",
+    );
+  }
 
   const humanReadableCore = [
     generated.overallAssessment,
@@ -510,24 +527,6 @@ export function validateGeneratedFeedbackReferences(
       "feedback_invalid_output",
     );
   }
-}
-
-function discardInvalidFeedbackMoments(
-  generated: GeneratedConversationFeedback,
-  input: FeedbackGenerationInput,
-): GeneratedConversationFeedback {
-  const allowedUserMessageIds = new Set(
-    input.messages
-      .filter(({ role }) => role === "user")
-      .map(({ id }) => id),
-  );
-  return {
-    ...generated,
-    // Highlight cards are supplementary. A bad model-owned deep link must not
-    // discard the overall assessment, scores, strengths, or coaching advice.
-    moments: generated.moments.filter(({ messageId }) =>
-      allowedUserMessageIds.has(messageId)),
-  };
 }
 
 function sanitizeFeedbackMoments(
