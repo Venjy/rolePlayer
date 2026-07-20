@@ -233,7 +233,7 @@ Interrupted-response truncation is an estimate because Qwen does not provide wor
 
 Scenario `voiceBehavior.interruptFrequency` changes prompt-level conversational patience/interjection/challenge behavior only. Push-to-talk, long recording, and free conversation all preserve manual Qwen turn detection (`turn_detection: null`); free conversation adds browser-side automatic speech/silence segmentation. The learner can barge in while the persona speaks, but Qwen cannot autonomously begin speaking over an uncommitted learner utterance.
 
-History continuation is text-level context reconstruction, not revival of the old Qwen session or replay of original audio. It restores semantic transcript context but not acoustic details such as the learner's tone or emotion. The model currently receives the most recent 20 user turns while the UI keeps the complete stored transcript.
+History continuation is text-level context reconstruction, not revival of the old Qwen session or replay of original audio. It restores semantic transcript context but not acoustic details such as the learner's tone or emotion. The model receives the most recent 50 user turns—the maximum supported by `qwen-audio-3.0-realtime-plus`—while SQLite and the UI keep the complete transcript. Older turns are not summarized during reconnect because a second model call would add latency, cost, failure modes, and possible semantic drift.
 
 The demo does not yet include authentication/admin authorization, per-user history ownership, automatic retention controls, rubric-version administration, automatic multi-attempt feedback backoff, production rate limiting, Docker, or production static file serving.
 

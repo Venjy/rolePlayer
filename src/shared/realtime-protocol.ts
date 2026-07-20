@@ -2,6 +2,8 @@ import { z } from "zod";
 import { databaseIdSchema } from "./database-id";
 
 export const MAX_REALTIME_INSTRUCTIONS_LENGTH = 12_000;
+/** Provider limit for qwen-audio-3.0-realtime-plus historical QA turns. */
+export const MAX_REALTIME_HISTORY_TURNS = 50;
 
 export const qwenVoiceSchema = z.enum([
   "longanqian",
@@ -18,7 +20,12 @@ export const clientControlMessageSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("session.configure"),
       conversationId: databaseIdSchema,
-      maxHistoryTurns: z.number().int().min(1).max(50).default(20),
+      maxHistoryTurns: z
+        .number()
+        .int()
+        .min(1)
+        .max(MAX_REALTIME_HISTORY_TURNS)
+        .default(MAX_REALTIME_HISTORY_TURNS),
     })
     .strict(),
   z.object({ type: z.literal("input.start") }),

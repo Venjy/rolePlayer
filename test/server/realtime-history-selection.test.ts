@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { selectRealtimeHistory } from "../../src/server/realtime/realtime-gateway";
+import { MAX_REALTIME_HISTORY_TURNS } from "../../src/shared/realtime-protocol";
 
 describe("selectRealtimeHistory", () => {
   it("keeps all messages when the stored history is within the turn budget", () => {
@@ -49,5 +50,30 @@ describe("selectRealtimeHistory", () => {
         20,
       ),
     ).toEqual([]);
+  });
+
+  it("restores the newest 50 complete turns at the provider limit", () => {
+    const history = Array.from({ length: 55 }, (_, index) => {
+      const turn = index + 1;
+      return [
+        { role: "user" as const, text: `Question ${turn}` },
+        { role: "assistant" as const, text: `Answer ${turn}` },
+      ];
+    }).flat();
+
+    const selected = selectRealtimeHistory(
+      history,
+      MAX_REALTIME_HISTORY_TURNS,
+    );
+
+    expect(selected).toHaveLength(MAX_REALTIME_HISTORY_TURNS * 2);
+    expect(selected.slice(0, 2)).toEqual([
+      { role: "user", text: "Question 6" },
+      { role: "assistant", text: "Answer 6" },
+    ]);
+    expect(selected.slice(-2)).toEqual([
+      { role: "user", text: "Question 55" },
+      { role: "assistant", text: "Answer 55" },
+    ]);
   });
 });

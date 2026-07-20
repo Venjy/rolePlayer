@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clientControlMessageSchema,
+  MAX_REALTIME_HISTORY_TURNS,
   serverMessageSchema,
 } from "../../src/shared/realtime-protocol";
 
@@ -23,9 +24,18 @@ describe("realtime protocol", () => {
       clientControlMessageSchema.parse({
         type: "session.configure",
         conversationId: 123,
-        maxHistoryTurns: 51,
+        maxHistoryTurns: MAX_REALTIME_HISTORY_TURNS + 1,
       }),
     ).toThrow();
+  });
+
+  it("defaults restoration to the provider's maximum history window", () => {
+    expect(
+      clientControlMessageSchema.parse({
+        type: "session.configure",
+        conversationId: 123,
+      }),
+    ).toMatchObject({ maxHistoryTurns: MAX_REALTIME_HISTORY_TURNS });
   });
 
   it("requires a positive integer conversation ID and rejects browser prompt fields", () => {

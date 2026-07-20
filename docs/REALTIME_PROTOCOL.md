@@ -77,15 +77,19 @@ Must be the first message after WebSocket open.
 {
   "type": "session.configure",
   "conversationId": 42,
-  "maxHistoryTurns": 20
+  "maxHistoryTurns": 50
 }
 ```
 
 `conversationId` is a positive SQLite-generated integer.
-`maxHistoryTurns` is an integer from 1 through 50 and defaults to 20 when
-omitted. A turn is counted by user messages: restoration starts at the selected
-recent user turn and includes all following user/assistant messages in their
-persisted order.
+`maxHistoryTurns` is an integer from 1 through 50. The application and protocol
+default both use 50, which is the documented `qwen-audio-3.0-realtime-plus`
+maximum rather than the provider's latency-oriented default of 20. A turn is
+counted by user messages: restoration starts at the selected recent user turn
+and includes all following user/assistant messages in their persisted order.
+An unbounded replay is intentionally unsupported because Qwen discards history
+beyond 50 turns; the full transcript remains durable in SQLite and visible in
+the UI.
 
 Node rejects a missing conversation instead of trusting browser-supplied runtime
 configuration. The browser cannot send audio before Node has restored the
@@ -96,8 +100,8 @@ session and replied with `session.ready`.
 A resumed conversation always creates a fresh Qwen WebSocket; an expired Qwen
 socket is not resumed. Node performs this ordered handshake:
 
-1. Load the conversation's snapshotted Instructions, voice, and bounded recent
-   finalized text from SQLite.
+1. Load the conversation's snapshotted Instructions, voice, and the newest 50
+   user turns of finalized text from SQLite.
 2. Wait for Qwen `session.created`, send `session.update`, and wait for
    `session.updated`.
 3. Replay each persisted message with `conversation.item.create`: a user message

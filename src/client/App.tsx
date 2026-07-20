@@ -38,9 +38,10 @@ import {
   Typography,
 } from "antd";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type {
-  ServerMessage,
-  SessionState,
+import {
+  MAX_REALTIME_HISTORY_TURNS,
+  type ServerMessage,
+  type SessionState,
 } from "../shared/realtime-protocol";
 import type {
   Difficulty,
@@ -1754,7 +1755,7 @@ export function App() {
 
       await realtime.connect({
         conversationId: conversation.id,
-        maxHistoryTurns: 20,
+        maxHistoryTurns: MAX_REALTIME_HISTORY_TURNS,
       });
       if (!isCurrentRuntime() || realtimeRef.current !== realtime) {
         throw new Error("Session activation was superseded.");
