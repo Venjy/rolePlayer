@@ -312,6 +312,11 @@ function PersonaSummary({ persona }: { persona: Persona }) {
         label={t({ en: "Communication style", zh: "沟通方式" })}
         value={persona.communicationStyle}
       />
+      <SummaryText
+        icon={<CheckCircleOutlined />}
+        label={t({ en: "Behavior notes", zh: "行为说明" })}
+        value={persona.behaviorNotes}
+      />
       <SummaryTags
         icon={<RiseOutlined />}
         label={t({ en: "What matters to them", zh: "角色动机" })}

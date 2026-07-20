@@ -40,7 +40,11 @@ const scenario: Scenario = {
 
 describe("catalog localization", () => {
   it("projects English and Chinese from explicit fields", () => {
-    expect(localizePersona(persona, "zh")).toMatchObject({ name: "林悦", occupation: "电商卖家" });
+    expect(localizePersona(persona, "zh")).toMatchObject({
+      name: "林悦",
+      occupation: "电商卖家",
+      behaviorNotes: "追问数据。",
+    });
     expect(localizeScenario(scenario, "en")).toMatchObject({ name: "Discovery", goals: ["Understand context"] });
   });
 
@@ -48,5 +52,18 @@ describe("catalog localization", () => {
     const chineseOnly = { ...persona, name: "", nameZhCn: "张三" };
     expect(localizePersona(chineseOnly, "en").name).toBe("张三");
     expect(chineseOnly.name).toBe("");
+  });
+
+  it("falls back behavior notes to the available language for launch summaries", () => {
+    const chineseOnly = {
+      ...persona,
+      behaviorNotes: "",
+      behaviorNotesZhCn: "只有中文行为说明。",
+    };
+
+    expect(localizePersona(chineseOnly, "en").behaviorNotes).toBe(
+      "只有中文行为说明。",
+    );
+    expect(chineseOnly.behaviorNotes).toBe("");
   });
 });

@@ -121,13 +121,6 @@
   line-height: 1.65;
 }
 
-.description {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
-}
-
 .personaHeading {
   min-width: 0;
 }
