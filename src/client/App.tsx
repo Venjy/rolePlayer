@@ -6,7 +6,9 @@ import {
   DownloadOutlined,
   HistoryOutlined,
   MoonOutlined,
+  PauseCircleOutlined,
   PhoneOutlined,
+  PlayCircleOutlined,
   PlusOutlined,
   PoweroffOutlined,
   ReloadOutlined,
@@ -69,6 +71,9 @@ import {
   ConversationHistoryNavigation,
   downloadConversation,
   endConversation,
+  pauseConversation as pauseConversationRequest,
+  restartConversation as restartConversationRequest,
+  resumeConversation as resumeConversationRequest,
   useConversationHistory,
 } from "./conversations";
 import {
@@ -96,9 +101,16 @@ import {
 const THEME_STORAGE_KEY = "role-player:color-mode";
 
 type ColorMode = "light" | "dark";
-type UiPreviewMode = "session" | "recording" | "long" | "free" | null;
+type UiPreviewMode =
+  | "session"
+  | "paused"
+  | "recording"
+  | "long"
+  | "free"
+  | null;
 type UiError = string | LocalizedText;
 type VoiceInputMode = "push-to-talk" | "long-recording" | "free-conversation";
+type SessionControlAction = "pausing" | "resuming" | "restarting";
 
 interface FreeConversationAudioRouting {
   enabled: boolean;
@@ -193,6 +205,7 @@ const STATE_LABELS: Record<
   ready: { en: "Ready to talk", zh: "可以说话" },
   listening: { en: "Listening", zh: "正在聆听" },
   processing: { en: "Thinking", zh: "思考中" },
+  paused: { en: "Paused", zh: "已暂停" },
   ended: { en: "Ended", zh: "已结束" },
 };
 
@@ -348,6 +361,7 @@ const STATE_BADGE_STATUS = {
   listening: "processing",
   processing: "warning",
   speaking: "processing",
+  paused: "warning",
   ended: "default",
 } as const satisfies Record<
   SessionState,
@@ -409,6 +423,7 @@ function readableServerError(code: string, message: string): UiError {
 function getUiPreviewMode(): UiPreviewMode {
   const preview = new URLSearchParams(window.location.search).get("preview");
   return preview === "session" ||
+    preview === "paused" ||
     preview === "recording" ||
     preview === "long" ||
     preview === "free"
@@ -494,8 +509,19 @@ export function App() {
   const [qwenConfigured, setQwenConfigured] = useState<boolean | null>(null);
   const [healthError, setHealthError] = useState<UiError | null>(null);
   const [sessionActive, setSessionActive] = useState(sessionUiPreview);
+  const [sessionPaused, setSessionPaused] = useState(
+    uiPreviewMode === "paused",
+  );
+  const [sessionControlAction, setSessionControlAction] =
+    useState<SessionControlAction | null>(null);
   const [sessionState, setSessionState] = useState<SessionState>(
-    recordingUiPreview ? "listening" : sessionUiPreview ? "speaking" : "ended",
+    uiPreviewMode === "paused"
+      ? "paused"
+      : recordingUiPreview
+        ? "listening"
+        : sessionUiPreview
+          ? "speaking"
+          : "ended",
   );
   const [isStarting, setIsStarting] = useState(
     route.page === "chat" && !sessionUiPreview,
@@ -859,6 +885,7 @@ export function App() {
   useEffect(() => {
     freeConversationController.setBlocked(
       voiceInputMode !== "free-conversation" ||
+        sessionPaused ||
         isSubmitting ||
         isStarting ||
         isUserCommitPending ||
@@ -870,6 +897,7 @@ export function App() {
     isSubmitting,
     isUserCommitPending,
     runtimeRecoveryFailed,
+    sessionPaused,
     voiceInputMode,
   ]);
 
@@ -1029,6 +1057,7 @@ export function App() {
       if (preserveSessionView) {
         setSessionState("connecting");
       } else {
+        setSessionPaused(false);
         setRuntimeRecoveryFailed(false);
         messageApi.destroy(SESSION_ERROR_MESSAGE_KEY);
         setSessionActive(false);
@@ -1413,9 +1442,55 @@ export function App() {
     requireSuccessfulSettlement(await interruptActivePlaybackAndWait());
   }, [interruptActivePlaybackAndWait, waitForUserCommitSettlement]);
 
+  const stageConversationView = useCallback(
+    (conversation: ConversationDetail): void => {
+      setActiveSessionConfig({
+        persona: conversation.persona,
+        scenario: conversation.scenario,
+        difficulty: conversation.difficulty,
+      });
+      setSuccessSuggestionResponseId(null);
+      activeConversationIdRef.current = conversation.id;
+      setActiveConversationId(conversation.id);
+      setErrorMessage(null);
+      acceptUserTranscriptRef.current = false;
+      setTurns(
+        conversation.messages.map((message) => ({
+          id: message.id,
+          role: message.role,
+          text: message.text,
+          timestamp: new Date(message.createdAt),
+          interrupted: message.interrupted,
+        })),
+      );
+      setUserDraft("");
+      setAssistantDraft(null);
+      setIsReconciling(false);
+      assistantResponsesRef.current.clear();
+      activeResponseIdRef.current = undefined;
+      playbackActiveRef.current = false;
+      followLatestRef.current = true;
+    },
+    [],
+  );
+
+  const showPausedConversation = useCallback(
+    (conversation: ConversationDetail): void => {
+      stageConversationView(conversation);
+      conversationStartedRef.current = true;
+      sessionEstablishedRef.current = false;
+      setRuntimeRecoveryFailed(false);
+      setSessionActive(true);
+      setSessionPaused(true);
+      setSessionState("paused");
+    },
+    [stageConversationView],
+  );
+
   const activateConversation = useCallback(async (
     conversation: ConversationDetail,
   ): Promise<void> => {
+    conversation = await resumeConversationRequest(conversation.id);
     if (!componentMountedRef.current) {
       throw new Error("Session activation was superseded.");
     }
@@ -1426,34 +1501,7 @@ export function App() {
     const isCurrentRuntime = () =>
       componentMountedRef.current && runtimeEpochRef.current === runtimeEpoch;
     let realtime: RealtimeClient | undefined;
-    const sessionConfig: ActiveSessionConfig = {
-      persona: conversation.persona,
-      scenario: conversation.scenario,
-      difficulty: conversation.difficulty,
-    };
-
-    setActiveSessionConfig(sessionConfig);
-    setSuccessSuggestionResponseId(null);
-    activeConversationIdRef.current = conversation.id;
-    setActiveConversationId(conversation.id);
-    setErrorMessage(null);
-    acceptUserTranscriptRef.current = false;
-    setTurns(
-      conversation.messages.map((message) => ({
-        id: message.id,
-        role: message.role,
-        text: message.text,
-        timestamp: new Date(message.createdAt),
-        interrupted: message.interrupted,
-      })),
-    );
-    setUserDraft("");
-    setAssistantDraft(null);
-    setIsReconciling(false);
-    assistantResponsesRef.current.clear();
-    activeResponseIdRef.current = undefined;
-    playbackActiveRef.current = false;
-    followLatestRef.current = true;
+    stageConversationView(conversation);
 
     await cleanupPromiseRef.current;
     if (!isCurrentRuntime()) {
@@ -1614,11 +1662,13 @@ export function App() {
       conversationStartedRef.current = true;
       sessionEstablishedRef.current = true;
       setRuntimeRecoveryFailed(false);
+      setSessionPaused(false);
       setSessionActive(true);
       setSessionState("ready");
     } catch (error) {
       if (isCurrentRuntime()) {
         await teardownSessionRuntime(true, preserveSessionViewOnFailure);
+        await pauseConversationRequest(conversation.id).catch(() => undefined);
         if (preserveSessionViewOnFailure) {
           setRuntimeRecoveryFailed(true);
           setSessionState("ended");
@@ -1639,6 +1689,7 @@ export function App() {
     refreshConversationHistorySilently,
     reportContextualError,
     showSessionError,
+    stageConversationView,
     teardownSessionRuntime,
     tryFinalizeAssistant,
     volume,
@@ -1868,7 +1919,11 @@ export function App() {
         );
         return;
       }
-      await activateConversation(conversation);
+      if (conversation.pausedAt) {
+        showPausedConversation(conversation);
+      } else {
+        await activateConversation(conversation);
+      }
       if (synchronizeUrl) {
         navigate({ page: "chat", conversationId: conversation.id });
       }
@@ -2289,6 +2344,7 @@ export function App() {
     enabled:
       voiceInputMode === "push-to-talk" &&
       sessionActive &&
+      !sessionPaused &&
       !isSubmitting &&
       !isStarting &&
       !isUserCommitPending &&
@@ -2396,6 +2452,117 @@ export function App() {
     voiceModeTransitioning,
   ]);
 
+  const settleVoiceBeforeSessionControl = async (): Promise<void> => {
+    await pressToTalk.cancelActiveGesture();
+    await submissionCompletionRef.current;
+    if (recordingRef.current) await cancelRecording();
+    await settleSessionBeforeTransition();
+  };
+
+  const pauseSession = async () => {
+    if (
+      sessionPaused ||
+      transitionInProgressRef.current ||
+      !activeConversationIdRef.current
+    ) {
+      return;
+    }
+    const conversationId = activeConversationIdRef.current;
+    transitionInProgressRef.current = true;
+    setSessionControlAction("pausing");
+    setIsStarting(true);
+    setSuccessSuggestionResponseId(null);
+    let runtimeStopped = false;
+    try {
+      await settleVoiceBeforeSessionControl();
+      await teardownSessionRuntime(true, true);
+      runtimeStopped = true;
+      setSessionPaused(true);
+      setSessionState("paused");
+      await pauseConversationRequest(conversationId);
+      await refreshConversationHistorySilently();
+    } catch (error) {
+      reportContextualError(readableError(error));
+      if (runtimeStopped) {
+        setSessionPaused(true);
+        setSessionState("paused");
+      }
+    } finally {
+      transitionInProgressRef.current = false;
+      setSessionControlAction(null);
+      setIsStarting(false);
+      runPendingRuntimeRecoveryRef.current();
+      synchronizeRequestedRouteRef.current();
+    }
+  };
+
+  const continueSession = async () => {
+    if (
+      !sessionPaused ||
+      transitionInProgressRef.current ||
+      !activeConversationIdRef.current
+    ) {
+      return;
+    }
+    const conversationId = activeConversationIdRef.current;
+    transitionInProgressRef.current = true;
+    setSessionControlAction("resuming");
+    setIsStarting(true);
+    setSessionState("connecting");
+    try {
+      const conversation = await resumeConversationRequest(conversationId);
+      await activateConversation(conversation);
+      await refreshConversationHistorySilently();
+    } catch (error) {
+      await pauseConversationRequest(conversationId).catch(() => undefined);
+      setRuntimeRecoveryFailed(false);
+      setSessionPaused(true);
+      setSessionState("paused");
+      reportContextualError(readableError(error));
+    } finally {
+      transitionInProgressRef.current = false;
+      setSessionControlAction(null);
+      setIsStarting(false);
+      runPendingRuntimeRecoveryRef.current();
+      synchronizeRequestedRouteRef.current();
+    }
+  };
+
+  const restartSession = async () => {
+    if (
+      transitionInProgressRef.current ||
+      !activeConversationIdRef.current
+    ) {
+      return;
+    }
+    const conversationId = activeConversationIdRef.current;
+    transitionInProgressRef.current = true;
+    setSessionControlAction("restarting");
+    setIsStarting(true);
+    setSuccessSuggestionResponseId(null);
+    try {
+      if (!sessionPaused) await settleVoiceBeforeSessionControl();
+      await teardownSessionRuntime(true, true);
+      setSessionPaused(true);
+      setSessionState("paused");
+      const restarted = await restartConversationRequest(conversationId);
+      await activateConversation(restarted);
+      await refreshConversationHistorySilently();
+    } catch (error) {
+      await pauseConversationRequest(conversationId).catch(() => undefined);
+      setRuntimeRecoveryFailed(false);
+      setSessionPaused(true);
+      setSessionState("paused");
+      reportContextualError(readableError(error));
+    } finally {
+      transitionInProgressRef.current = false;
+      setSessionControlAction(null);
+      setIsStarting(false);
+      runPendingRuntimeRecoveryRef.current();
+      synchronizeRequestedRouteRef.current();
+    }
+  };
+
   const endSession = async () => {
     if (transitionInProgressRef.current) return;
     const conversationId = activeConversationIdRef.current;
@@ -2404,10 +2571,7 @@ export function App() {
     setIsStarting(true);
     let durablyEnded = false;
     try {
-      await pressToTalk.cancelActiveGesture();
-      await submissionCompletionRef.current;
-      if (recordingRef.current) await cancelRecording();
-      await settleSessionBeforeTransition();
+      await settleVoiceBeforeSessionControl();
       await endConversation(conversationId);
       durablyEnded = true;
       await teardownSessionRuntime();
@@ -2510,6 +2674,7 @@ export function App() {
     selectedPersona !== undefined &&
     !isStarting;
   const canStopResponse =
+    !sessionPaused &&
     !isReconciling &&
     (sessionState === "processing" || sessionState === "speaking");
   const gestureActive = pressToTalk.visualState.pressed || isRecording;
@@ -2539,12 +2704,15 @@ export function App() {
               : t({ en: "Hold to talk", zh: "按住说话" });
   const voiceModeOptionsDisabled =
     !sessionActive ||
+    sessionPaused ||
     isSubmitting ||
     isStarting ||
     isUserCommitPending ||
     runtimeRecoveryFailed ||
     voiceModeTransitioning ||
     voiceInputMode !== "push-to-talk";
+  const sessionControlsLocked =
+    isStarting || sessionControlAction !== null;
   const errorMessageText = resolveUiError(errorMessage);
   const launchError =
     errorMessageText ??
@@ -2963,6 +3131,7 @@ export function App() {
                     <Button
                       type="text"
                       shape="circle"
+                      disabled={sessionPaused || sessionControlsLocked}
                       icon={muted ? <AudioMutedOutlined /> : <SoundOutlined />}
                       aria-label={t({
                         en: "Open playback controls",
@@ -2989,7 +3158,8 @@ export function App() {
                       disabled={
                         !activeConversationId ||
                         !activeConversationHasMessages ||
-                        downloadInProgress
+                        downloadInProgress ||
+                        sessionControlsLocked
                       }
                       placement="bottomRight"
                     >
@@ -2998,7 +3168,9 @@ export function App() {
                         shape="circle"
                         loading={downloadInProgress}
                         disabled={
-                          !activeConversationId || !activeConversationHasMessages
+                          !activeConversationId ||
+                          !activeConversationHasMessages ||
+                          sessionControlsLocked
                         }
                         icon={<DownloadOutlined />}
                         aria-label={t({
@@ -3009,6 +3181,49 @@ export function App() {
                     </Dropdown>
                   </span>
                 </Tooltip>
+                {!sessionPaused && (
+                  <Tooltip title={t({ en: "Pause session", zh: "暂停会话" })}>
+                    <Button
+                      type="text"
+                      shape="circle"
+                      loading={sessionControlAction === "pausing"}
+                      disabled={sessionControlsLocked}
+                      icon={<PauseCircleOutlined />}
+                      aria-label={t({ en: "Pause session", zh: "暂停会话" })}
+                      onClick={() => void pauseSession()}
+                    />
+                  </Tooltip>
+                )}
+                <Popconfirm
+                  title={t({
+                    en: "Restart this role-play?",
+                    zh: "重新开始本次对练？",
+                  })}
+                  description={t({
+                    en: "All transcript and audio in this session will be cleared. The scenario, role, difficulty, and other settings stay the same.",
+                    zh: "本次会话的文字和音频记录都会清空，场景、角色、难度及其他配置保持不变。",
+                  })}
+                  okText={t({ en: "Restart", zh: "重新开始" })}
+                  cancelText={t({ en: "Cancel", zh: "取消" })}
+                  disabled={sessionControlsLocked}
+                  onConfirm={restartSession}
+                >
+                  <Tooltip
+                    title={t({ en: "Restart session", zh: "重启会话" })}
+                  >
+                    <Button
+                      type="text"
+                      shape="circle"
+                      loading={sessionControlAction === "restarting"}
+                      disabled={sessionControlsLocked}
+                      icon={<ReloadOutlined />}
+                      aria-label={t({
+                        en: "Restart session",
+                        zh: "重启会话",
+                      })}
+                    />
+                  </Tooltip>
+                </Popconfirm>
                 <Popconfirm
                   title={t({
                     en: "End this role-play?",
@@ -3021,6 +3236,7 @@ export function App() {
                   okText={t({ en: "End", zh: "结束" })}
                   cancelText={t({ en: "Keep practicing", zh: "继续对练" })}
                   okButtonProps={{ danger: true }}
+                  disabled={sessionControlsLocked}
                   onConfirm={endSession}
                 >
                   <Tooltip title={t({ en: "End session", zh: "结束会话" })}>
@@ -3028,6 +3244,7 @@ export function App() {
                       type="text"
                       danger
                       shape="circle"
+                      disabled={sessionControlsLocked}
                       icon={<PoweroffOutlined />}
                       aria-label={t({ en: "End session", zh: "结束会话" })}
                     />
@@ -3127,7 +3344,36 @@ export function App() {
             )}
 
             <footer className="voice-composer">
-              {voiceInputMode === "free-conversation" ? (
+              {sessionPaused ? (
+                <Button
+                  className="continue-session-button"
+                  type="primary"
+                  size="large"
+                  block
+                  icon={<PlayCircleOutlined />}
+                  loading={
+                    sessionControlAction === "resuming" ||
+                    sessionControlAction === "restarting"
+                  }
+                  disabled={sessionControlsLocked}
+                  onClick={() => void continueSession()}
+                >
+                  {sessionControlAction === "restarting"
+                    ? t({
+                        en: "Restarting session…",
+                        zh: "正在重启会话…",
+                      })
+                    : sessionControlAction === "resuming"
+                      ? t({
+                          en: "Continuing session…",
+                          zh: "正在继续会话…",
+                        })
+                      : t({
+                          en: "Continue session",
+                          zh: "继续对话",
+                        })}
+                </Button>
+              ) : voiceInputMode === "free-conversation" ? (
                 <Button
                   className="exit-free-conversation-button"
                   size="large"

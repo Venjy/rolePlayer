@@ -9,6 +9,7 @@ import {
   addBilingualConversationFeedbackColumns,
   createConversationFeedbackSchema,
 } from "./conversation-feedback-migration";
+import { addConversationSessionLifecycleColumns } from "./conversation-session-lifecycle-migration";
 
 const createMigrationTable = `
   CREATE TABLE schema_migrations (
@@ -451,5 +452,10 @@ export const CONVERSATION_DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
     version: 8,
     name: "make_conversation_feedback_bilingual",
     up: addBilingualConversationFeedbackColumns,
+  },
+  {
+    version: 9,
+    name: "add_conversation_pause_and_active_duration",
+    up: addConversationSessionLifecycleColumns,
   },
 ];

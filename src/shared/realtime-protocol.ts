@@ -44,6 +44,7 @@ export const sessionStateSchema = z.enum([
   "listening",
   "processing",
   "speaking",
+  "paused",
   "ended",
 ]);
 

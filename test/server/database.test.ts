@@ -145,6 +145,11 @@ describe("ApplicationDatabase", () => {
         name: "make_conversation_feedback_bilingual",
         applied_at: expect.any(String),
       }),
+      expect.objectContaining({
+        version: 19,
+        name: "add_conversation_pause_and_active_duration",
+        applied_at: expect.any(String),
+      }),
     ]);
     expect(
       database.raw
@@ -246,7 +251,7 @@ describe("ApplicationDatabase", () => {
       second.raw
         .prepare("SELECT COUNT(*) AS count FROM schema_migrations")
         .get(),
-    ).toMatchObject({ count: 18 });
+    ).toMatchObject({ count: 19 });
     expect(
       second.raw
         .prepare("SELECT applied_at FROM schema_migrations WHERE version = 1")
@@ -297,6 +302,13 @@ describe("ApplicationDatabase", () => {
           "overall_assessment",
           "overall_assessment_zh_cn",
           "overall_score",
+        ]),
+      );
+      expect(columnNames("conversation_sessions")).toEqual(
+        expect.arrayContaining([
+          "paused_at",
+          "active_duration_ms",
+          "active_started_at",
         ]),
       );
       expect(columnNames("conversation_feedback_strengths")).toEqual(
@@ -758,6 +770,10 @@ describe("ApplicationDatabase", () => {
       { version: 16, name: "move_voice_behavior_to_scenarios" },
       { version: 17, name: "create_conversation_feedback" },
       { version: 18, name: "make_conversation_feedback_bilingual" },
+      {
+        version: 19,
+        name: "add_conversation_pause_and_active_duration",
+      },
     ]);
     expect(
       first.raw.prepare("SELECT COUNT(*) AS count FROM personas").get(),

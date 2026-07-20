@@ -56,6 +56,8 @@ export const conversationSummarySchema = z.object({
   difficulty: difficultySchema,
   locale: conversationLocaleSchema,
   status: conversationStatusSchema,
+  pausedAt: z.string().datetime({ offset: true }).nullable(),
+  activeDurationMs: z.number().int().min(0),
   endedAt: z.string().datetime({ offset: true }).nullable(),
   feedbackStatus: z
     .enum(["pending", "processing", "completed", "failed"])

@@ -174,9 +174,7 @@ export function ConversationFeedbackPage({
 
   const durationSeconds = useMemo(() => {
     if (!view) return 0;
-    const end = Date.parse(view.conversation.endedAt ?? view.conversation.updatedAt);
-    const start = Date.parse(view.conversation.createdAt);
-    return Math.max(0, Math.round((end - start) / 1_000));
+    return Math.max(0, Math.round(view.conversation.activeDurationMs / 1_000));
   }, [view]);
 
   const renderHeader = (subtitle?: string) => (

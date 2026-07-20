@@ -186,6 +186,12 @@ function ConversationListContent({
                             : t({ en: "Ended", zh: "已结束" })}
                         </Tag>
                       )}
+                      {conversation.status === "active" &&
+                        conversation.pausedAt !== null && (
+                          <Tag bordered={false} color="warning">
+                            {t({ en: "Paused", zh: "已暂停" })}
+                          </Tag>
+                        )}
                     </span>
                     <span className={styles.preview}>
                       {conversation.lastMessagePreview ??

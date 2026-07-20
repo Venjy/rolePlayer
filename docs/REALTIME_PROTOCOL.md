@@ -59,6 +59,14 @@ barge-in flow described below is independent.
 
 See `docs/CATALOG_AND_PROMPTS.md` for the catalog and compiler contracts.
 
+## Durable pause, continue, and restart boundary
+
+These controls use the conversation REST API rather than new WebSocket control messages. Before pausing or restarting, the browser completes the normal input/assistant settlement barrier. It then closes realtime transport and calls `POST /api/conversations/:id/pause` or `POST /api/conversations/:id/restart`. Continue calls `POST /api/conversations/:id/resume` before opening a fresh socket and sending `session.configure`.
+
+The gateway also coordinates transport lifetime with durable timing. The first configured browser socket idempotently resumes the conversation. Closing the last socket idempotently pauses it, so browser disconnect time is excluded even when the UI cannot send its REST request. A connection token prevents a stale superseded socket from pausing a newer socket for the same conversation. `ConversationRepository` rejects realtime configuration and new finalized-message writes while the row is paused; resume must happen first.
+
+Restart retains the same durable conversation ID and configuration snapshot, but deletes its finalized text/audio and resets active duration before the new socket is configured. It never attempts to clear or reuse the old Qwen session.
+
 ## Browser control messages
 
 ### Configure session
@@ -236,7 +244,7 @@ still active, and reconciles the assistant item as described below.
 { "type": "session.state", "state": "ready" }
 ```
 
-Valid states are `connecting`, `ready`, `listening`, `processing`, `speaking`, and `ended`.
+Valid application states are `connecting`, `ready`, `listening`, `processing`, `speaking`, `paused`, and `ended`. `paused` represents the REST/database lifecycle while no realtime socket is active; the gateway therefore does not normally emit a `session.state` frame for it.
 
 ### User transcript
 

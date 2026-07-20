@@ -21,6 +21,8 @@ function toSummary(conversation: ConversationDetail): ConversationSummary {
     difficulty: conversation.difficulty,
     locale: conversation.locale,
     status: conversation.status,
+    pausedAt: conversation.pausedAt,
+    activeDurationMs: conversation.activeDurationMs,
     endedAt: conversation.endedAt,
     feedbackStatus: conversation.feedbackStatus,
     messageCount: conversation.messageCount,

@@ -112,7 +112,8 @@ database_metadata
 
 sessions
 ├── id (INTEGER AUTOINCREMENT), difficulty, locale, instructions, voice
-├── status (active or ended), ended_at
+├── status (active or ended), paused_at, ended_at
+├── active_duration_ms, active_started_at
 └── created_at, updated_at
 
 persona_snapshots
@@ -177,19 +178,23 @@ Personas and scenarios store preset IDs. `CatalogRepository` joins the relevant 
 
 `scenario_personas` is an ordered many-to-many relation. Its composite primary key prevents duplicate links, and `(scenario_id, position)` preserves deterministic display order. A persona cannot be deleted while referenced; deleting a scenario cascades its links.
 
-`sessions` stores the exact compiled Instructions, voice, difficulty, locale, and timestamps needed to rebuild a realtime connection. Its immutable catalog snapshot is normalized into `persona_snapshots`, `scenario_snapshots`, `scenario_scoring_criteria`, and `scenario_personas`. Catalog edits therefore affect only future conversations without putting whole business objects into JSON columns.
+`sessions` stores the exact compiled Instructions, voice, difficulty, locale, and lifecycle timestamps needed to rebuild a realtime connection. Its immutable catalog snapshot is normalized into `persona_snapshots`, `scenario_snapshots`, `scenario_scoring_criteria`, and `scenario_personas`. Catalog edits therefore affect only future conversations without putting whole business objects into JSON columns.
+
+Active practice time is accumulated in segments. `active_started_at` marks the current running segment; pausing adds that segment to `active_duration_ms`, sets `paused_at`, and clears `active_started_at`. Resuming clears `paused_at` and starts a new segment. The summary/detail API adds the current running segment at read time without mutating SQLite. Feedback uses the final accumulated value, so paused time is not included. Closing the last realtime socket pauses idempotently and configuring a replacement socket resumes idempotently, covering abrupt browser disconnects as well as explicit controls.
+
+Restart is an in-place reset for an unended session: one transaction deletes `messages` (cascading `message_audio`) and any feedback row, resets active time and lifecycle timestamps, and retains the same session ID plus every immutable snapshot/configuration row. This differs from feedback **Try again**, which creates a new session from current catalog data. Ended sessions cannot be paused, resumed, or restarted.
 
 `messages` stores authoritative finalized text. `(conversation_id, position)` preserves ordering. Partial unique indexes on `source_item_id` and `response_id` make user/assistant persistence idempotent. `message_audio` is an optional one-to-one child inserted in the same transaction: user rows retain submitted PCM16 16 kHz microphone audio, normal assistant rows retain completed PCM16 24 kHz output, and interrupted assistant rows retain only the conservative `safePlayedMs` prefix associated with the repaired text. Streaming deltas, generated-but-unheard assistant suffixes, cancelled input, and empty interruption rollbacks are not stored. A conversation advertises audio download only when every finalized message has an audio row; this keeps older text-only history honest. Request-time MP3 loudness normalization operates on decoded copies and never rewrites these authoritative PCM blobs.
 
-Ending a session changes `sessions.status` from `active` to `ended` and records `ended_at`; the repository then rejects new message writes and realtime restoration. Feedback generation state lives in `feedback_reports`, while repeatable values use normalized ordered child tables. Every model-authored feedback text has an unsuffixed English column and a `_zh_cn` Simplified Chinese partner, while criterion scores, weights, positions, kinds, and message references are stored only once. Criterion scores reference the immutable snapshot criterion position, and highlighted moments reference a stored message ID. The model supplies one per-criterion score set; Node calculates and persists one weighted total shared by both display languages. Pending/processing state survives process restarts, failed state retains a bounded stage-specific diagnostic code/message (evidence loading, configuration, timeout/network/HTTP/provider shape, generated-core validation, or persistence), and explicit retry reuses the same report instead of creating duplicates while updating its prompt version.
+Ending a session first rolls any running segment into `active_duration_ms`, then changes `sessions.status` from `active` to `ended`, clears pause/running markers, and records `ended_at`; the repository then rejects new message writes and realtime restoration. Feedback generation state lives in `feedback_reports`, while repeatable values use normalized ordered child tables. Every model-authored feedback text has an unsuffixed English column and a `_zh_cn` Simplified Chinese partner, while criterion scores, weights, positions, kinds, and message references are stored only once. Criterion scores reference the immutable snapshot criterion position, and highlighted moments reference a stored message ID. The model supplies one per-criterion score set; Node calculates and persists one weighted total shared by both display languages. Pending/processing state survives process restarts, failed state retains a bounded stage-specific diagnostic code/message (evidence loading, configuration, timeout/network/HTTP/provider shape, generated-core validation, or persistence), and explicit retry reuses the same report instead of creating duplicates while updating its prompt version.
 
 Deleting an ended session removes its `sessions` row. Foreign keys cascade every owned persona/scenario snapshot, scoring/compatibility snapshot, finalized message and `message_audio`, feedback report, and normalized feedback child. Active sessions are not deletable. The HTTP route cancels and awaits any same-process feedback generator before repository deletion so no asynchronous result can write back after the parent has gone. **Try again** performs no database clone: it creates a new session through the normal catalog-backed creation path using the old snapshot's source persona/scenario IDs and difficulty.
 
 ## Migrations, legacy splitting, and business initialization
 
-Migrations are append-only structural changes. The catalog chain currently has eight entries: migration 4 moves both historical discriminator tables into nine independent domain tables, migration 5 replaces duplicated catalog text with preset foreign keys/ordered relations, migration 6 creates the bilingual Qwen voice directory, migration 7 moves tone/pace/interjection configuration from personas to scenarios, and migration 8 records structured Qwen voice gender. The conversation chain has eight entries: migration 4 removes the redundant `conversation_` prefix from business table and index names, migration 5 adds finalized-message audio, migration 6 moves the resolved voice-behavior values from persona snapshots to scenario snapshots, migration 7 adds terminal session state plus normalized feedback tables, and migration 8 adds paired Simplified Chinese feedback text columns without duplicating scores or references. Neither file contains the other domain's business tables.
+Migrations are append-only structural changes. The catalog chain currently has eight entries: migration 4 moves both historical discriminator tables into nine independent domain tables, migration 5 replaces duplicated catalog text with preset foreign keys/ordered relations, migration 6 creates the bilingual Qwen voice directory, migration 7 moves tone/pace/interjection configuration from personas to scenarios, and migration 8 records structured Qwen voice gender. The conversation chain has nine entries: migration 4 removes the redundant `conversation_` prefix from business table and index names, migration 5 adds finalized-message audio, migration 6 moves the resolved voice-behavior values from persona snapshots to scenario snapshots, migration 7 adds terminal session state plus normalized feedback tables, migration 8 adds paired Simplified Chinese feedback text columns without duplicating scores or references, and migration 9 adds pause plus active-duration accounting. Neither file contains the other domain's business tables.
 
-The historical combined database uses migrations 1–18:
+The historical combined database uses migrations 1–19:
 
 - migration 2: core catalog tables;
 - migration 3: compatibility ordering;
@@ -207,6 +212,9 @@ The historical combined database uses migrations 1–18:
 - migration 16: move tone style, speaking pace, and interjection/challenge tendency to scenario records and scenario snapshots while preserving compatibility and history.
 - migration 17: add terminal conversation state and normalized coaching-feedback tables.
 - migration 18: add paired Simplified Chinese coaching-feedback columns while retaining a single score/reference structure.
+- migration 19: add durable pause state and segmented active-practice duration accounting.
+
+During migration 9/19, historical ended sessions receive the best available wall-clock duration because earlier schemas could not record pauses. Historical active sessions are marked paused at their last `updated_at` with zero accumulated active time; this avoids counting unknown disconnected time and requires an explicit resume before new realtime writes.
 
 Business data is not seeded by normal schema creation. Run the explicit, transactional initializer:
 
@@ -228,7 +236,7 @@ To preserve an existing combined `data/role-player.sqlite`, stop the server and 
 pnpm database:split
 ```
 
-`LEGACY_DATABASE_PATH` selects the source, while `CATALOG_DATABASE_PATH` and `CONVERSATION_DATABASE_PATH` select the destinations. For compatibility, an old `DATABASE_PATH` value is also accepted as the legacy source only. The command upgrades the source through historical migration 18, creates both fresh destination schemas, copies every row with its ID, validates column shapes, row counts, and foreign keys, and leaves the source untouched afterward. It refuses to run while legacy WAL sidecars exist and never merges into or overwrites an existing target file.
+`LEGACY_DATABASE_PATH` selects the source, while `CATALOG_DATABASE_PATH` and `CONVERSATION_DATABASE_PATH` select the destinations. For compatibility, an old `DATABASE_PATH` value is also accepted as the legacy source only. The command upgrades the source through historical migration 19, creates both fresh destination schemas, copies every row with its ID, validates column shapes, row counts, and foreign keys, and leaves the source untouched afterward. It refuses to run while legacy WAL sidecars exist and never merges into or overwrites an existing target file.
 
 Node currently labels its built-in `node:sqlite` API as experimental even though the project supports it on the enforced Node version. That warning does not mean initialization failed. The catalog scripts suppress this single warning code so successful initializer output is not mistaken for an error.
 

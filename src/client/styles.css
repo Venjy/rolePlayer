@@ -776,10 +776,14 @@ input {
   }
 }
 
-.hold-to-talk-button {
+.hold-to-talk-button,
+.continue-session-button {
   min-height: 50px;
   font-size: 16px;
   font-weight: 650;
+}
+
+.hold-to-talk-button {
   touch-action: none;
   user-select: none;
   -webkit-touch-callout: none;

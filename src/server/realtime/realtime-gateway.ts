@@ -66,6 +66,7 @@ export async function registerRealtimeGateway(
 ): Promise<void> {
   await app.register(websocket);
   const conversations = new ConversationRepository(app.conversationDatabase);
+  const activeConversationConnections = new Map<number, Set<symbol>>();
   const successEvaluator = options.successEvaluator === undefined
     ? createDefaultSuccessEvaluator()
     : options.successEvaluator ?? undefined;
@@ -79,11 +80,41 @@ export async function registerRealtimeGateway(
 
     let qwen: QwenRealtimeClient | undefined;
     let controller: RealtimeSessionController | undefined;
+    const connectionToken = Symbol("realtime-connection");
+    let connectedConversationId: number | undefined;
     let browserClosed = false;
     let configureStarted = false;
     let successDetected = false;
     let successAssessmentQueue = Promise.resolve();
     const successAssessmentAbort = new AbortController();
+
+    const registerConversationConnection = (conversationId: number) => {
+      const connections =
+        activeConversationConnections.get(conversationId) ?? new Set<symbol>();
+      connections.add(connectionToken);
+      activeConversationConnections.set(conversationId, connections);
+      connectedConversationId = conversationId;
+    };
+
+    const releaseConversationConnection = () => {
+      const conversationId = connectedConversationId;
+      if (conversationId === undefined) return;
+      connectedConversationId = undefined;
+      const connections = activeConversationConnections.get(conversationId);
+      connections?.delete(connectionToken);
+      if (connections && connections.size > 0) return;
+      activeConversationConnections.delete(conversationId);
+      try {
+        conversations.pauseConversation(conversationId);
+      } catch (error) {
+        if (!(error instanceof ConversationEndedError)) {
+          request.log.warn(
+            { error, conversationId },
+            "Could not pause conversation after realtime disconnect",
+          );
+        }
+      }
+    };
 
     const send = (message: ServerMessage) => {
       if (browser.readyState === WebSocket.OPEN) {
@@ -114,6 +145,8 @@ export async function registerRealtimeGateway(
       send({ type: "session.state", state: "connecting" });
 
       try {
+        conversations.resumeConversation(message.conversationId);
+        registerConversationConnection(message.conversationId);
         const conversation = conversations.getRuntimeConversation(
           message.conversationId,
           message.maxHistoryTurns,
@@ -332,6 +365,7 @@ export async function registerRealtimeGateway(
       successAssessmentAbort.abort();
       controller?.dispose();
       qwen?.close();
+      releaseConversationConnection();
     });
 
     browser.on("error", (error) => {

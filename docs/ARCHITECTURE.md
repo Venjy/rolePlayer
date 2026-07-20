@@ -6,7 +6,7 @@ The application is a single Node/TypeScript project containing a React SPA, a Fa
 
 The browser must not connect directly to Qwen Audio Realtime. Qwen requires an `Authorization` header during the WebSocket handshake, which browser WebSocket APIs cannot safely provide. More importantly, direct access would expose the permanent Model Studio API key.
 
-SQLite is embedded in the Node process so the eventual deployment can remain one service and one container. Both database files should live on storage mounted into that container, not in a separately deployed database server or an ephemeral image layer. The catalog file persists editable configuration; the conversation file persists launch-time snapshots plus authoritative text and PCM audio for finalized messages. Transient transcript drafts, unheard assistant suffixes, users, and evaluations are not persisted.
+SQLite is embedded in the Node process so the eventual deployment can remain one service and one container. Both database files should live on storage mounted into that container, not in a separately deployed database server or an ephemeral image layer. The catalog file persists editable configuration; the conversation file persists launch-time snapshots, pause/active-time state, plus authoritative text and PCM audio for finalized messages. Transient transcript drafts, unheard assistant suffixes, users, and evaluations are not persisted.
 
 ## Runtime topology
 
@@ -85,7 +85,7 @@ React components do not know the upstream Qwen event schema. They use the stable
 - Fastify and browser WebSocket lifecycle;
 - SQLite connection ownership and migrations;
 - validated persona/scenario CRUD routes and the server-only `CatalogRepository`;
-- validated conversation create/list/detail/end/feedback/download routes plus server-only conversation and feedback repositories;
+- validated conversation create/list/detail/pause/resume/restart/end/feedback/download routes plus server-only conversation and feedback repositories;
 - asynchronous Qwen text-model feedback generation with structured JSON validation, transcript-reference validation, durable retry state, and server-calculated weighted scoring;
 - input validation and audio frame limits;
 - Qwen authentication and WebSocket lifecycle;
@@ -126,7 +126,7 @@ The learner launcher fetches `GET /api/catalog`, lets the learner search for a s
 
 The learner workspace adds one responsive navigation region around the launcher or active session. At 1200 px and above, a 288 px history rail remains on the left. Below 1200 px, the rail is hidden and the same list content opens in an Ant Design Drawer from a header button. The Drawer/rail can select any persisted conversation or return to a new launch without creating a separate mobile page.
 
-Top-level surfaces have stable browser URLs: `/` opens the learner launcher, `/admin` opens catalog administration, `/chat/:conversationId` restores an active persisted conversation, and `/feedback/:conversationId` reviews an ended conversation. Starting or selecting an active conversation updates the URL only after the durable record has loaded and realtime initialization succeeds; selecting an ended item opens feedback and never creates a Qwen realtime connection. `useAppRoute` publishes every programmatic or popstate destination to a synchronous `routeRef` before scheduling React route state; the serialized session-transition coordinator must read that reference so a completion callback cannot act on the previous URL and clear freshly restored turns. A direct load or refresh of a chat URL fetches its immutable snapshots and finalized messages before rebuilding the Qwen connection; a feedback URL fetches the durable report/transcript and polls only while generation is pending. Browser back/forward navigation uses the same settlement and teardown barriers as in-app navigation. Numeric IDs are valid URL path segments; do not introduce a second hash identifier without an authorization, public-enumeration, or external-sharing requirement.
+Top-level surfaces have stable browser URLs: `/` opens the learner launcher, `/admin` opens catalog administration, `/chat/:conversationId` restores an unended persisted conversation, and `/feedback/:conversationId` reviews an ended conversation. A paused chat route restores its immutable snapshots and finalized messages without opening the microphone or Qwen; the learner must choose **Continue session**. An unpaused route rebuilds the realtime connection. Selecting an ended item opens feedback and never creates a Qwen realtime connection. `useAppRoute` publishes every programmatic or popstate destination to a synchronous `routeRef` before scheduling React route state; the serialized session-transition coordinator must read that reference so a completion callback cannot act on the previous URL and clear freshly restored turns. Browser back/forward navigation uses the same settlement and teardown barriers as in-app navigation. Numeric IDs are valid URL path segments; do not introduce a second hash identifier without an authorization, public-enumeration, or external-sharing requirement.
 
 The active session remains a four-row grid inside that workspace:
 
@@ -147,7 +147,15 @@ See `docs/UI_INTERACTIONS.md` for the UI state and accessibility contract.
 
 ## Catalog and session-configuration flow
 
-The current catalog database ends with strict, normalized catalog tables. Each of the five persona preset domains and four scenario preset domains has its own physical table and domain-named bilingual columns; API categories are derived rather than stored as discriminator columns. Persona/scenario records reference those rows by ID, with ordered relation tables for multi-select fields. `CatalogRepository` joins and maps them to a shared contract containing both stable IDs and resolved bilingual values. `GET /api/catalog` returns both preset collections alongside personas and scenarios. The separate conversation database starts with normalized immutable snapshot, message, audio, session-state, and feedback tables. Historical combined databases retain their append-only migrations 1–18 and are upgraded through migration 18 before the one-time splitter copies their two domains.
+The current catalog database ends with strict, normalized catalog tables. Each of the five persona preset domains and four scenario preset domains has its own physical table and domain-named bilingual columns; API categories are derived rather than stored as discriminator columns. Persona/scenario records reference those rows by ID, with ordered relation tables for multi-select fields. `CatalogRepository` joins and maps them to a shared contract containing both stable IDs and resolved bilingual values. `GET /api/catalog` returns both preset collections alongside personas and scenarios. The separate conversation database starts with normalized immutable snapshot, message, audio, session-lifecycle, and feedback tables. Historical combined databases retain their append-only migrations 1–19 and are upgraded through migration 19 before the one-time splitter copies their two domains.
+
+## Active-session lifecycle flow
+
+The active-session header exposes pause, restart, and end. Each operation uses the same serialized settlement barrier: cancel uncertain input, wait for any committed learner transcript, reconcile heard assistant output, and only then change durable state. While an operation is running, voice input and competing session controls are disabled.
+
+`POST /api/conversations/:id/pause` closes the current browser/Qwen transport after settlement, records `paused_at`, rolls the current active segment into `active_duration_ms`, and clears `active_started_at`. A paused chat remains visible with its transcript, but the push-to-talk and plus controls are replaced by one **Continue session** action. `POST /resume` clears `paused_at`, starts a new active segment, and then the normal fresh-Qwen history restoration runs. Closing the last browser realtime socket also idempotently pauses the durable session so disconnected time is never counted; configuring a replacement socket idempotently resumes it.
+
+`POST /api/conversations/:id/restart` is intentionally an in-place reset rather than **Try again**. After confirmation, it transactionally deletes all owned messages (and cascading audio/feedback), resets active time, retains the same session ID and immutable persona/scenario/difficulty/Instructions/voice snapshot, and connects a clean Qwen session. Ended sessions reject pause, resume, and restart. Feedback duration comes from accumulated active segments, never wall-clock `ended_at - created_at`, so paused intervals are excluded.
 
 ## End-of-session feedback flow
 
@@ -307,7 +315,7 @@ playback:   pending  → completed
                     ↘ interrupted → reconciled
 ```
 
-`response.done` advances only the generation state. A naturally drained browser queue advances playback through `playback.completed`, then remains pending until the matching `response.persisted`; user barge-in or Stop AI uses `playback.interrupted` and waits for `response.reconciled`. Switching conversations, starting a new role-play, and ending the session share one serialized settlement barrier: active playback is reconciled, an already-committed user transcript is acknowledged after persistence, and any response created during that wait is checked again before teardown. Timeout, close, or receipt-send failure is a failed barrier rather than a synthetic success.
+`response.done` advances only the generation state. A naturally drained browser queue advances playback through `playback.completed`, then remains pending until the matching `response.persisted`; user barge-in or Stop AI uses `playback.interrupted` and waits for `response.reconciled`. Switching conversations, starting a new role-play, pausing, restarting, and ending the session share one serialized settlement barrier: active playback is reconciled, an already-committed user transcript is acknowledged after persistence, and any response created during that wait is checked again before teardown. Timeout, close, or receipt-send failure is a failed barrier rather than a synthetic success.
 
 ## SQLite architecture
 

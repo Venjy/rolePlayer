@@ -2,7 +2,7 @@ import Fastify from "fastify";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { strFromU8, unzipSync } from "fflate";
 import {
   conversationFeedbackViewSchema,
@@ -21,6 +21,7 @@ import { initializeCatalogData } from "../../src/server/catalog/catalog-initiali
 import {
   ConversationEndedError,
   ConversationNotFoundError,
+  ConversationPausedError,
   ConversationRepository,
 } from "../../src/server/conversations/conversation-repository";
 import type {
@@ -41,6 +42,7 @@ import {
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -145,6 +147,114 @@ function toScenarioSnapshot(scenario: Scenario): ScenarioSnapshot {
 }
 
 describe("conversation history routes", () => {
+  it("excludes paused periods from the durable session duration", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-20T01:00:00.000Z"));
+    const app = createApp();
+    try {
+      await app.ready();
+      const repository = new ConversationRepository(app.conversationDatabase);
+      const conversation = repository.createConversation(getCreateInput(app));
+
+      vi.advanceTimersByTime(5_000);
+      const pausedResponse = await app.inject({
+        method: "POST",
+        url: `/api/conversations/${conversation.id}/pause`,
+      });
+      expect(pausedResponse.statusCode).toBe(200);
+      expect(conversationDetailSchema.parse(pausedResponse.json())).toMatchObject({
+        id: conversation.id,
+        activeDurationMs: 5_000,
+        pausedAt: expect.any(String),
+      });
+      expect(() => repository.getRuntimeConversation(conversation.id)).toThrow(
+        ConversationPausedError,
+      );
+
+      vi.advanceTimersByTime(60_000);
+      expect(repository.getConversation(conversation.id)?.activeDurationMs).toBe(
+        5_000,
+      );
+
+      const resumedResponse = await app.inject({
+        method: "POST",
+        url: `/api/conversations/${conversation.id}/resume`,
+      });
+      expect(resumedResponse.statusCode).toBe(200);
+      expect(conversationDetailSchema.parse(resumedResponse.json()).pausedAt)
+        .toBeNull();
+
+      vi.advanceTimersByTime(7_000);
+      const ended = repository.endConversation(conversation.id);
+      expect(ended.activeDurationMs).toBe(12_000);
+      expect(ended.pausedAt).toBeNull();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("restarts an active conversation in place with its snapshot and no history", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-20T02:00:00.000Z"));
+    const app = createApp();
+    try {
+      await app.ready();
+      const repository = new ConversationRepository(app.conversationDatabase);
+      const conversation = repository.createConversation(getCreateInput(app));
+      repository.appendMessage({
+        conversationId: conversation.id,
+        role: "user",
+        text: "Discard this attempt.",
+        interrupted: false,
+        sourceItemId: "restart-discarded-user",
+        audio: {
+          sampleRate: 16_000,
+          pcm: createTonePcm(16_000, 120, 220),
+        },
+      });
+      vi.advanceTimersByTime(3_000);
+      repository.pauseConversation(conversation.id);
+      vi.advanceTimersByTime(30_000);
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/conversations/${conversation.id}/restart`,
+      });
+      expect(response.statusCode).toBe(200);
+      const restarted = conversationDetailSchema.parse(response.json());
+      expect(restarted).toMatchObject({
+        id: conversation.id,
+        persona: conversation.persona,
+        scenario: conversation.scenario,
+        difficulty: conversation.difficulty,
+        messages: [],
+        messageCount: 0,
+        audioMessageCount: 0,
+        activeDurationMs: 0,
+        pausedAt: null,
+        endedAt: null,
+      });
+      expect(restarted.createdAt).not.toBe(conversation.createdAt);
+      expect(
+        app.conversationDatabase.raw
+          .prepare("SELECT COUNT(*) AS count FROM message_audio")
+          .get(),
+      ).toMatchObject({ count: 0 });
+
+      repository.endConversation(conversation.id);
+      const rejected = await app.inject({
+        method: "POST",
+        url: `/api/conversations/${conversation.id}/restart`,
+      });
+      expect(rejected.statusCode).toBe(409);
+      expect(rejected.json()).toMatchObject({
+        error: { code: "conversation_ended" },
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
   it("restores conversations and messages after the database is reopened", async () => {
     const directory = mkdtempSync(join(tmpdir(), "role-player-reopen-"));
     temporaryDirectories.push(directory);

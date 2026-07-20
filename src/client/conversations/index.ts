@@ -5,6 +5,9 @@ export {
   downloadConversation,
   endConversation,
   fetchConversationFeedback,
+  pauseConversation,
+  restartConversation,
+  resumeConversation,
   retryConversationFeedback,
 } from "./conversation-api";
 export { useConversationHistory } from "./use-conversation-history";

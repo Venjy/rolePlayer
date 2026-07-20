@@ -97,6 +97,30 @@ export function endConversation(id: number): Promise<ConversationFeedbackView> {
   );
 }
 
+export function pauseConversation(id: number): Promise<ConversationDetail> {
+  return requestJson(
+    `/api/conversations/${encodeURIComponent(id)}/pause`,
+    { method: "POST" },
+    (value) => conversationDetailSchema.parse(value),
+  );
+}
+
+export function resumeConversation(id: number): Promise<ConversationDetail> {
+  return requestJson(
+    `/api/conversations/${encodeURIComponent(id)}/resume`,
+    { method: "POST" },
+    (value) => conversationDetailSchema.parse(value),
+  );
+}
+
+export function restartConversation(id: number): Promise<ConversationDetail> {
+  return requestJson(
+    `/api/conversations/${encodeURIComponent(id)}/restart`,
+    { method: "POST" },
+    (value) => conversationDetailSchema.parse(value),
+  );
+}
+
 export function fetchConversationFeedback(
   id: number,
   signal?: AbortSignal,

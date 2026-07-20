@@ -11,7 +11,9 @@ import { CatalogRepository } from "../catalog/catalog-repository";
 import { getFeedbackConfig } from "../config";
 import {
   ActiveConversationDeletionError,
+  ConversationEndedError,
   ConversationInstructionsTooLongError,
+  ConversationNotFoundError,
   ConversationRepository,
 } from "./conversation-repository";
 import {
@@ -141,6 +143,37 @@ export function registerConversationRoutes(
       conversation: repository.getConversation(conversation.id),
       feedback: feedbackRepository.require(conversation.id),
     });
+  });
+
+  app.post("/api/conversations/:id/pause", async (request, reply) => {
+    const parsed = idParametersSchema.safeParse(request.params);
+    if (!parsed.success) return sendValidationError(reply, parsed.error);
+    try {
+      return repository.pauseConversation(parsed.data.id);
+    } catch (error) {
+      return handleSessionLifecycleError(error, reply, parsed.data.id);
+    }
+  });
+
+  app.post("/api/conversations/:id/resume", async (request, reply) => {
+    const parsed = idParametersSchema.safeParse(request.params);
+    if (!parsed.success) return sendValidationError(reply, parsed.error);
+    try {
+      return repository.resumeConversation(parsed.data.id);
+    } catch (error) {
+      return handleSessionLifecycleError(error, reply, parsed.data.id);
+    }
+  });
+
+  app.post("/api/conversations/:id/restart", async (request, reply) => {
+    const parsed = idParametersSchema.safeParse(request.params);
+    if (!parsed.success) return sendValidationError(reply, parsed.error);
+    try {
+      await feedbackService.cancel(parsed.data.id);
+      return repository.restartConversation(parsed.data.id);
+    } catch (error) {
+      return handleSessionLifecycleError(error, reply, parsed.data.id);
+    }
   });
 
   app.get("/api/conversations/:id/feedback", async (request, reply) => {
@@ -275,6 +308,23 @@ function sendConversationNotFound(reply: FastifyReply, id: number) {
     message,
     error: { code: "conversation_not_found", message },
   });
+}
+
+function handleSessionLifecycleError(
+  error: unknown,
+  reply: FastifyReply,
+  conversationId: number,
+) {
+  if (error instanceof ConversationNotFoundError) {
+    return sendConversationNotFound(reply, conversationId);
+  }
+  if (error instanceof ConversationEndedError) {
+    return reply.code(409).send({
+      message: error.message,
+      error: { code: "conversation_ended", message: error.message },
+    });
+  }
+  throw error;
 }
 
 function sendValidationError(reply: FastifyReply, error: ZodError) {

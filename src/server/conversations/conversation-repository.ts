@@ -47,6 +47,9 @@ interface ConversationSessionRow {
   instructions: string;
   voice: string;
   status: string;
+  paused_at: string | null;
+  active_duration_ms: number;
+  active_started_at: string | null;
   ended_at: string | null;
   created_at: string;
   updated_at: string;
@@ -246,6 +249,13 @@ export class ConversationEndedError extends Error {
   }
 }
 
+export class ConversationPausedError extends Error {
+  public constructor(public readonly conversationId: number) {
+    super(`Conversation "${conversationId}" is paused.`);
+    this.name = "ConversationPausedError";
+  }
+}
+
 export class ActiveConversationDeletionError extends Error {
   public constructor(public readonly conversationId: number) {
     super(`Conversation "${conversationId}" must end before it can be deleted.`);
@@ -300,14 +310,16 @@ export class ConversationRepository {
       const write = this.connection
         .prepare(
           `INSERT INTO sessions (
-            difficulty, locale, instructions, voice, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?)`,
+            difficulty, locale, instructions, voice,
+            active_started_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           parsed.difficulty,
           parsed.locale,
           instructions,
           personaSnapshot.voice,
+          timestamp,
           timestamp,
           timestamp,
         );
@@ -382,6 +394,9 @@ export class ConversationRepository {
     const row = this.getSessionRow(id);
     if (!row) return null;
     if (row.status === "ended") throw new ConversationEndedError(id);
+    if (row.paused_at !== null || row.active_started_at === null) {
+      throw new ConversationPausedError(id);
+    }
     const { persona, scenario } = this.requireSnapshots(id);
     if (
       maximumUserTurns !== undefined &&
@@ -415,6 +430,12 @@ export class ConversationRepository {
     }
     if (existingSession.status === "ended") {
       throw new ConversationEndedError(parsed.conversationId);
+    }
+    if (
+      existingSession.paused_at !== null ||
+      existingSession.active_started_at === null
+    ) {
+      throw new ConversationPausedError(parsed.conversationId);
     }
 
     this.connection.exec("BEGIN IMMEDIATE");
@@ -536,7 +557,92 @@ export class ConversationRepository {
     }));
   }
 
-  /** Marks a settled conversation as immutable and records its wall-clock end. */
+  /** Stops active-time accounting while preserving snapshots and messages. */
+  public pauseConversation(id: number): ConversationDetail {
+    const conversationId = databaseIdSchema.parse(id);
+    const existing = this.getSessionRow(conversationId);
+    if (!existing) throw new ConversationNotFoundError(conversationId);
+    if (existing.status === "ended") {
+      throw new ConversationEndedError(conversationId);
+    }
+    if (existing.paused_at !== null || existing.active_started_at === null) {
+      return this.requireConversation(conversationId);
+    }
+
+    const timestamp = nextDatabaseTimestamp(existing.updated_at);
+    const activeDurationMs =
+      existing.active_duration_ms +
+      elapsedMilliseconds(existing.active_started_at, timestamp);
+    this.connection
+      .prepare(
+        `UPDATE sessions
+         SET paused_at = ?, active_started_at = NULL,
+             active_duration_ms = ?, updated_at = ?
+         WHERE id = ? AND status = 'active'`,
+      )
+      .run(timestamp, activeDurationMs, timestamp, conversationId);
+    return this.requireConversation(conversationId);
+  }
+
+  /** Starts a new active-time segment for a paused conversation. */
+  public resumeConversation(id: number): ConversationDetail {
+    const conversationId = databaseIdSchema.parse(id);
+    const existing = this.getSessionRow(conversationId);
+    if (!existing) throw new ConversationNotFoundError(conversationId);
+    if (existing.status === "ended") {
+      throw new ConversationEndedError(conversationId);
+    }
+    if (existing.paused_at === null && existing.active_started_at !== null) {
+      return this.requireConversation(conversationId);
+    }
+
+    const timestamp = nextDatabaseTimestamp(existing.updated_at);
+    this.connection
+      .prepare(
+        `UPDATE sessions
+         SET paused_at = NULL, active_started_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'active'`,
+      )
+      .run(timestamp, timestamp, conversationId);
+    return this.requireConversation(conversationId);
+  }
+
+  /** Clears one active attempt while retaining its immutable launch snapshot. */
+  public restartConversation(id: number): ConversationDetail {
+    const conversationId = databaseIdSchema.parse(id);
+    const existing = this.getSessionRow(conversationId);
+    if (!existing) throw new ConversationNotFoundError(conversationId);
+    if (existing.status === "ended") {
+      throw new ConversationEndedError(conversationId);
+    }
+
+    const timestamp = nextDatabaseTimestamp(existing.updated_at);
+    this.connection.exec("BEGIN IMMEDIATE");
+    try {
+      this.connection
+        .prepare("DELETE FROM feedback_reports WHERE conversation_id = ?")
+        .run(conversationId);
+      this.connection
+        .prepare("DELETE FROM messages WHERE conversation_id = ?")
+        .run(conversationId);
+      this.connection
+        .prepare(
+          `UPDATE sessions
+           SET status = 'active', paused_at = NULL, ended_at = NULL,
+               active_duration_ms = 0, active_started_at = ?,
+               created_at = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(timestamp, timestamp, timestamp, conversationId);
+      this.connection.exec("COMMIT");
+      return this.requireConversation(conversationId);
+    } catch (error) {
+      this.connection.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  /** Marks a settled conversation as immutable and records its active duration. */
   public endConversation(id: number): ConversationDetail {
     const conversationId = databaseIdSchema.parse(id);
     const existing = this.getSessionRow(conversationId);
@@ -544,13 +650,19 @@ export class ConversationRepository {
     if (existing.status === "ended") return this.requireConversation(conversationId);
 
     const timestamp = nextDatabaseTimestamp(existing.updated_at);
+    const activeDurationMs =
+      existing.active_duration_ms +
+      (existing.active_started_at
+        ? elapsedMilliseconds(existing.active_started_at, timestamp)
+        : 0);
     this.connection
       .prepare(
         `UPDATE sessions
-         SET status = 'ended', ended_at = ?, updated_at = ?
+         SET status = 'ended', paused_at = NULL, active_started_at = NULL,
+             active_duration_ms = ?, ended_at = ?, updated_at = ?
          WHERE id = ? AND status = 'active'`,
       )
-      .run(timestamp, timestamp, conversationId);
+      .run(activeDurationMs, timestamp, timestamp, conversationId);
     return this.requireConversation(conversationId);
   }
 
@@ -895,6 +1007,8 @@ function mapConversationSummaryRow(
     difficulty: row.difficulty,
     locale: row.locale,
     status: row.status,
+    pausedAt: row.paused_at,
+    activeDurationMs: calculateActiveDurationMs(row),
     endedAt: row.ended_at,
     feedbackStatus: row.feedback_status,
     messageCount: row.message_count,
@@ -932,6 +1046,8 @@ function mapConversationDetail(
     difficulty: row.difficulty,
     locale: row.locale,
     status: row.status,
+    pausedAt: row.paused_at,
+    activeDurationMs: calculateActiveDurationMs(row),
     endedAt: row.ended_at,
     feedbackStatus,
     messageCount: messages.length,
@@ -945,6 +1061,26 @@ function mapConversationDetail(
     scenario,
     messages,
   });
+}
+
+function calculateActiveDurationMs(row: ConversationSessionRow): number {
+  return Math.max(
+    0,
+    row.active_duration_ms +
+      (row.status === "active" && row.active_started_at
+        ? elapsedMilliseconds(row.active_started_at, Date.now())
+        : 0),
+  );
+}
+
+function elapsedMilliseconds(
+  startTimestamp: string,
+  end: string | number,
+): number {
+  const start = Date.parse(startTimestamp);
+  const finish = typeof end === "number" ? end : Date.parse(end);
+  if (!Number.isFinite(start) || !Number.isFinite(finish)) return 0;
+  return Math.max(0, Math.round(finish - start));
 }
 
 function parseAudioSampleRate(value: number): 16_000 | 24_000 {

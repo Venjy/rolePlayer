@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   deleteConversation,
   endConversation,
+  pauseConversation,
+  restartConversation,
+  resumeConversation,
   retryConversationFeedback,
 } from "../../src/client/conversations/conversation-api";
 
@@ -23,6 +26,9 @@ describe("conversation API requests", () => {
 
   it.each([
     ["end", () => endConversation(7)],
+    ["pause", () => pauseConversation(7)],
+    ["resume", () => resumeConversation(7)],
+    ["restart", () => restartConversation(7)],
     ["feedback retry", () => retryConversationFeedback(7)],
   ])("does not advertise JSON for an empty %s POST", async (label, request) => {
     void label;

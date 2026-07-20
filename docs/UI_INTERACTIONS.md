@@ -82,10 +82,10 @@ A persona referenced by one or more scenarios cannot be deleted. The admin disab
 
 Inside the learner workspace, the active session uses a four-row CSS grid:
 
-1. Header — selected persona occupation, realtime state, playback controls, conversation download, end-session confirmation, and responsive history entry. Management, language, and theme controls belong to the fixed global utility bar.
+1. Header — selected persona occupation, realtime state, playback controls, conversation download, pause/restart/end session controls, and responsive history entry. Management, language, and theme controls belong to the fixed global utility bar.
 2. Goals — the immutable scenario snapshot's localized goals, using the same green Ant Design tag treatment as the learner launcher's **Goals / 本次目标** summary. This row wraps at narrow widths and never reads current mutable catalog data.
 3. Conversation — the only vertically scrolling region.
-4. Voice composer — the hold-to-talk control, its hint, and the recording overlay anchor.
+4. Voice composer — the hold-to-talk control, its hint, and the recording overlay anchor; while paused, the whole input surface is replaced by one full-width continue button.
 
 There is one JSX structure at every width. Current responsive rules are:
 
@@ -131,6 +131,7 @@ The header maps application session states to user-visible status:
 | `listening` | `Listening` / `正在聆听` | Microphone capture is active |
 | `processing` | `Thinking` / `思考中` | Input is committed or interruption repair is pending |
 | `speaking` | `<persona> is speaking` / `<角色> 正在说话` | Assistant audio is actively playing |
+| `paused` | `Paused` / `已暂停` | Durable transcript remains visible, but no microphone or Qwen connection is active |
 | `ended` | `Ended` / `已结束` | Realtime session is closed |
 
 The small equalizer beside the selected persona is shown only in `speaking`. It is decorative and hidden from assistive technology.
@@ -290,7 +291,9 @@ The header playback popover uses Ant Design controls for:
 - volume from 0 to 100 percent;
 - stopping the current AI response.
 
-Stopping AI uses the same interruption/reconciliation path as barge-in but does not start a user recording. Ending the session has a confirmation step; confirmation cancels any active gesture/input, waits for a submitted user transcript, reconciles and persists an assistant response that is still audible (or waits for its response-specific normal-playback persistence acknowledgement), closes browser and Qwen connections through the client/server lifecycle, disposes audio, refreshes the persisted history list, and returns to the learner launcher with the catalog selection available for another session. The bounded settlement wait exists only to avoid holding a broken connection forever; timeout/failure leaves the current session in place when possible and reports the problem rather than silently discarding pending history.
+Stopping AI uses the same interruption/reconciliation path as barge-in but does not start a user recording. Pause also uses that settlement path, closes browser/Qwen audio, and persists the accumulated active time. The transcript and `/chat/:conversationId` route remain visible, the status changes to **Paused / 已暂停**, and the bottom hold/plus controls are replaced by **Continue session / 继续对话**. Opening a durably paused conversation from history or by refreshing its URL restores this same paused surface without requesting microphone access; continue starts a new active-time segment and a fresh Qwen connection with stored text history.
+
+Restart is available in active and paused states and requires confirmation that all transcript and audio in the attempt will be cleared. While pause, continue, or restart is in flight, recording, playback, download, and competing lifecycle controls are disabled. Restart keeps the same conversation ID, persona/scenario snapshot, difficulty, Instructions, and voice, but transactionally deletes finalized messages/audio and resets the active duration before reconnecting. If reconnect fails, the cleared conversation remains paused and recoverable. Ending the session also has a confirmation step; confirmation settles the same pending state, marks the row terminal, closes runtime resources, and navigates to feedback. The bounded settlement wait exists only to avoid holding a broken connection forever; timeout/failure leaves the current session in place when possible and reports the problem rather than silently discarding pending history. Feedback duration is the sum of active segments and excludes every paused interval.
 
 Push-to-talk is temporarily disabled while the preceding committed user turn is
 waiting for its finalized transcript to be saved. Abnormal cancellation and
@@ -303,32 +306,34 @@ only their captured audio/realtime objects and must not mutate the next session.
 
 After `pnpm check`, exercise the following in a real browser when changing this subsystem:
 
-For layout-only work, `?preview=session`, `?preview=recording`, `?preview=long`, and `?preview=free` provide development-only static fixtures that reuse the production component tree without requesting microphone access or connecting to Qwen. They are ignored by production builds and do not replace real gesture/audio verification.
+For layout-only work, `?preview=session`, `?preview=paused`, `?preview=recording`, `?preview=long`, and `?preview=free` provide development-only static fixtures that reuse the production component tree without requesting microphone access or connecting to Qwen. They are ignored by production builds and do not replace real gesture/audio verification.
 
 1. Inspect approximately 360 px, 767 px, 768 px, 1199 px, 1200 px, and a wide desktop; confirm no horizontal overflow and the rail/Drawer switch occurs once.
 2. Confirm the latest message and waveform do not hide behind the composer or mobile safe area.
 3. Switch theme and language on learner, admin, drawer, and active-session screens; reload after each language choice to confirm persistence, and confirm the current session remains connected.
-4. Hold and release normally with pointer input; verify one submitted turn.
-5. Hold, move upward beyond 72 px, and release; verify the draft disappears
+4. Pause during idle and during AI playback; verify settlement finishes, the status and composer change, elapsed time stops, refresh restores the paused surface, and continue reconnects with the same transcript.
+5. Restart from both active and paused states; verify the confirmation explains data loss, competing controls lock during work, the URL/launch configuration stay unchanged, the transcript/audio disappear, and the timer starts again from zero.
+6. Hold and release normally with pointer input; verify one submitted turn.
+7. Hold, move upward beyond 72 px, and release; verify the draft disappears
    immediately, the captured turn is not sent or restored by a late transcript,
    and a new hold works after clearing finishes.
-6. Release quickly during microphone startup; verify the UI returns to idle after the deterministic outcome.
-7. Repeat with Space or Enter.
-8. While the selected persona is playing audio, hold the barge-in control and confirm playback stops immediately before recording begins.
-9. Scroll more than 120 px above the bottom during streaming; confirm new deltas do not steal the reader's scroll position.
-10. Search/select scenarios and verify the persona options contain only compatible personas; switch easy/medium/hard and confirm the selected state/summary remains usable at every target width.
-11. In the admin console, create/edit both entity types, inspect standalone prompt previews, confirm criteria generate `33/33/34` for three rows, edit weights, and manage compatibility from its separate action.
-12. Verify persona and scenario preset categories are loaded from `GET /api/catalog`, ordered, localized, and searchable; confirm preset-backed multi-select limits and the disabled-save warning when required persona categories are empty.
-13. Create `张三` in Chinese and confirm the English UI falls back to it; save an unrelated English edit and confirm `name` remains empty; then set English `name` to `Zhang San` and confirm Chinese `nameZhCn` still displays `张三`.
-14. Edit a persona containing values absent from `personaPresets`; confirm each is shown as an existing option and can be retained without creating a new preset.
-14. Attempt to delete a referenced persona and verify the conflict is shown without removing it; unlink it, retry, and verify deletion succeeds.
-15. Finish at least two conversations, confirm newest activity sorts first, resume each from the rail/Drawer, and verify its full transcript and snapshotted persona/scenario/difficulty return before another voice turn.
-16. Edit a catalog persona after creating a conversation, then resume the old conversation and confirm it still uses the old snapshot.
-17. Check history-item/current-page semantics, Drawer Escape/focus behavior, focus names, status text, reduced motion, mute, volume, stop, and end-session confirmation.
-18. Release immediately after pressing or submit silence; confirm the active chat remains visible, an Ant Design error message appears at the top and disappears after five seconds, and input becomes available again—directly for a recoverable short-input error or after the same-conversation rebuild for failed transcription.
-19. Force a pre-`session.ready` configuration failure and confirm the partial chat never opens: the app returns to the launcher and shows the startup error there.
-20. After a session has become ready, force both its runtime connection and the automatic replacement connection to fail; confirm the chat remains visible, the top error message disappears after five seconds, and the composer becomes **Retry voice connection** and can restore the same conversation. Confirm the header's end-session action still requires confirmation.
-21. Complete at least two spoken turns and download audio, text, and both. Confirm the MP3 is a single alternating-speaker timeline, the ZIP contains one MP3 and one TXT, and a text-only historical conversation disables audio choices. Interrupt an assistant mid-sentence and confirm neither export contains its unheard text or audio suffix.
-22. End a conversation, open its feedback route, and choose **Try again**. Confirm the app creates a different conversation ID with the same scenario, persona, and difficulty, opens its chat route, and does not copy the old transcript.
-23. End another conversation while feedback is still generating, delete it through the bottom confirmation, and confirm its history item, direct feedback route, transcript/audio, and eventual feedback result are all gone. Confirm active conversations cannot be deleted through the API.
-24. Click multiple highlighted moments, including the same moment twice, and confirm each target transcript row scrolls to the center, pulses visibly in both themes, and clears after about two seconds. With reduced motion enabled, confirm the target uses a temporary static highlight instead.
+8. Release quickly during microphone startup; verify the UI returns to idle after the deterministic outcome.
+9. Repeat with Space or Enter.
+10. While the selected persona is playing audio, hold the barge-in control and confirm playback stops immediately before recording begins.
+11. Scroll more than 120 px above the bottom during streaming; confirm new deltas do not steal the reader's scroll position.
+12. Search/select scenarios and verify the persona options contain only compatible personas; switch easy/medium/hard and confirm the selected state/summary remains usable at every target width.
+13. In the admin console, create/edit both entity types, inspect standalone prompt previews, confirm criteria generate `33/33/34` for three rows, edit weights, and manage compatibility from its separate action.
+14. Verify persona and scenario preset categories are loaded from `GET /api/catalog`, ordered, localized, and searchable; confirm preset-backed multi-select limits and the disabled-save warning when required persona categories are empty.
+15. Create `张三` in Chinese and confirm the English UI falls back to it; save an unrelated English edit and confirm `name` remains empty; then set English `name` to `Zhang San` and confirm Chinese `nameZhCn` still displays `张三`.
+16. Edit a persona containing values absent from `personaPresets`; confirm each is shown as an existing option and can be retained without creating a new preset.
+17. Attempt to delete a referenced persona and verify the conflict is shown without removing it; unlink it, retry, and verify deletion succeeds.
+18. Finish at least two conversations, confirm newest activity sorts first, resume each from the rail/Drawer, and verify its full transcript and snapshotted persona/scenario/difficulty return before another voice turn.
+19. Edit a catalog persona after creating a conversation, then resume the old conversation and confirm it still uses the old snapshot.
+20. Check history-item/current-page semantics, Drawer Escape/focus behavior, focus names, status text, reduced motion, mute, volume, stop, and end-session confirmation.
+21. Release immediately after pressing or submit silence; confirm the active chat remains visible, an Ant Design error message appears at the top and disappears after five seconds, and input becomes available again—directly for a recoverable short-input error or after the same-conversation rebuild for failed transcription.
+22. Force a pre-`session.ready` configuration failure and confirm the partial chat never opens: the app returns to the launcher and shows the startup error there.
+23. After a session has become ready, force both its runtime connection and the automatic replacement connection to fail; confirm the chat remains visible, the top error message disappears after five seconds, and the composer becomes **Retry voice connection** and can restore the same conversation. Confirm the header's end-session action still requires confirmation.
+24. Complete at least two spoken turns and download audio, text, and both. Confirm the MP3 is a single alternating-speaker timeline, the ZIP contains one MP3 and one TXT, and a text-only historical conversation disables audio choices. Interrupt an assistant mid-sentence and confirm neither export contains its unheard text or audio suffix.
+25. End a conversation, open its feedback route, and choose **Try again**. Confirm the app creates a different conversation ID with the same scenario, persona, and difficulty, opens its chat route, and does not copy the old transcript.
+26. End another conversation while feedback is still generating, delete it through the bottom confirmation, and confirm its history item, direct feedback route, transcript/audio, and eventual feedback result are all gone. Confirm active conversations cannot be deleted through the API.
+27. Click multiple highlighted moments, including the same moment twice, and confirm each target transcript row scrolls to the center, pulses visibly in both themes, and clears after about two seconds. With reduced motion enabled, confirm the target uses a temporary static highlight instead.
