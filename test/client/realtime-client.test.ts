@@ -237,6 +237,7 @@ describe("RealtimeClient connection lifecycle", () => {
     });
     await connection;
 
+    client.startInput();
     const clearing = client.clearInput();
     let settled = false;
     void clearing.then(() => {
@@ -249,6 +250,12 @@ describe("RealtimeClient connection lifecycle", () => {
     socket?.receive({ type: "input.cleared" });
     await clearing;
     expect(settled).toBe(true);
+    expect(
+      socket?.sent
+        .filter((payload): payload is string => typeof payload === "string")
+        .map((payload) => JSON.parse(payload) as { type: string })
+        .map(({ type }) => type),
+    ).toEqual(["session.configure", "input.start", "input.clear"]);
     expect(onMessage).toHaveBeenLastCalledWith({ type: "input.cleared" });
     expect(vi.getTimerCount()).toBe(0);
   });

@@ -597,6 +597,12 @@ input {
   min-width: 0;
 }
 
+.cancel-long-recording-button.ant-btn {
+  flex: none;
+  min-height: 50px;
+  font-weight: 600;
+}
+
 .voice-mode-trigger-anchor {
   display: inline-flex;
   border-radius: 50%;
@@ -913,6 +919,15 @@ input {
 }
 
 @media (max-width: 390px) {
+  .voice-composer-controls.is-long-recording {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cancel-long-recording-button.ant-btn {
+    width: 100%;
+  }
+
   .persona-summary {
     gap: 8px;
   }

@@ -250,7 +250,12 @@ application wire protocol:
 - **Long recording** calls the same `input.start` and capture startup as a
   normal hold, but keeps capture open until the learner clicks **End speaking**.
   Worklet flush, `input.commit`, transcription, persistence, and response
-  handling remain identical to push-to-talk.
+  handling remain identical to push-to-talk. **Cancel recording** instead uses
+  the existing authoritative cancellation path: cancel capture, clear the
+  browser draft, send `input.clear`, wait for `input.cleared`, and return to
+  push-to-talk without ever sending `input.commit`. A failed clear keeps the
+  long-recording cancellation control available for a safe retry and disables
+  the submit action until cancellation is authoritative.
 - **Free conversation** keeps browser capture open and uses
   `FreeConversationController` to convert RMS levels into turns. It confirms
   speech for 120 ms, retains five 100 ms PCM chunks as pre-roll, opens

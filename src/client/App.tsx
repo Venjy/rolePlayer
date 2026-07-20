@@ -2,6 +2,7 @@ import {
   AimOutlined,
   AudioFilled,
   AudioMutedOutlined,
+  CloseOutlined,
   CustomerServiceOutlined,
   DownloadOutlined,
   HistoryOutlined,
@@ -110,6 +111,7 @@ type UiPreviewMode =
   | null;
 type UiError = string | LocalizedText;
 type VoiceInputMode = "push-to-talk" | "long-recording" | "free-conversation";
+type LongRecordingAction = "starting" | "submitting" | "cancelling";
 type SessionControlAction = "pausing" | "resuming" | "restarting";
 
 interface FreeConversationAudioRouting {
@@ -584,6 +586,12 @@ export function App() {
     );
   const [voiceModeMenuOpen, setVoiceModeMenuOpen] = useState(false);
   const [voiceModeTransitioning, setVoiceModeTransitioning] = useState(false);
+  const [longRecordingAction, setLongRecordingAction] =
+    useState<LongRecordingAction | null>(null);
+  const [
+    longRecordingCancellationRequired,
+    setLongRecordingCancellationRequired,
+  ] = useState(false);
   const [freeConversationPhase, setFreeConversationPhase] =
     useState<FreeConversationPhase>(
       freeConversationUiPreview ? "listening" : "inactive",
@@ -1092,6 +1100,8 @@ export function App() {
       setVoiceInputMode("push-to-talk");
       setVoiceModeMenuOpen(false);
       setVoiceModeTransitioning(false);
+      setLongRecordingAction(null);
+      setLongRecordingCancellationRequired(false);
       setUserDraft("");
       setAssistantDraft(null);
       setIsReconciling(false);
@@ -2254,7 +2264,15 @@ export function App() {
     setUserDraft("");
 
     try {
-      await audio.cancelCapture();
+      let captureCancellationError: unknown;
+      try {
+        await audio.cancelCapture();
+      } catch (error) {
+        // Clearing the upstream buffer is still mandatory even when the local
+        // Worklet fails to acknowledge its stop request. Never leave recorded
+        // bytes eligible for a later commit merely because local cleanup erred.
+        captureCancellationError = error;
+      }
       if (!isCurrentRuntime()) {
         try {
           void realtime.clearInput().catch(() => undefined);
@@ -2269,6 +2287,9 @@ export function App() {
       setRecordingDuration(0);
       setInputLevel(0);
       setSessionState(isReconciling ? "processing" : "ready");
+      if (captureCancellationError !== undefined) {
+        reportContextualError(readableError(captureCancellationError));
+      }
     } catch (error) {
       if (isCurrentRuntime()) reportContextualError(readableError(error));
     } finally {
@@ -2457,26 +2478,66 @@ export function App() {
     if (voiceModeTransitioning) return;
     setVoiceModeMenuOpen(false);
     setVoiceModeTransitioning(true);
+    setLongRecordingAction("starting");
+    setLongRecordingCancellationRequired(false);
     try {
       await pressToTalk.cancelActiveGesture();
       setVoiceInputMode("long-recording");
       const started = await beginRecording();
       if (!started) setVoiceInputMode("push-to-talk");
     } finally {
-      if (componentMountedRef.current) setVoiceModeTransitioning(false);
+      if (componentMountedRef.current) {
+        setLongRecordingAction(null);
+        setVoiceModeTransitioning(false);
+      }
     }
   }, [beginRecording, pressToTalk, voiceModeTransitioning]);
 
   const finishLongRecording = useCallback(async () => {
-    if (voiceModeTransitioning) return;
+    if (voiceModeTransitioning || longRecordingCancellationRequired) return;
     setVoiceModeTransitioning(true);
+    setLongRecordingAction("submitting");
     try {
       await submitRecording();
       setVoiceInputMode("push-to-talk");
     } finally {
-      if (componentMountedRef.current) setVoiceModeTransitioning(false);
+      if (componentMountedRef.current) {
+        setLongRecordingAction(null);
+        setVoiceModeTransitioning(false);
+      }
     }
-  }, [submitRecording, voiceModeTransitioning]);
+  }, [
+    longRecordingCancellationRequired,
+    submitRecording,
+    voiceModeTransitioning,
+  ]);
+
+  const cancelLongRecording = useCallback(async () => {
+    if (voiceModeTransitioning) return;
+    setVoiceModeTransitioning(true);
+    setLongRecordingAction("cancelling");
+    setLongRecordingCancellationRequired(true);
+    // Cancellation intent should be visible immediately. The authoritative
+    // recording ref remains set until Qwen confirms that its buffer is clear.
+    setIsRecording(false);
+    setRecordingDuration(0);
+    setInputLevel(0);
+    try {
+      await cancelRecording();
+      // Keep the long-recording controls available when the upstream clear
+      // acknowledgement fails, so the learner can retry instead of leaving an
+      // uncertain input buffer behind a normal push-to-talk surface.
+      if (!recordingRef.current) {
+        setLongRecordingCancellationRequired(false);
+        setVoiceInputMode("push-to-talk");
+      }
+    } finally {
+      if (componentMountedRef.current) {
+        setLongRecordingAction(null);
+        setVoiceModeTransitioning(false);
+      }
+    }
+  }, [cancelRecording, voiceModeTransitioning]);
 
   const enterFreeConversation = useCallback(async () => {
     if (voiceModeTransitioning) return;
@@ -2780,10 +2841,12 @@ export function App() {
   const isRecoveringConnection =
     sessionActive && isStarting && sessionState === "connecting";
   const holdButtonLabel = voiceInputMode === "long-recording"
-    ? isSubmitting
+    ? isSubmitting || longRecordingAction === "submitting"
       ? t({ en: "Sending…", zh: "正在发送…" })
-      : voiceModeTransitioning && !isRecording
+      : longRecordingAction === "starting" && !isRecording
         ? t({ en: "Starting recording…", zh: "正在开始录音…" })
+        : longRecordingCancellationRequired
+          ? t({ en: "Cancellation pending", zh: "等待取消确认" })
         : t({ en: "End speaking", zh: "结束发言" })
     : runtimeRecoveryFailed
     ? t({ en: "Retry voice connection", zh: "重试语音连接" })
@@ -2801,6 +2864,11 @@ export function App() {
                   zh: "按住打断并说话",
                 })
               : t({ en: "Hold to talk", zh: "按住说话" });
+  const cancelLongRecordingLabel =
+    longRecordingCancellationRequired &&
+    longRecordingAction !== "cancelling"
+      ? t({ en: "Retry cancellation", zh: "重试取消录音" })
+      : t({ en: "Cancel recording", zh: "取消本次录音" });
   const voiceModeOptionsDisabled =
     !sessionActive ||
     sessionPaused ||
@@ -3504,7 +3572,13 @@ export function App() {
                     }
                   />
 
-                  <div className="voice-composer-controls">
+                  <div
+                    className={`voice-composer-controls${
+                      voiceInputMode === "long-recording"
+                        ? " is-long-recording"
+                        : ""
+                    }`}
+                  >
                     <Button
                       className="hold-to-talk-button"
                       type="primary"
@@ -3524,14 +3598,16 @@ export function App() {
                       loading={
                         isSubmitting ||
                         isRecoveringConnection ||
-                        (voiceModeTransitioning &&
-                          voiceInputMode === "long-recording")
+                        longRecordingAction === "starting" ||
+                        longRecordingAction === "submitting"
                       }
                       disabled={
                         !sessionActive ||
                         isSubmitting ||
                         isStarting ||
-                        isUserCommitPending
+                        isUserCommitPending ||
+                        longRecordingCancellationRequired ||
+                        voiceModeTransitioning
                       }
                       aria-label={holdButtonLabel}
                       aria-pressed={gestureActive}
@@ -3551,43 +3627,76 @@ export function App() {
                     >
                       {holdButtonLabel}
                     </Button>
-                    <Popover
-                      key={locale}
-                      content={voiceModeOptions}
-                      trigger="click"
-                      placement="topRight"
-                      open={voiceModeMenuOpen}
-                      onOpenChange={setVoiceModeMenuOpen}
-                    >
+                    {voiceInputMode === "long-recording" ? (
                       <Tooltip
                         title={t({
-                          en: "More speaking modes",
-                          zh: "更多说话模式",
+                          en: "Discard this recording without sending it.",
+                          zh: "放弃本次录音，不发送任何内容。",
                         })}
                       >
-                        <span className="voice-mode-trigger-anchor">
-                          <Button
-                            className="voice-mode-trigger"
-                            size="large"
-                            shape="circle"
-                            icon={<PlusOutlined />}
-                            loading={voiceModeTransitioning}
-                            disabled={voiceModeOptionsDisabled}
-                            aria-label={t({
-                              en: "More speaking modes",
-                              zh: "更多说话模式",
-                            })}
-                          />
-                        </span>
+                        <Button
+                          className="cancel-long-recording-button"
+                          size="large"
+                          danger
+                          icon={<CloseOutlined />}
+                          loading={longRecordingAction === "cancelling"}
+                          disabled={
+                            isSubmitting ||
+                            isStarting ||
+                            isUserCommitPending ||
+                            (voiceModeTransitioning &&
+                              longRecordingAction !== "cancelling")
+                          }
+                          aria-label={cancelLongRecordingLabel}
+                          onClick={() => void cancelLongRecording()}
+                        >
+                          {cancelLongRecordingLabel}
+                        </Button>
                       </Tooltip>
-                    </Popover>
+                    ) : (
+                      <Popover
+                        key={locale}
+                        content={voiceModeOptions}
+                        trigger="click"
+                        placement="topRight"
+                        open={voiceModeMenuOpen}
+                        onOpenChange={setVoiceModeMenuOpen}
+                      >
+                        <Tooltip
+                          title={t({
+                            en: "More speaking modes",
+                            zh: "更多说话模式",
+                          })}
+                        >
+                          <span className="voice-mode-trigger-anchor">
+                            <Button
+                              className="voice-mode-trigger"
+                              size="large"
+                              shape="circle"
+                              icon={<PlusOutlined />}
+                              loading={voiceModeTransitioning}
+                              disabled={voiceModeOptionsDisabled}
+                              aria-label={t({
+                                en: "More speaking modes",
+                                zh: "更多说话模式",
+                              })}
+                            />
+                          </span>
+                        </Tooltip>
+                      </Popover>
+                    )}
                   </div>
                   <Typography.Text type="secondary" className="gesture-hint">
                     {voiceInputMode === "long-recording"
-                      ? t({
-                          en: "Keep speaking hands-free · Tap End speaking when finished",
-                          zh: "无需按住，可连续说话 · 说完后点击结束发言",
-                        })
+                      ? longRecordingCancellationRequired
+                        ? t({
+                            en: "Cancellation was not confirmed · Retry cancellation before continuing",
+                            zh: "尚未确认取消 · 请重试取消录音后再继续",
+                          })
+                        : t({
+                            en: "Tap End speaking to send · Cancel recording to discard",
+                            zh: "点击结束发言即可发送 · 点击取消本次录音即可放弃",
+                          })
                       : runtimeRecoveryFailed
                         ? t({
                             en: "The conversation is kept. Retry to continue speaking.",

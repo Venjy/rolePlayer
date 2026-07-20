@@ -241,9 +241,16 @@ voice mode is active.
 
 Long recording is a click-to-start mode for extended speech. The primary button
 becomes **End speaking / 结束发言**, the waveform remains visible, and the
-instruction no longer mentions releasing. Clicking the primary button flushes
-and submits through the normal manual-turn path. Returning to push-to-talk does
-not create a second session or alter history semantics.
+instruction no longer mentions releasing. A visible Ant Design danger button
+beside it becomes **Cancel recording / 取消本次录音**. Ending flushes and
+submits through the normal manual-turn path; cancelling hides any draft,
+cancels capture, sends `input.clear`, waits for `input.cleared`, and never sends
+`input.commit`. The mode returns to push-to-talk only after that acknowledgement;
+if clearing fails, the long-recording controls stay visible so cancellation can
+be retried safely, while **End speaking** remains disabled so the uncertain
+buffer cannot be submitted. At 390 px and below the two actions stack instead
+of compressing their localized labels. Returning to push-to-talk does not
+create a second session or alter history semantics.
 
 Free conversation replaces the transcript viewport with `VoiceOrb`; transcript
 state continues updating and becomes visible again on exit. The orb uses real
@@ -268,7 +275,7 @@ because later capture starts have no initial settle delay.
 
 - nine decorative vertical bars;
 - elapsed recording time, updated by the parent every 100 ms;
-- localized `Release to send` / `松开发送`, `Release to cancel` / `松开取消`, or long-recording end-button guidance.
+- localized `Release to send` / `松开发送`, `Release to cancel` / `松开取消`, or long-recording send/cancel guidance.
 
 The audio engine reports normalized microphone RMS. The component clamps it to 0–1 and applies a square-root curve before scaling the bars, which makes quiet speech visible without letting loud input escape the component bounds. It is feedback only; it does not transform the audio sent to Qwen.
 

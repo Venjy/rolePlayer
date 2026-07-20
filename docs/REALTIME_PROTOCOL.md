@@ -438,7 +438,10 @@ protocol messages is a contract:
 | Switch/new/end after a commit | settle current assistant → wait for persisted `transcript.user.done` → settle any newly-created assistant → close |
 
 Long recording uses the same rows with a longer interval between `input.start`
-and capture stop. Free conversation also retains manual Qwen turn detection: a
+and capture stop. Its explicit cancel action follows the same `input.clear` →
+`input.cleared` row as an upward push-to-talk cancellation, never sends
+`input.commit`, and does not return to the normal composer until the clear is
+acknowledged. Free conversation also retains manual Qwen turn detection: a
 browser RMS detector sends `input.start`, flushes a bounded local PCM pre-roll,
 streams the open turn, and sends `input.commit` after sustained silence. Capture
 continues locally between turns, but Node ignores no implicit audio: the browser

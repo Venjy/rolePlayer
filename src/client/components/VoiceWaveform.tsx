@@ -71,7 +71,10 @@ export function VoiceWaveform({
   const instruction = cancelling
     ? t({ en: "Release to cancel", zh: "松开取消" })
     : interaction === "continuous"
-      ? t({ en: "Tap End speaking when finished", zh: "说完后点击结束发言" })
+      ? t({
+          en: "End speaking to send, or cancel to discard",
+          zh: "结束发言即可发送，取消则放弃本次录音",
+        })
       : t({ en: "Release to send", zh: "松开发送" });
   const rootClassName = [
     styles.root,
