@@ -6,6 +6,7 @@ import type {
 } from "../../src/shared/role-play-catalog";
 import {
   buildScoringCriteriaForSuccessCriteria,
+  buildScenarioDraftGenerationContext,
   distributeScoringWeights,
   getScenarioFormInitialValues,
   normalizeScenarioFormValues,
@@ -58,6 +59,22 @@ const chineseScenario: Scenario = {
 };
 
 describe("scenario form values", () => {
+  it("omits a fully blank partial draft from random generation", () => {
+    expect(
+      buildScenarioDraftGenerationContext(
+        {
+          name: " ",
+          description: "",
+          trainingGoalPresetIds: [],
+          skillFocusPresetIds: [],
+          successCriterionPresetIds: [],
+          voiceBehavior: {},
+        },
+        "en",
+      ),
+    ).toBeUndefined();
+  });
+
   it("writes localized free text and stores preset IDs", () => {
     expect(normalizeScenarioFormValues(chineseValues(), "zh", undefined, [1]))
       .toMatchObject({

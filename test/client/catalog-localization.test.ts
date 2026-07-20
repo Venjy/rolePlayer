@@ -7,7 +7,7 @@ const persona: Persona = {
   id: 1,
   name: "Lin Yue", nameZhCn: "林悦", gender: "female", age: 35,
   occupationPresetId: 1,
-  occupation: "Marketing Director", occupationZhCn: "市场总监",
+  occupation: "Online Seller", occupationZhCn: "电商卖家",
   background: "Responsible for growth.", backgroundZhCn: "负责企业增长。",
   personalityTraits: ["Pragmatic"], personalityTraitsZhCn: ["务实"],
   personalityTraitPresetIds: [2],
@@ -40,7 +40,7 @@ const scenario: Scenario = {
 
 describe("catalog localization", () => {
   it("projects English and Chinese from explicit fields", () => {
-    expect(localizePersona(persona, "zh")).toMatchObject({ name: "林悦", occupation: "市场总监" });
+    expect(localizePersona(persona, "zh")).toMatchObject({ name: "林悦", occupation: "电商卖家" });
     expect(localizeScenario(scenario, "en")).toMatchObject({ name: "Discovery", goals: ["Understand context"] });
   });
 

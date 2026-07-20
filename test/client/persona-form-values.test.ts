@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { Persona, PersonaInput } from "../../src/shared/role-play-catalog";
+import type {
+  Persona,
+  PersonaInput,
+  PersonaPreset,
+} from "../../src/shared/role-play-catalog";
 import {
+  buildPersonaDraftGenerationContext,
   getPersonaFormInitialValues,
   normalizePersonaFormValues,
   type PersonaFormValues,
@@ -37,6 +42,37 @@ const chinesePersona: Persona = {
 };
 
 describe("persona form localization", () => {
+  it("does not preselect a personality trait for a new persona", () => {
+    const pragmaticPreset: PersonaPreset = {
+      id: 2,
+      category: "personality_trait",
+      value: "Pragmatic",
+      valueZhCn: "务实",
+      position: 0,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+
+    expect(
+      getPersonaFormInitialValues(undefined, "zh", [pragmaticPreset])
+        .personalityTraitPresetIds,
+    ).toEqual([]);
+  });
+
+  it("omits a fully blank partial draft from random generation", () => {
+    expect(
+      buildPersonaDraftGenerationContext(
+        {
+          name: "   ",
+          personalityTraitPresetIds: [],
+          motivationPresetIds: [],
+          concernPresetIds: [],
+        },
+        "zh",
+      ),
+    ).toBeUndefined();
+  });
+
   it("writes localized free text but keeps preset selections as IDs", () => {
     expect(normalizePersonaFormValues(formValues("张三"), "zh", undefined)).toMatchObject({
       name: "",

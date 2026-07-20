@@ -5,6 +5,7 @@ import {
   clientControlMessageSchema,
   type ServerMessage,
 } from "../../shared/realtime-protocol";
+import { localizeScenario } from "../../shared/role-play-localization";
 import { getFeedbackConfig, getQwenConfig } from "../config";
 import {
   ConversationEndedError,
@@ -353,6 +354,10 @@ function buildSuccessEvaluationInput(
   conversation: NonNullable<ReturnType<ConversationRepository["getConversation"]>>,
   pendingAssistantTranscript: string,
 ): SuccessEvaluationInput {
+  const scenario = localizeScenario(
+    conversation.scenario,
+    conversation.locale,
+  );
   const messages = conversation.messages.map((message, turnIndex) => ({
     turnIndex,
     role: message.role,
@@ -371,8 +376,8 @@ function buildSuccessEvaluationInput(
   }
   return {
     locale: conversation.locale,
-    scenarioName: conversation.scenarioName,
-    criteria: conversation.scenario.successCriteria,
+    scenarioName: scenario.name,
+    criteria: scenario.successCriteria,
     messages,
   };
 }

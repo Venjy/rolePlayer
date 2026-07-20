@@ -13,10 +13,11 @@ import {
   Space,
   Typography,
 } from "antd";
-import type {
-  Scenario,
-  ScenarioInput,
-  ScenarioPreset,
+import {
+  compactScenarioDraftGenerationContext,
+  type Scenario,
+  type ScenarioInput,
+  type ScenarioPreset,
 } from "../../shared/role-play-catalog";
 import { compileScenarioInstructions } from "../../shared/role-play-instructions";
 import { resolveScenarioPresetReferences } from "../../shared/role-play-preset-resolution";
@@ -33,6 +34,7 @@ import { getCatalogGenerationErrorMessage } from "./catalog-generation-errors";
 import { PromptPreview } from "./PromptPreview";
 import {
   buildScoringCriteriaForSuccessCriteria,
+  buildScenarioDraftGenerationContext,
   getScenarioFormInitialValues,
   normalizeScenarioFormValues,
   type ScenarioFormValues,
@@ -161,12 +163,20 @@ export function ScenarioEditorDrawer({
     setSubmitError(undefined);
     setGenerating(true);
     try {
-      const currentDraft = normalizeScenarioFormValues(
-        { ...initialValues, ...form.getFieldsValue(true) },
-        locale,
-        baseScenario,
-        defaultAllowedPersonaIds,
-      );
+      const currentValues = form.getFieldsValue(true);
+      const currentDraft = baseScenario
+        ? compactScenarioDraftGenerationContext(
+            normalizeScenarioFormValues(
+              { ...initialValues, ...currentValues },
+              locale,
+              baseScenario,
+              defaultAllowedPersonaIds,
+            ),
+          )
+        : buildScenarioDraftGenerationContext(
+            form.getFieldsValue(true, (metadata) => Boolean(metadata?.touched)),
+            locale,
+          );
       const generated = await generateScenarioDraft(
         currentDraft,
         controller.signal,

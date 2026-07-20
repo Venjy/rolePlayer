@@ -50,7 +50,9 @@ export type ConversationMessage = z.infer<typeof conversationMessageSchema>;
 export const conversationSummarySchema = z.object({
   id: databaseIdSchema,
   personaName: requiredText(80),
+  personaNameZhCn: requiredText(80),
   scenarioName: requiredText(120),
+  scenarioNameZhCn: requiredText(120),
   difficulty: difficultySchema,
   locale: conversationLocaleSchema,
   status: conversationStatusSchema,

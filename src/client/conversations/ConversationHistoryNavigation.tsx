@@ -18,6 +18,7 @@ import {
 } from "antd";
 import type { ConversationSummary } from "../../shared/conversation-history";
 import type { Difficulty } from "../../shared/role-play-catalog";
+import { localizedText } from "../../shared/role-play-localization";
 import { useI18n, type LocalizedText } from "../i18n";
 import styles from "./ConversationHistoryNavigation.module.css";
 
@@ -140,6 +141,16 @@ function ConversationListContent({
             dataSource={[...conversations]}
             renderItem={(conversation) => {
               const active = conversation.id === activeConversationId;
+              const personaName = localizedText(
+                conversation.personaName,
+                conversation.personaNameZhCn,
+                locale,
+              );
+              const scenarioName = localizedText(
+                conversation.scenarioName,
+                conversation.scenarioNameZhCn,
+                locale,
+              );
               return (
                 <List.Item className={styles.listItem}>
                   <Button
@@ -157,14 +168,14 @@ function ConversationListContent({
                         ) : (
                           <MessageOutlined aria-hidden="true" />
                         )}
-                        <span>{conversation.personaName}</span>
+                        <span>{personaName}</span>
                       </span>
                       <span className={styles.date}>
                         {dateFormatter.format(new Date(conversation.updatedAt))}
                       </span>
                     </span>
                     <span className={styles.scenarioLine}>
-                      <span>{conversation.scenarioName}</span>
+                      <span>{scenarioName}</span>
                       <Tag bordered={false}>
                         {t(DIFFICULTY_LABELS[conversation.difficulty])}
                       </Tag>

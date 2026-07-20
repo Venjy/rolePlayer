@@ -51,7 +51,10 @@ import type {
 } from "../shared/conversation-history";
 import { AdminConsole } from "./admin";
 import { BrowserAudioEngine } from "./audio/browser-audio-engine";
-import { localizePersona } from "./catalog/catalog-localization";
+import {
+  localizePersona,
+  localizeScenario,
+} from "./catalog/catalog-localization";
 import {
   reconcileCatalogSelection,
   resolvePersona,
@@ -595,8 +598,14 @@ export function App() {
     selectedScenario,
     catalogSelection.personaId ?? undefined,
   );
+  const activeLocalizedPersona = activeSessionConfig
+    ? localizePersona(activeSessionConfig.persona, locale)
+    : null;
+  const activeLocalizedScenario = activeSessionConfig
+    ? localizeScenario(activeSessionConfig.scenario, locale)
+    : null;
   const personaName =
-    activeSessionConfig?.persona.name ??
+    activeLocalizedPersona?.name ??
     (selectedPersona ? localizePersona(selectedPersona, locale).name : null) ??
     t({ en: "Alex", zh: "亚历克斯" });
   const resolveUiError = useCallback(
@@ -2571,7 +2580,7 @@ export function App() {
     activeConversationSummary?.audioAvailable === true;
   const activeConversationHasMessages =
     (activeConversationSummary?.messageCount ?? 0) > 0;
-  const activeScenarioGoals = activeSessionConfig?.scenario.goals ?? [];
+  const activeScenarioGoals = activeLocalizedScenario?.goals ?? [];
   const missingAudioMessageCount = activeConversationSummary
     ? activeConversationSummary.messageCount -
       activeConversationSummary.audioMessageCount

@@ -5,7 +5,10 @@ import {
   moveCatalogVoiceBehaviorToScenarios,
   moveConversationVoiceBehaviorToScenarioSnapshots,
 } from "./scenario-voice-behavior-migration";
-import { createConversationFeedbackSchema } from "./conversation-feedback-migration";
+import {
+  addBilingualConversationFeedbackColumns,
+  createConversationFeedbackSchema,
+} from "./conversation-feedback-migration";
 
 const createMigrationTable = `
   CREATE TABLE schema_migrations (
@@ -443,5 +446,10 @@ export const CONVERSATION_DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
     version: 7,
     name: "create_conversation_feedback",
     up: createConversationFeedbackSchema,
+  },
+  {
+    version: 8,
+    name: "make_conversation_feedback_bilingual",
+    up: addBilingualConversationFeedbackColumns,
   },
 ];

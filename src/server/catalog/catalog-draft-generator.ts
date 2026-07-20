@@ -1,5 +1,8 @@
+import { randomInt } from "node:crypto";
 import { z } from "zod";
 import {
+  compactPersonaDraftGenerationContext,
+  compactScenarioDraftGenerationContext,
   personaInputSchema,
   scenarioInputSchema,
   type PersonaDraftGenerationContext,
@@ -66,11 +69,12 @@ export class QwenCatalogDraftGenerator implements CatalogDraftGenerator {
     currentDraft?: PersonaDraftGenerationContext,
     signal?: AbortSignal,
   ): Promise<PersonaInput> {
+    const compactedDraft = compactPersonaDraftGenerationContext(currentDraft);
     return this.generateWithRetries(
       "persona",
       catalog,
-      currentDraft,
-      (value) => validatePersonaDraft(value, catalog, currentDraft),
+      compactedDraft,
+      (value) => validatePersonaDraft(value, catalog, compactedDraft),
       signal,
     );
   }
@@ -80,11 +84,12 @@ export class QwenCatalogDraftGenerator implements CatalogDraftGenerator {
     currentDraft?: ScenarioDraftGenerationContext,
     signal?: AbortSignal,
   ): Promise<ScenarioInput> {
+    const compactedDraft = compactScenarioDraftGenerationContext(currentDraft);
     return this.generateWithRetries(
       "scenario",
       catalog,
-      currentDraft,
-      (value) => validateScenarioDraft(value, catalog, currentDraft),
+      compactedDraft,
+      (value) => validateScenarioDraft(value, catalog, compactedDraft),
       signal,
     );
   }
@@ -111,6 +116,7 @@ export class QwenCatalogDraftGenerator implements CatalogDraftGenerator {
 
     try {
       let correction: string | undefined;
+      const creativeVariationToken = randomInt(1, 2_147_483_647);
       for (let attempt = 1; attempt <= MAX_INVALID_OUTPUT_ATTEMPTS; attempt += 1) {
         try {
           const value = await this.requestDraft(
@@ -119,6 +125,7 @@ export class QwenCatalogDraftGenerator implements CatalogDraftGenerator {
             currentDraft,
             controller.signal,
             correction,
+            creativeVariationToken,
           );
           return validate(value);
         } catch (error) {
@@ -167,6 +174,7 @@ export class QwenCatalogDraftGenerator implements CatalogDraftGenerator {
       | undefined,
     signal: AbortSignal,
     correction?: string,
+    creativeVariationToken?: number,
   ): Promise<unknown> {
     const response = await fetch(this.config.endpoint, {
       method: "POST",
@@ -191,11 +199,13 @@ export class QwenCatalogDraftGenerator implements CatalogDraftGenerator {
                     catalog,
                     currentDraft as PersonaDraftGenerationContext | undefined,
                     correction,
+                    creativeVariationToken,
                   )
                 : buildScenarioRequest(
                     catalog,
                     currentDraft as ScenarioDraftGenerationContext | undefined,
                     correction,
+                    creativeVariationToken,
                   ),
           },
         ],
@@ -255,11 +265,20 @@ function buildPersonaRequest(
   catalog: RolePlayCatalog,
   currentDraft?: PersonaDraftGenerationContext,
   correction?: string,
+  creativeVariationToken?: number,
 ): string {
   return JSON.stringify({
     task: "Generate one new, realistic, editable buyer persona for a business sales role-play.",
     ...(correction ? { retryCorrection: correction } : {}),
+    creativeVariation: {
+      token: creativeVariationToken,
+      appliesOnlyTo: ["name", "nameZhCn", "background", "backgroundZhCn"],
+      instruction:
+        "Use this request-specific token as an entropy cue to make only the bilingual name and background substantially less predictable than a previous request. Do not print, encode, explain, or derive facts from the token.",
+    },
     rules: [
+      "Prioritize strong creative variation only for name, nameZhCn, background, and backgroundZhCn. Before writing, silently choose a less-obvious but realistic combination of company context, responsibilities, operational event, constraints, prior experience, and decision dynamics. Avoid repeatedly defaulting to the same common names, company type, fragmented-tool problem, failed rollout, budget concern, or ROI narrative unless the resulting background is materially distinct.",
+      "For gender, age, occupation, preset selections, behavior, and voice, keep the existing coherence-first selection behavior. Do not choose these fields merely to maximize novelty, and do not weaken any validation or gender/voice compatibility rule.",
       "Generate English and Simplified Chinese names different from every non-empty name in existingPersonas and currentDraft.",
       "Generate a materially different background from every existingPersonas background and the currentDraft background; do not copy or lightly paraphrase their company context, operational problem, constraints, prior experience, or decision situation.",
       "Treat every non-empty field and selected option in currentDraft as one additional existing persona. Individual supplied options may be reused, but do not reproduce the same overall identity or attribute combination.",
@@ -320,11 +339,25 @@ function buildScenarioRequest(
   catalog: RolePlayCatalog,
   currentDraft?: ScenarioDraftGenerationContext,
   correction?: string,
+  creativeVariationToken?: number,
 ): string {
   return JSON.stringify({
     task: "Generate one new, realistic, editable B2B sales role-play scenario.",
     ...(correction ? { retryCorrection: correction } : {}),
+    creativeVariation: {
+      token: creativeVariationToken,
+      appliesOnlyTo: [
+        "name",
+        "nameZhCn",
+        "description",
+        "descriptionZhCn",
+      ],
+      instruction:
+        "Use this request-specific token as an entropy cue to make only the bilingual scenario name and description substantially less predictable than a previous request. Do not print, encode, explain, or derive facts from the token.",
+    },
     rules: [
+      "Prioritize strong creative variation only for name, nameZhCn, description, and descriptionZhCn. Before writing, silently choose a less-obvious but realistic combination of business trigger, customer situation, operational impact, stakeholder tension, decision constraint, deadline, and stakes. Avoid repeatedly defaulting to the same generic discovery call, price objection, renewal risk, budget concern, or implementation-delay narrative unless the resulting situation is materially distinct.",
+      "For training goals, skill focuses, success criteria, tone, interruption tendency, and speaking pace, keep the existing coherence-first selection behavior. Do not choose these fields merely to maximize novelty, and do not weaken any supplied-option rule.",
       "Generate English and Simplified Chinese names different from every non-empty name in existingScenarios and currentDraft.",
       "Generate a materially different description from every existingScenarios description and the currentDraft description; do not copy or lightly paraphrase their customer problem, current situation, business impact, constraints, decision context, or stakes.",
       "Treat every non-empty field and selected option in currentDraft as one additional existing scenario. Individual supplied options may be reused, but do not reproduce the same overall situation or configuration.",

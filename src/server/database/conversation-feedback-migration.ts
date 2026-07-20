@@ -12,6 +12,20 @@ export function createCombinedConversationFeedbackSchema(
   createFeedbackSchema(database, "conversation_");
 }
 
+/** Adds paired Simplified Chinese text without duplicating scores or references. */
+export function addBilingualConversationFeedbackColumns(
+  database: DatabaseSync,
+): void {
+  addBilingualFeedbackColumns(database, "");
+}
+
+/** Equivalent migration for the historical single-file database. */
+export function addCombinedBilingualConversationFeedbackColumns(
+  database: DatabaseSync,
+): void {
+  addBilingualFeedbackColumns(database, "conversation_");
+}
+
 function createFeedbackSchema(
   database: DatabaseSync,
   prefix: "" | "conversation_",
@@ -109,5 +123,60 @@ function createFeedbackSchema(
       ON ${prefix}feedback_reports(status, updated_at);
     CREATE INDEX ${prefix}feedback_moments_message_id_idx
       ON ${prefix}feedback_moments(message_id);
+  `);
+}
+
+function addBilingualFeedbackColumns(
+  database: DatabaseSync,
+  prefix: "" | "conversation_",
+): void {
+  database.exec(`
+    ALTER TABLE ${prefix}feedback_reports
+      ADD COLUMN overall_assessment_zh_cn TEXT CHECK (
+        overall_assessment_zh_cn IS NULL
+        OR length(overall_assessment_zh_cn) <= 2000
+      );
+
+    ALTER TABLE ${prefix}feedback_strengths
+      ADD COLUMN text_zh_cn TEXT NOT NULL DEFAULT ''
+      CHECK (length(text_zh_cn) <= 1000);
+    ALTER TABLE ${prefix}feedback_improvement_areas
+      ADD COLUMN text_zh_cn TEXT NOT NULL DEFAULT ''
+      CHECK (length(text_zh_cn) <= 1000);
+
+    ALTER TABLE ${prefix}feedback_coaching_tips
+      ADD COLUMN title_zh_cn TEXT NOT NULL DEFAULT ''
+      CHECK (length(title_zh_cn) <= 200);
+    ALTER TABLE ${prefix}feedback_coaching_tips
+      ADD COLUMN advice_zh_cn TEXT NOT NULL DEFAULT ''
+      CHECK (length(advice_zh_cn) <= 1500);
+
+    ALTER TABLE ${prefix}feedback_criterion_scores
+      ADD COLUMN rationale_zh_cn TEXT NOT NULL DEFAULT ''
+      CHECK (length(rationale_zh_cn) <= 1500);
+
+    ALTER TABLE ${prefix}feedback_moments
+      ADD COLUMN title_zh_cn TEXT NOT NULL DEFAULT ''
+      CHECK (length(title_zh_cn) <= 200);
+    ALTER TABLE ${prefix}feedback_moments
+      ADD COLUMN assessment_zh_cn TEXT NOT NULL DEFAULT ''
+      CHECK (length(assessment_zh_cn) <= 1500);
+    ALTER TABLE ${prefix}feedback_moments
+      ADD COLUMN suggested_approach_zh_cn TEXT NOT NULL DEFAULT ''
+      CHECK (length(suggested_approach_zh_cn) <= 1500);
+
+    UPDATE ${prefix}feedback_reports
+      SET overall_assessment_zh_cn = overall_assessment
+      WHERE overall_assessment IS NOT NULL;
+    UPDATE ${prefix}feedback_strengths SET text_zh_cn = text;
+    UPDATE ${prefix}feedback_improvement_areas SET text_zh_cn = text;
+    UPDATE ${prefix}feedback_coaching_tips
+      SET title_zh_cn = title, advice_zh_cn = advice;
+    UPDATE ${prefix}feedback_criterion_scores
+      SET rationale_zh_cn = rationale;
+    UPDATE ${prefix}feedback_moments
+      SET title_zh_cn = title,
+          assessment_zh_cn = assessment,
+          suggested_approach_zh_cn = suggested_approach;
   `);
 }

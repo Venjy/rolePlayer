@@ -1,8 +1,10 @@
-import type {
-  Persona,
-  PersonaInput,
-  PersonaPreset,
-  PersonaPresetCategory,
+import {
+  compactPersonaDraftGenerationContext,
+  type PersonaDraftGenerationContext,
+  type Persona,
+  type PersonaInput,
+  type PersonaPreset,
+  type PersonaPresetCategory,
 } from "../../shared/role-play-catalog";
 import type { AppLocale } from "../i18n";
 
@@ -79,6 +81,33 @@ export function normalizePersonaFormValues(
   };
 }
 
+/** Builds an exclusion hint from only the fields the operator actually touched. */
+export function buildPersonaDraftGenerationContext(
+  values: Partial<PersonaFormValues>,
+  locale: AppLocale,
+): PersonaDraftGenerationContext | undefined {
+  const localizedText = (value: string | undefined, field: "name" | "background" | "behaviorNotes") => {
+    const normalized = value?.trim();
+    if (!normalized) return {};
+    return locale === "en"
+      ? { [field]: normalized }
+      : { [`${field}ZhCn`]: normalized };
+  };
+  return compactPersonaDraftGenerationContext({
+    ...localizedText(values.name, "name"),
+    ...localizedText(values.background, "background"),
+    ...localizedText(values.behaviorNotes, "behaviorNotes"),
+    gender: values.gender,
+    age: values.age,
+    occupationPresetId: values.occupationPresetId,
+    personalityTraitPresetIds: values.personalityTraitPresetIds,
+    communicationStylePresetId: values.communicationStylePresetId,
+    motivationPresetIds: values.motivationPresetIds,
+    concernPresetIds: values.concernPresetIds,
+    voice: values.voice,
+  });
+}
+
 export function getPersonaFormInitialValues(
   persona: PersonaFormSource | undefined,
   locale: AppLocale,
@@ -96,9 +125,7 @@ export function getPersonaFormInitialValues(
     age: persona?.age ?? null,
     occupationPresetId: persona?.occupationPresetId ?? firstId("occupation"),
     background: localized(persona?.background, persona?.backgroundZhCn),
-    personalityTraitPresetIds:
-      persona?.personalityTraitPresetIds ??
-      (firstId("personality_trait") ? [firstId("personality_trait")!] : []),
+    personalityTraitPresetIds: persona?.personalityTraitPresetIds ?? [],
     communicationStylePresetId:
       persona?.communicationStylePresetId ?? firstId("communication_style"),
     behaviorNotes: localized(persona?.behaviorNotes, persona?.behaviorNotesZhCn),

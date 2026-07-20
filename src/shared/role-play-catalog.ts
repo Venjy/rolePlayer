@@ -161,11 +161,65 @@ export type PersonaInput = z.infer<typeof personaInputSchema>;
  * A create drawer may be only partially filled. The current values are sent as
  * an exclusion hint, so generation must not require an otherwise savable row.
  */
-export const personaDraftGenerationContextSchema =
-  personaInputObjectSchema.partial();
+export const personaDraftGenerationContextSchema = z.object({
+  name: optionalText(80).optional(),
+  nameZhCn: optionalText(80).optional(),
+  gender: personaGenderSchema.optional(),
+  age: z.number().int().min(1).max(120).nullable().optional(),
+  occupationPresetId: databaseIdSchema.optional(),
+  background: optionalText(2_000).optional(),
+  backgroundZhCn: optionalText(2_000).optional(),
+  personalityTraitPresetIds: uniqueIdList(12).optional(),
+  communicationStylePresetId: databaseIdSchema.optional(),
+  behaviorNotes: optionalText(2_000).optional(),
+  behaviorNotesZhCn: optionalText(2_000).optional(),
+  motivationPresetIds: uniqueIdList(10).optional(),
+  concernPresetIds: uniqueIdList(10).optional(),
+  voice: qwenVoiceSchema.optional(),
+});
 export type PersonaDraftGenerationContext = z.infer<
   typeof personaDraftGenerationContextSchema
 >;
+
+/**
+ * Removes blank form values before a partial draft is used as an exclusion.
+ * An entirely blank form is represented by no `currentDraft` at all.
+ */
+export function compactPersonaDraftGenerationContext(
+  draft?: PersonaDraftGenerationContext,
+): PersonaDraftGenerationContext | undefined {
+  if (!draft) return undefined;
+  const compacted: PersonaDraftGenerationContext = {
+    ...compactLocalizedText("name", draft.name, draft.nameZhCn),
+    ...(draft.gender && draft.gender !== "unspecified"
+      ? { gender: draft.gender }
+      : {}),
+    ...(typeof draft.age === "number" ? { age: draft.age } : {}),
+    ...compactId("occupationPresetId", draft.occupationPresetId),
+    ...compactLocalizedText(
+      "background",
+      draft.background,
+      draft.backgroundZhCn,
+    ),
+    ...compactIds(
+      "personalityTraitPresetIds",
+      draft.personalityTraitPresetIds,
+    ),
+    ...compactId(
+      "communicationStylePresetId",
+      draft.communicationStylePresetId,
+    ),
+    ...compactLocalizedText(
+      "behaviorNotes",
+      draft.behaviorNotes,
+      draft.behaviorNotesZhCn,
+    ),
+    ...compactIds("motivationPresetIds", draft.motivationPresetIds),
+    ...compactIds("concernPresetIds", draft.concernPresetIds),
+    ...(draft.voice ? { voice: draft.voice } : {}),
+  };
+  return Object.keys(compacted).length > 0 ? compacted : undefined;
+}
 
 export const personaDraftGenerationRequestSchema = z.object({
   currentDraft: personaDraftGenerationContextSchema.optional(),
@@ -346,6 +400,38 @@ export type ScenarioDraftGenerationContext = z.infer<
   typeof scenarioDraftGenerationContextSchema
 >;
 
+/** Scenario equivalent of `compactPersonaDraftGenerationContext`. */
+export function compactScenarioDraftGenerationContext(
+  draft?: ScenarioDraftGenerationContext,
+): ScenarioDraftGenerationContext | undefined {
+  if (!draft) return undefined;
+  const voiceBehavior = {
+    ...(draft.voiceBehavior?.interruptFrequency
+      ? { interruptFrequency: draft.voiceBehavior.interruptFrequency }
+      : {}),
+    ...(draft.voiceBehavior?.speakingPace
+      ? { speakingPace: draft.voiceBehavior.speakingPace }
+      : {}),
+  };
+  const compacted: ScenarioDraftGenerationContext = {
+    ...compactLocalizedText("name", draft.name, draft.nameZhCn),
+    ...compactLocalizedText(
+      "description",
+      draft.description,
+      draft.descriptionZhCn,
+    ),
+    ...compactIds("trainingGoalPresetIds", draft.trainingGoalPresetIds),
+    ...compactIds("skillFocusPresetIds", draft.skillFocusPresetIds),
+    ...compactIds(
+      "successCriterionPresetIds",
+      draft.successCriterionPresetIds,
+    ),
+    ...compactId("toneStylePresetId", draft.toneStylePresetId),
+    ...(Object.keys(voiceBehavior).length > 0 ? { voiceBehavior } : {}),
+  };
+  return Object.keys(compacted).length > 0 ? compacted : undefined;
+}
+
 export const scenarioDraftGenerationRequestSchema = z.object({
   currentDraft: scenarioDraftGenerationContextSchema.optional(),
 });
@@ -396,3 +482,42 @@ export const rolePlayCatalogSchema = z.object({
   scenarios: z.array(scenarioSchema),
 });
 export type RolePlayCatalog = z.infer<typeof rolePlayCatalogSchema>;
+
+function compactText(value: string | undefined): string | undefined {
+  const compacted = value?.trim();
+  return compacted ? compacted : undefined;
+}
+
+function compactLocalizedText<TEnglish extends string>(
+  englishKey: TEnglish,
+  englishValue: string | undefined,
+  chineseValue: string | undefined,
+): Partial<Record<TEnglish | `${TEnglish}ZhCn`, string>> {
+  const english = compactText(englishValue);
+  const chinese = compactText(chineseValue);
+  return {
+    ...(english ? { [englishKey]: english } : {}),
+    ...(chinese ? { [`${englishKey}ZhCn`]: chinese } : {}),
+  } as Partial<Record<TEnglish | `${TEnglish}ZhCn`, string>>;
+}
+
+function compactId<TKey extends string>(
+  key: TKey,
+  value: number | undefined,
+): Partial<Record<TKey, number>> {
+  return Number.isSafeInteger(value) && Number(value) > 0
+    ? ({ [key]: value } as Record<TKey, number>)
+    : {};
+}
+
+function compactIds<TKey extends string>(
+  key: TKey,
+  values: number[] | undefined,
+): Partial<Record<TKey, number[]>> {
+  const compacted = values?.filter(
+    (value) => Number.isSafeInteger(value) && value > 0,
+  );
+  return compacted && compacted.length > 0
+    ? ({ [key]: compacted } as Record<TKey, number[]>)
+    : {};
+}

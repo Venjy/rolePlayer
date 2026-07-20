@@ -1,7 +1,9 @@
-import type {
-  Scenario,
-  ScenarioInput,
-  ScenarioPreset,
+import {
+  compactScenarioDraftGenerationContext,
+  type ScenarioDraftGenerationContext,
+  type Scenario,
+  type ScenarioInput,
+  type ScenarioPreset,
 } from "../../shared/role-play-catalog";
 import { distributeScoringWeights } from "../../shared/scoring-weights";
 import type { AppLocale } from "../i18n";
@@ -131,4 +133,30 @@ export function normalizeScenarioFormValues(
     })),
     allowedPersonaIds: scenario?.allowedPersonaIds ?? [...defaultAllowedPersonaIds],
   };
+}
+
+/** Builds an exclusion hint from only the fields the operator actually touched. */
+export function buildScenarioDraftGenerationContext(
+  values: Partial<ScenarioFormValues>,
+  locale: AppLocale,
+): ScenarioDraftGenerationContext | undefined {
+  const name = values.name?.trim();
+  const description = values.description?.trim();
+  return compactScenarioDraftGenerationContext({
+    ...(name
+      ? locale === "en"
+        ? { name }
+        : { nameZhCn: name }
+      : {}),
+    ...(description
+      ? locale === "en"
+        ? { description }
+        : { descriptionZhCn: description }
+      : {}),
+    trainingGoalPresetIds: values.trainingGoalPresetIds,
+    skillFocusPresetIds: values.skillFocusPresetIds,
+    successCriterionPresetIds: values.successCriterionPresetIds,
+    toneStylePresetId: values.toneStylePresetId,
+    voiceBehavior: values.voiceBehavior,
+  });
 }

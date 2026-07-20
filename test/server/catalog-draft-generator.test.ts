@@ -137,12 +137,62 @@ describe("QwenCatalogDraftGenerator", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     const requestBody = JSON.parse(
       String(fetchMock.mock.calls[0]?.[1]?.body),
-    ) as { messages: Array<{ content: string }> };
+    ) as { temperature: number; messages: Array<{ content: string }> };
     const prompt = requestBody.messages[1]?.content ?? "";
-    expect(prompt).toContain("Sales Director");
-    expect(prompt).toContain("销售总监");
+    const promptObject = JSON.parse(prompt) as {
+      creativeVariation?: {
+        token?: number;
+        appliesOnlyTo?: string[];
+      };
+      rules?: string[];
+    };
+    expect(requestBody.temperature).toBe(0.9);
+    expect(Number.isInteger(promptObject.creativeVariation?.token)).toBe(true);
+    expect(promptObject.creativeVariation?.appliesOnlyTo).toEqual([
+      "name",
+      "nameZhCn",
+      "background",
+      "backgroundZhCn",
+    ]);
+    expect(promptObject.rules?.join(" ")).toContain(
+      "strong creative variation only for name",
+    );
+    expect(promptObject.rules?.join(" ")).toContain(
+      "keep the existing coherence-first selection behavior",
+    );
+    expect(prompt).toContain("Restaurant Owner");
+    expect(prompt).toContain("餐馆老板");
     expect(prompt).toContain("longanlingxin");
     expect(prompt).toContain("Simplified Chinese");
+  });
+
+  it("does not send a blank persona draft to the model", async () => {
+    const catalog = createCatalog();
+    const fetchMock = vi.fn(async (
+      _requestInput: string | URL | Request,
+      _requestInit?: RequestInit,
+    ) => {
+      void _requestInput;
+      void _requestInit;
+      return completion(validPersona(catalog));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await configuredGenerator().generatePersona(catalog, {
+      name: " ",
+      gender: "unspecified",
+      age: null,
+      personalityTraitPresetIds: [],
+      motivationPresetIds: [],
+    });
+
+    const requestBody = JSON.parse(
+      String(fetchMock.mock.calls[0]?.[1]?.body),
+    ) as { messages: Array<{ content: string }> };
+    const prompt = JSON.parse(requestBody.messages[1]?.content ?? "{}") as {
+      currentDraft?: unknown;
+    };
+    expect(prompt.currentDraft).toBeUndefined();
   });
 
   it("retries when gender and voice are inconsistent", async () => {
@@ -167,6 +217,18 @@ describe("QwenCatalogDraftGenerator", () => {
     const retryBody = JSON.parse(
       String(fetchMock.mock.calls[1]?.[1]?.body),
     ) as { messages: Array<{ content: string }> };
+    const firstBody = JSON.parse(
+      String(fetchMock.mock.calls[0]?.[1]?.body),
+    ) as { messages: Array<{ content: string }> };
+    const firstPrompt = JSON.parse(firstBody.messages[1]?.content ?? "{}") as {
+      creativeVariation?: { token?: number };
+    };
+    const retryPrompt = JSON.parse(retryBody.messages[1]?.content ?? "{}") as {
+      creativeVariation?: { token?: number };
+    };
+    expect(retryPrompt.creativeVariation?.token).toBe(
+      firstPrompt.creativeVariation?.token,
+    );
     expect(retryBody.messages[1]?.content).toContain("supports female");
   });
 
@@ -246,8 +308,60 @@ describe("QwenCatalogDraftGenerator", () => {
     });
     const requestBody = JSON.parse(
       String(fetchMock.mock.calls[0]?.[1]?.body),
+    ) as { temperature: number; messages: Array<{ content: string }> };
+    const prompt = requestBody.messages[1]?.content ?? "{}";
+    const promptObject = JSON.parse(prompt) as {
+      creativeVariation?: {
+        token?: number;
+        appliesOnlyTo?: string[];
+      };
+      rules?: string[];
+    };
+    expect(requestBody.temperature).toBe(0.9);
+    expect(Number.isInteger(promptObject.creativeVariation?.token)).toBe(true);
+    expect(promptObject.creativeVariation?.appliesOnlyTo).toEqual([
+      "name",
+      "nameZhCn",
+      "description",
+      "descriptionZhCn",
+    ]);
+    expect(promptObject.rules?.join(" ")).toContain(
+      "strong creative variation only for name",
+    );
+    expect(promptObject.rules?.join(" ")).toContain(
+      "keep the existing coherence-first selection behavior",
+    );
+    expect(prompt).toContain("Do not create a persona");
+  });
+
+  it("does not send a blank scenario draft to the model", async () => {
+    const catalog = createCatalog();
+    const fetchMock = vi.fn(async (
+      _requestInput: string | URL | Request,
+      _requestInit?: RequestInit,
+    ) => {
+      void _requestInput;
+      void _requestInit;
+      return completion(validScenarioModelOutput(catalog));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await configuredGenerator().generateScenario(catalog, {
+      name: "",
+      description: " ",
+      trainingGoalPresetIds: [],
+      skillFocusPresetIds: [],
+      successCriterionPresetIds: [],
+      voiceBehavior: {},
+    });
+
+    const requestBody = JSON.parse(
+      String(fetchMock.mock.calls[0]?.[1]?.body),
     ) as { messages: Array<{ content: string }> };
-    expect(requestBody.messages[1]?.content).toContain("Do not create a persona");
+    const prompt = JSON.parse(requestBody.messages[1]?.content ?? "{}") as {
+      currentDraft?: unknown;
+    };
+    expect(prompt.currentDraft).toBeUndefined();
   });
 
   it("excludes persisted and current scenario names and descriptions", async () => {

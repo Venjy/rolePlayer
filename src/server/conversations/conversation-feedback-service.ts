@@ -9,6 +9,10 @@ import {
 } from "../../shared/conversation-feedback";
 import type { ConversationDetail } from "../../shared/conversation-history";
 import {
+  localizedList,
+  localizedText,
+} from "../../shared/role-play-localization";
+import {
   FeedbackGenerationError,
   type ConversationFeedbackGenerator,
   type FeedbackGenerationInput,
@@ -20,13 +24,14 @@ import {
   ConversationRepository,
 } from "./conversation-repository";
 
-export const FEEDBACK_PROMPT_VERSION = "sales-coach-v2";
+export const FEEDBACK_PROMPT_VERSION = "sales-coach-v4-bilingual-learner-only";
 
 interface FeedbackReportRow {
   conversation_id: number;
   status: string;
   locale: string;
   overall_assessment: string | null;
+  overall_assessment_zh_cn: string | null;
   overall_score: number | null;
   model: string | null;
   prompt_version: string;
@@ -40,12 +45,15 @@ interface FeedbackReportRow {
 interface PositionedTextRow {
   position: number;
   text: string;
+  text_zh_cn: string;
 }
 
 interface CoachingTipRow {
   position: number;
   title: string;
+  title_zh_cn: string;
   advice: string;
+  advice_zh_cn: string;
 }
 
 interface CriterionScoreRow {
@@ -55,6 +63,7 @@ interface CriterionScoreRow {
   weight: number;
   score: number;
   rationale: string;
+  rationale_zh_cn: string;
 }
 
 interface FeedbackMomentRow {
@@ -62,8 +71,11 @@ interface FeedbackMomentRow {
   message_id: number;
   kind: string;
   title: string;
+  title_zh_cn: string;
   assessment: string;
+  assessment_zh_cn: string;
   suggested_approach: string;
+  suggested_approach_zh_cn: string;
 }
 
 export class ConversationFeedbackNotFoundError extends Error {
@@ -96,6 +108,37 @@ export class ConversationFeedbackRepository {
         timestamp,
         timestamp,
       );
+    const current = this.require(conversation.id);
+    if (current.promptVersion === FEEDBACK_PROMPT_VERSION) return current;
+
+    // A completed report belongs to the prompt contract that produced it.
+    // Regenerate an older report only when it is opened, rather than eagerly
+    // spending model quota on every historical conversation at startup.
+    const upgradeTimestamp = nextDatabaseTimestamp(current.updatedAt);
+    this.connection.exec("BEGIN IMMEDIATE");
+    try {
+      this.clearChildren(conversation.id);
+      this.connection
+        .prepare(
+          `UPDATE feedback_reports
+           SET status = 'pending', locale = ?, overall_assessment = NULL,
+               overall_assessment_zh_cn = NULL,
+               overall_score = NULL, model = NULL, prompt_version = ?,
+               error_code = NULL, error_message = NULL, updated_at = ?,
+               completed_at = NULL
+           WHERE conversation_id = ?`,
+        )
+        .run(
+          conversation.locale,
+          FEEDBACK_PROMPT_VERSION,
+          upgradeTimestamp,
+          conversation.id,
+        );
+      this.connection.exec("COMMIT");
+    } catch (error) {
+      this.connection.exec("ROLLBACK");
+      throw error;
+    }
     return this.require(conversation.id);
   }
 
@@ -107,19 +150,20 @@ export class ConversationFeedbackRepository {
 
     const strengths = this.connection
       .prepare(
-        `SELECT position, text FROM feedback_strengths
+        `SELECT position, text, text_zh_cn FROM feedback_strengths
          WHERE conversation_id = ? ORDER BY position`,
       )
       .all(conversationId) as unknown as PositionedTextRow[];
     const improvementAreas = this.connection
       .prepare(
-        `SELECT position, text FROM feedback_improvement_areas
+        `SELECT position, text, text_zh_cn FROM feedback_improvement_areas
          WHERE conversation_id = ? ORDER BY position`,
       )
       .all(conversationId) as unknown as PositionedTextRow[];
     const coachingTips = this.connection
       .prepare(
-        `SELECT position, title, advice FROM feedback_coaching_tips
+        `SELECT position, title, title_zh_cn, advice, advice_zh_cn
+         FROM feedback_coaching_tips
          WHERE conversation_id = ? ORDER BY position`,
       )
       .all(conversationId) as unknown as CoachingTipRow[];
@@ -130,7 +174,8 @@ export class ConversationFeedbackRepository {
                 criteria.name_zh_cn,
                 criteria.weight,
                 scores.score,
-                scores.rationale
+                scores.rationale,
+                scores.rationale_zh_cn
          FROM feedback_criterion_scores AS scores
          JOIN scenario_scoring_criteria AS criteria
            ON criteria.conversation_id = scores.conversation_id
@@ -141,7 +186,9 @@ export class ConversationFeedbackRepository {
       .all(conversationId) as unknown as CriterionScoreRow[];
     const moments = this.connection
       .prepare(
-        `SELECT position, message_id, kind, title, assessment, suggested_approach
+        `SELECT position, message_id, kind, title, title_zh_cn,
+                assessment, assessment_zh_cn,
+                suggested_approach, suggested_approach_zh_cn
          FROM feedback_moments
          WHERE conversation_id = ? ORDER BY position`,
       )
@@ -152,14 +199,29 @@ export class ConversationFeedbackRepository {
       status: report.status,
       locale: report.locale,
       overallAssessment: report.overall_assessment,
+      overallAssessmentZhCn: report.overall_assessment_zh_cn,
       overallScore: report.overall_score,
       model: report.model,
       promptVersion: report.prompt_version,
       errorCode: report.error_code,
       errorMessage: report.error_message,
-      strengths,
-      improvementAreas,
-      coachingTips,
+      strengths: strengths.map((strength) => ({
+        position: strength.position,
+        text: strength.text,
+        textZhCn: strength.text_zh_cn,
+      })),
+      improvementAreas: improvementAreas.map((area) => ({
+        position: area.position,
+        text: area.text,
+        textZhCn: area.text_zh_cn,
+      })),
+      coachingTips: coachingTips.map((tip) => ({
+        position: tip.position,
+        title: tip.title,
+        titleZhCn: tip.title_zh_cn,
+        advice: tip.advice,
+        adviceZhCn: tip.advice_zh_cn,
+      })),
       criterionScores: criterionScores.map((score) => ({
         criterionPosition: score.criterion_position,
         name: score.name,
@@ -167,14 +229,18 @@ export class ConversationFeedbackRepository {
         weight: score.weight,
         score: score.score,
         rationale: score.rationale,
+        rationaleZhCn: score.rationale_zh_cn,
       })),
       moments: moments.map((moment) => ({
         position: moment.position,
         messageId: moment.message_id,
         kind: moment.kind,
         title: moment.title,
+        titleZhCn: moment.title_zh_cn,
         assessment: moment.assessment,
+        assessmentZhCn: moment.assessment_zh_cn,
         suggestedApproach: moment.suggested_approach,
+        suggestedApproachZhCn: moment.suggested_approach_zh_cn,
       })),
       createdAt: report.created_at,
       updatedAt: report.updated_at,
@@ -256,15 +322,52 @@ export class ConversationFeedbackRepository {
     if (!conversation) throw new ConversationNotFoundError(conversationId);
     return {
       locale: conversation.locale,
-      personaName: conversation.personaName,
-      scenarioName: conversation.scenarioName,
+      personaName: localizedText(
+        conversation.persona.name,
+        conversation.persona.nameZhCn,
+        "en",
+      ),
+      personaNameZhCn: localizedText(
+        conversation.persona.name,
+        conversation.persona.nameZhCn,
+        "zh",
+      ),
+      scenarioName: localizedText(
+        conversation.scenario.name,
+        conversation.scenario.nameZhCn,
+        "en",
+      ),
+      scenarioNameZhCn: localizedText(
+        conversation.scenario.name,
+        conversation.scenario.nameZhCn,
+        "zh",
+      ),
       difficulty: conversation.difficulty,
-      goals: conversation.scenario.goals,
-      skillFocus: conversation.scenario.suggestedSkillFocus,
+      goals: localizedList(
+        conversation.scenario.goals,
+        conversation.scenario.goalsZhCn,
+        "en",
+      ),
+      goalsZhCn: localizedList(
+        conversation.scenario.goals,
+        conversation.scenario.goalsZhCn,
+        "zh",
+      ),
+      skillFocus: localizedList(
+        conversation.scenario.suggestedSkillFocus,
+        conversation.scenario.suggestedSkillFocusZhCn,
+        "en",
+      ),
+      skillFocusZhCn: localizedList(
+        conversation.scenario.suggestedSkillFocus,
+        conversation.scenario.suggestedSkillFocusZhCn,
+        "zh",
+      ),
       criteria: conversation.scenario.scoringCriteria.map(
         (criterion, position) => ({
           position,
-          name: criterion.name,
+          name: localizedText(criterion.name, criterion.nameZhCn, "en"),
+          nameZhCn: localizedText(criterion.name, criterion.nameZhCn, "zh"),
           weight: criterion.weight,
         }),
       ),
@@ -299,13 +402,15 @@ export class ConversationFeedbackRepository {
       this.connection
         .prepare(
           `UPDATE feedback_reports
-           SET status = 'completed', overall_assessment = ?, overall_score = ?,
+           SET status = 'completed', overall_assessment = ?,
+               overall_assessment_zh_cn = ?, overall_score = ?,
                model = ?, error_code = NULL, error_message = NULL,
                updated_at = ?, completed_at = ?
            WHERE conversation_id = ?`,
         )
         .run(
           generated.overallAssessment,
+          generated.overallAssessmentZhCn,
           overallScore,
           model,
           timestamp,
@@ -313,13 +418,16 @@ export class ConversationFeedbackRepository {
           conversationId,
         );
 
-      const insertText = (table: string, values: readonly string[]) => {
+      const insertText = (
+        table: string,
+        values: ReadonlyArray<{ text: string; textZhCn: string }>,
+      ) => {
         const statement = this.connection.prepare(
-          `INSERT INTO ${table} (conversation_id, position, text)
-           VALUES (?, ?, ?)`,
+          `INSERT INTO ${table} (conversation_id, position, text, text_zh_cn)
+           VALUES (?, ?, ?, ?)`,
         );
         values.forEach((value, position) =>
-          statement.run(conversationId, position, value),
+          statement.run(conversationId, position, value.text, value.textZhCn),
         );
       };
       insertText("feedback_strengths", generated.strengths);
@@ -327,16 +435,25 @@ export class ConversationFeedbackRepository {
 
       const insertTip = this.connection.prepare(
         `INSERT INTO feedback_coaching_tips
-           (conversation_id, position, title, advice) VALUES (?, ?, ?, ?)`,
+           (conversation_id, position, title, title_zh_cn, advice, advice_zh_cn)
+         VALUES (?, ?, ?, ?, ?, ?)`,
       );
       generated.coachingTips.forEach((tip, position) =>
-        insertTip.run(conversationId, position, tip.title, tip.advice),
+        insertTip.run(
+          conversationId,
+          position,
+          tip.title,
+          tip.titleZhCn,
+          tip.advice,
+          tip.adviceZhCn,
+        ),
       );
 
       const insertCriterion = this.connection.prepare(
         `INSERT INTO feedback_criterion_scores
-           (conversation_id, criterion_position, score, rationale)
-         VALUES (?, ?, ?, ?)`,
+           (conversation_id, criterion_position, score, rationale,
+            rationale_zh_cn)
+         VALUES (?, ?, ?, ?, ?)`,
       );
       generated.criterionScores.forEach((criterion) =>
         insertCriterion.run(
@@ -344,14 +461,16 @@ export class ConversationFeedbackRepository {
           criterion.criterionPosition,
           criterion.score,
           criterion.rationale,
+          criterion.rationaleZhCn,
         ),
       );
 
       const insertMoment = this.connection.prepare(
         `INSERT INTO feedback_moments
            (conversation_id, position, message_id, kind, title,
-            assessment, suggested_approach)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            title_zh_cn, assessment, assessment_zh_cn,
+            suggested_approach, suggested_approach_zh_cn)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       generated.moments.forEach((moment, position) =>
         insertMoment.run(
@@ -360,8 +479,11 @@ export class ConversationFeedbackRepository {
           moment.messageId,
           moment.kind,
           moment.title,
+          moment.titleZhCn,
           moment.assessment,
+          moment.assessmentZhCn,
           moment.suggestedApproach,
+          moment.suggestedApproachZhCn,
         ),
       );
       this.connection.exec("COMMIT");

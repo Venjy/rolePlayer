@@ -7,17 +7,32 @@ import {
 
 const input: FeedbackGenerationInput = {
   locale: "zh",
-  personaName: "林悦",
-  scenarioName: "需求发现",
+  personaName: "Lin Yue",
+  personaNameZhCn: "林悦",
+  scenarioName: "Needs discovery",
+  scenarioNameZhCn: "需求发现",
   difficulty: "medium",
-  goals: ["理解客户需求"],
-  skillFocus: ["开放式提问"],
-  criteria: [{ position: 0, name: "需求发现", weight: 100 }],
+  goals: ["Understand customer needs"],
+  goalsZhCn: ["理解客户需求"],
+  skillFocus: ["Open-ended questions"],
+  skillFocusZhCn: ["开放式提问"],
+  criteria: [{
+    position: 0,
+    name: "Needs discovery",
+    nameZhCn: "需求发现",
+    weight: 100,
+  }],
   messages: [
     {
       id: 11,
       role: "user",
       text: "你们现在最大的挑战是什么？",
+      interrupted: false,
+    },
+    {
+      id: 12,
+      role: "assistant",
+      text: "目前最大的挑战是销售线索转化率偏低。",
       interrupted: false,
     },
   ],
@@ -30,22 +45,31 @@ afterEach(() => {
 describe("QwenConversationFeedbackGenerator", () => {
   it("requests structured JSON and parses a valid coaching response", async () => {
     const generated = {
-      overallAssessment: "提问清晰，下一步应继续量化影响。",
-      strengths: ["使用了开放式问题。"],
-      improvementAreas: ["还没有量化业务影响。"],
+      evaluationSubject: "learner_salesperson",
+      overallAssessment: "The question was clear; next, quantify the impact.",
+      overallAssessmentZhCn: "提问清晰，下一步应继续量化影响。",
+      strengths: [{ text: "You used an open-ended question.", textZhCn: "使用了开放式问题。" }],
+      improvementAreas: [{ text: "You have not quantified the business impact.", textZhCn: "还没有量化业务影响。" }],
       coachingTips: [
-        { title: "追问影响", advice: "询问耗时、成本和机会损失。" },
-        { title: "确认理解", advice: "用一句话复述客户问题。" },
+        { title: "Explore impact", titleZhCn: "追问影响", advice: "Ask about time, cost, and lost opportunities.", adviceZhCn: "询问耗时、成本和机会损失。" },
+        { title: "Confirm understanding", titleZhCn: "确认理解", advice: "Restate the customer problem in one sentence.", adviceZhCn: "用一句话复述客户问题。" },
       ],
       criterionScores: [
-        { criterionPosition: 0, score: 82, rationale: "问题与目标一致。" },
+        { criterionPosition: 0, score: 82, rationale: "The question aligns with the goal.", rationaleZhCn: "问题与目标一致。" },
       ],
       moments: [{
         messageId: 11,
+        speaker: "learner_salesperson",
+        evidenceQuote: "你们现在最大的挑战是什么？",
+        contextMessageId: null,
+        contextQuote: "",
         kind: "strength" as const,
-        title: "关键时刻 1",
-        assessment: "有明确的对话证据。",
+        title: "Key moment 1",
+        titleZhCn: "关键时刻 1",
+        assessment: "The transcript provides clear evidence.",
+        assessmentZhCn: "有明确的对话证据。",
         suggestedApproach: "",
+        suggestedApproachZhCn: "",
       }],
     };
     const fetchMock = vi.fn(
@@ -65,7 +89,24 @@ describe("QwenConversationFeedbackGenerator", () => {
       timeoutMs: 10_000,
     });
 
-    await expect(generator.generate(input)).resolves.toEqual(generated);
+    await expect(generator.generate(input)).resolves.toEqual({
+      overallAssessment: generated.overallAssessment,
+      overallAssessmentZhCn: generated.overallAssessmentZhCn,
+      strengths: generated.strengths,
+      improvementAreas: generated.improvementAreas,
+      coachingTips: generated.coachingTips,
+      criterionScores: generated.criterionScores,
+      moments: [{
+        messageId: 11,
+        kind: "strength",
+        title: "Key moment 1",
+        titleZhCn: "关键时刻 1",
+        assessment: "The transcript provides clear evidence.",
+        assessmentZhCn: "有明确的对话证据。",
+        suggestedApproach: "",
+        suggestedApproachZhCn: "",
+      }],
+    });
     expect(fetchMock).toHaveBeenCalledOnce();
     const request = fetchMock.mock.calls[0];
     const init = request?.[1];
@@ -75,41 +116,67 @@ describe("QwenConversationFeedbackGenerator", () => {
     expect(body).toMatchObject({
       model: "qwen-plus",
       enable_thinking: false,
+      max_completion_tokens: 8_000,
       response_format: { type: "json_object" },
     });
     expect(JSON.stringify(body)).toContain("untrusted evidence");
     expect(JSON.stringify(body)).toContain("你们现在最大的挑战是什么？");
-    expect(JSON.stringify(body)).toContain("allowedUserMessageIds");
+    expect(JSON.stringify(body)).toContain("allowedLearnerMessageIds");
     const prompt = JSON.parse(
       (body.messages as Array<{ content: string }>)[1]?.content ?? "{}",
     ) as {
       constraints?: {
-        allowedUserMessageIds?: number[];
+        allowedLearnerMessageIds?: number[];
+        bilingualOutput?: string;
         moments?: string;
       };
+      participantContract?: Record<string, string>;
+      transcript?: Array<{ messageId: number; speaker: string }>;
     };
-    expect(prompt.constraints?.allowedUserMessageIds).toEqual([11]);
+    expect(prompt.constraints?.allowedLearnerMessageIds).toEqual([11]);
+    expect(prompt.constraints?.bilingualOutput).toContain(
+      "one shared evaluation",
+    );
     expect(prompt.constraints?.moments).toContain("Return 0-1 highlights");
+    expect(prompt.participantContract?.learner_salesperson).toContain(
+      "only participant you evaluate",
+    );
+    expect(prompt.transcript).toEqual([
+      expect.objectContaining({
+        messageId: 11,
+        speaker: "learner_salesperson",
+      }),
+      expect.objectContaining({ messageId: 12, speaker: "ai_customer" }),
+    ]);
   });
 
   it("drops an invalid highlight link without retrying or losing the core report", async () => {
     const valid = {
-      overallAssessment: "提问清晰。",
-      strengths: ["问题明确。"],
-      improvementAreas: ["可以继续追问。"],
+      evaluationSubject: "learner_salesperson",
+      overallAssessment: "The question was clear.",
+      overallAssessmentZhCn: "提问清晰。",
+      strengths: [{ text: "The question was specific.", textZhCn: "问题明确。" }],
+      improvementAreas: [{ text: "Continue probing.", textZhCn: "可以继续追问。" }],
       coachingTips: [
-        { title: "追问", advice: "追问影响。" },
-        { title: "确认", advice: "确认理解。" },
+        { title: "Probe", titleZhCn: "追问", advice: "Explore the impact.", adviceZhCn: "追问影响。" },
+        { title: "Confirm", titleZhCn: "确认", advice: "Confirm your understanding.", adviceZhCn: "确认理解。" },
       ],
       criterionScores: [
-        { criterionPosition: 0, score: 80, rationale: "与目标一致。" },
+        { criterionPosition: 0, score: 80, rationale: "It aligns with the goal.", rationaleZhCn: "与目标一致。" },
       ],
       moments: [{
         messageId: 1,
+        speaker: "learner_salesperson",
+        evidenceQuote: "有证据",
+        contextMessageId: null,
+        contextQuote: "",
         kind: "improvement" as const,
-        title: "无效引用",
-        assessment: "有证据。",
-        suggestedApproach: "继续追问。",
+        title: "Invalid reference",
+        titleZhCn: "无效引用",
+        assessment: "There is evidence.",
+        assessmentZhCn: "有证据。",
+        suggestedApproach: "Continue probing.",
+        suggestedApproachZhCn: "继续追问。",
       }],
     };
     const fetchMock = vi.fn(
@@ -137,17 +204,170 @@ describe("QwenConversationFeedbackGenerator", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it("drops a highlight whose quoted evidence belongs to the AI customer", async () => {
+    const generated = {
+      evaluationSubject: "learner_salesperson",
+      overallAssessment: "The salesperson asked an open-ended question.",
+      overallAssessmentZhCn: "销售提出了一个开放式问题。",
+      strengths: [{ text: "The question had a clear direction.", textZhCn: "问题方向清晰。" }],
+      improvementAreas: [],
+      coachingTips: [],
+      criterionScores: [
+        { criterionPosition: 0, score: 75, rationale: "The salesperson began exploring needs.", rationaleZhCn: "销售开始探索需求。" },
+      ],
+      moments: [{
+        messageId: 11,
+        speaker: "learner_salesperson",
+        evidenceQuote: "目前最大的挑战是销售线索转化率偏低。",
+        contextMessageId: null,
+        contextQuote: "",
+        kind: "strength" as const,
+        title: "Incorrect attribution",
+        titleZhCn: "错误归因",
+        assessment: "The customer quote was incorrectly attributed to the salesperson.",
+        assessmentZhCn: "错误地把客户原话归给了销售。",
+        suggestedApproach: "",
+        suggestedApproachZhCn: "",
+      }],
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify(generated) } }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const generator = new QwenConversationFeedbackGenerator({
+      apiKey: "test-key",
+      endpoint: "https://example.test/chat/completions",
+      model: "qwen-plus",
+      timeoutMs: 10_000,
+    });
+
+    await expect(generator.generate(input)).resolves.toMatchObject({
+      overallAssessment: generated.overallAssessment,
+      criterionScores: generated.criterionScores,
+      moments: [],
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("drops a highlight that uses a future AI reply as learner context", async () => {
+    const generated = {
+      evaluationSubject: "learner_salesperson",
+      overallAssessment: "The salesperson asked an open-ended question.",
+      overallAssessmentZhCn: "销售提出了一个开放式问题。",
+      strengths: [{ text: "The question had a clear direction.", textZhCn: "问题方向清晰。" }],
+      improvementAreas: [],
+      coachingTips: [],
+      criterionScores: [
+        { criterionPosition: 0, score: 75, rationale: "The question relates to the goal.", rationaleZhCn: "提问与目标有关。" },
+      ],
+      moments: [{
+        messageId: 11,
+        speaker: "learner_salesperson",
+        evidenceQuote: "你们现在最大的挑战是什么？",
+        contextMessageId: null,
+        contextQuote: "",
+        kind: "improvement" as const,
+        title: "Incorrect use of future information",
+        titleZhCn: "错误使用未来信息",
+        assessment:
+          "The assessment incorrectly uses message ID 12, which comes later.",
+        assessmentZhCn:
+          "客户在第12条已经说明销售线索转化率偏低，销售仍重复询问。",
+        suggestedApproach: "Continue probing.",
+        suggestedApproachZhCn: "继续追问。",
+      }],
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify(generated) } }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const generator = new QwenConversationFeedbackGenerator({
+      apiKey: "test-key",
+      endpoint: "https://example.test/chat/completions",
+      model: "qwen-plus",
+      timeoutMs: 10_000,
+    });
+
+    await expect(generator.generate(input)).resolves.toMatchObject({
+      overallAssessment: generated.overallAssessment,
+      moments: [],
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a report that declares the AI customer as its evaluation subject", async () => {
+    const generated = {
+      evaluationSubject: "ai_customer",
+      overallAssessment: "This incorrectly evaluates the AI customer.",
+      overallAssessmentZhCn: "错误地评价了 AI 客户。",
+      strengths: [],
+      improvementAreas: [],
+      coachingTips: [],
+      criterionScores: [
+        { criterionPosition: 0, score: 70, rationale: "The subject is incorrect.", rationaleZhCn: "对象错误。" },
+      ],
+      moments: [],
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify(generated) } }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const generator = new QwenConversationFeedbackGenerator({
+      apiKey: "test-key",
+      endpoint: "https://example.test/chat/completions",
+      model: "qwen-plus",
+      timeoutMs: 10_000,
+    });
+
+    await expect(generator.generate(input)).rejects.toMatchObject({
+      code: "feedback_invalid_output",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects internal participant labels in user-visible feedback", async () => {
+    const generated = {
+      evaluationSubject: "learner_salesperson",
+      overallAssessment: "learner_salesperson asked in the right direction.",
+      overallAssessmentZhCn: "learner_salesperson 的提问方向正确。",
+      strengths: [],
+      improvementAreas: [],
+      coachingTips: [],
+      criterionScores: [
+        { criterionPosition: 0, score: 70, rationale: "You can explore further.", rationaleZhCn: "可以继续深入。" },
+      ],
+      moments: [],
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify(generated) } }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const generator = new QwenConversationFeedbackGenerator({
+      apiKey: "test-key",
+      endpoint: "https://example.test/chat/completions",
+      model: "qwen-plus",
+      timeoutMs: 10_000,
+    });
+
+    await expect(generator.generate(input)).rejects.toMatchObject({
+      code: "feedback_invalid_output",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("keeps the useful review when the optional highlights have an invalid shape", async () => {
     const generated = {
-      overallAssessment: "主体评价仍然有效。",
-      strengths: ["问题明确。"],
-      improvementAreas: ["可以继续追问。"],
+      evaluationSubject: "learner_salesperson",
+      overallAssessment: "The core assessment remains valid.",
+      overallAssessmentZhCn: "主体评价仍然有效。",
+      strengths: [{ text: "The question was specific.", textZhCn: "问题明确。" }],
+      improvementAreas: [{ text: "Continue probing.", textZhCn: "可以继续追问。" }],
       coachingTips: [
-        { title: "追问", advice: "追问影响。" },
-        { title: "确认", advice: "确认理解。" },
+        { title: "Probe", titleZhCn: "追问", advice: "Explore the impact.", adviceZhCn: "追问影响。" },
+        { title: "Confirm", titleZhCn: "确认", advice: "Confirm your understanding.", adviceZhCn: "确认理解。" },
       ],
       criterionScores: [
-        { criterionPosition: 0, score: 80, rationale: "与目标一致。" },
+        { criterionPosition: 0, score: 80, rationale: "It aligns with the goal.", rationaleZhCn: "与目标一致。" },
       ],
       moments: "not-an-array",
     };

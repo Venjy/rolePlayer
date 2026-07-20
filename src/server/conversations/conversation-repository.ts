@@ -870,18 +870,27 @@ function normalizeSnapshotTimestamps<T extends {
 function mapConversationSummaryRow(
   row: ConversationSummaryRow,
 ): ConversationSummary {
-  const locale = parseLocale(row.locale);
   return conversationSummarySchema.parse({
     id: row.id,
     personaName: selectLocalizedValue(
       row.persona_name,
       row.persona_name_zh_cn,
-      locale,
+      "en",
+    ),
+    personaNameZhCn: selectLocalizedValue(
+      row.persona_name,
+      row.persona_name_zh_cn,
+      "zh",
     ),
     scenarioName: selectLocalizedValue(
       row.scenario_name,
       row.scenario_name_zh_cn,
-      locale,
+      "en",
+    ),
+    scenarioNameZhCn: selectLocalizedValue(
+      row.scenario_name,
+      row.scenario_name_zh_cn,
+      "zh",
     ),
     difficulty: row.difficulty,
     locale: row.locale,
@@ -906,13 +915,20 @@ function mapConversationDetail(
   audioMessageCount: number,
   feedbackStatus: string | null,
 ): ConversationDetail {
-  const locale = parseLocale(row.locale);
-  const localizedPersona = localizePersona(persona, locale);
-  const localizedScenario = localizeScenario(scenario, locale);
   return conversationDetailSchema.parse({
     id: row.id,
-    personaName: localizedPersona.name,
-    scenarioName: localizedScenario.name,
+    personaName: selectLocalizedValue(persona.name, persona.nameZhCn, "en"),
+    personaNameZhCn: selectLocalizedValue(
+      persona.name,
+      persona.nameZhCn,
+      "zh",
+    ),
+    scenarioName: selectLocalizedValue(scenario.name, scenario.nameZhCn, "en"),
+    scenarioNameZhCn: selectLocalizedValue(
+      scenario.name,
+      scenario.nameZhCn,
+      "zh",
+    ),
     difficulty: row.difficulty,
     locale: row.locale,
     status: row.status,
@@ -925,8 +941,8 @@ function mapConversationDetail(
     lastMessagePreview: messages.at(-1)?.text.slice(0, 240) ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    persona: localizedPersona,
-    scenario: localizedScenario,
+    persona,
+    scenario,
     messages,
   });
 }

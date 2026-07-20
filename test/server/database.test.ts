@@ -140,6 +140,11 @@ describe("ApplicationDatabase", () => {
         name: "create_conversation_feedback",
         applied_at: expect.any(String),
       }),
+      expect.objectContaining({
+        version: 18,
+        name: "make_conversation_feedback_bilingual",
+        applied_at: expect.any(String),
+      }),
     ]);
     expect(
       database.raw
@@ -241,7 +246,7 @@ describe("ApplicationDatabase", () => {
       second.raw
         .prepare("SELECT COUNT(*) AS count FROM schema_migrations")
         .get(),
-    ).toMatchObject({ count: 17 });
+    ).toMatchObject({ count: 18 });
     expect(
       second.raw
         .prepare("SELECT applied_at FROM schema_migrations WHERE version = 1")
@@ -287,6 +292,37 @@ describe("ApplicationDatabase", () => {
       expect(columnNames("scenario_training_goal_presets")).toEqual(expect.arrayContaining([
         "training_goal", "training_goal_zh_cn",
       ]));
+      expect(columnNames("conversation_feedback_reports")).toEqual(
+        expect.arrayContaining([
+          "overall_assessment",
+          "overall_assessment_zh_cn",
+          "overall_score",
+        ]),
+      );
+      expect(columnNames("conversation_feedback_strengths")).toEqual(
+        expect.arrayContaining(["text", "text_zh_cn"]),
+      );
+      expect(columnNames("conversation_feedback_coaching_tips")).toEqual(
+        expect.arrayContaining([
+          "title",
+          "title_zh_cn",
+          "advice",
+          "advice_zh_cn",
+        ]),
+      );
+      expect(columnNames("conversation_feedback_criterion_scores")).toEqual(
+        expect.arrayContaining(["score", "rationale", "rationale_zh_cn"]),
+      );
+      expect(columnNames("conversation_feedback_moments")).toEqual(
+        expect.arrayContaining([
+          "title",
+          "title_zh_cn",
+          "assessment",
+          "assessment_zh_cn",
+          "suggested_approach",
+          "suggested_approach_zh_cn",
+        ]),
+      );
       expect(columnNames("conversation_sessions")).not.toEqual(
         expect.arrayContaining(["persona_json", "scenario_json"]),
       );
@@ -721,6 +757,7 @@ describe("ApplicationDatabase", () => {
       { version: 15, name: "reference_catalog_presets_by_id" },
       { version: 16, name: "move_voice_behavior_to_scenarios" },
       { version: 17, name: "create_conversation_feedback" },
+      { version: 18, name: "make_conversation_feedback_bilingual" },
     ]);
     expect(
       first.raw.prepare("SELECT COUNT(*) AS count FROM personas").get(),

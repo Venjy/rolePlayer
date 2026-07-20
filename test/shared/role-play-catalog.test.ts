@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  compactPersonaDraftGenerationContext,
+  compactScenarioDraftGenerationContext,
+  personaDraftGenerationRequestSchema,
   personaInputSchema,
   scenarioInputSchema,
 } from "../../src/shared/role-play-catalog";
@@ -41,6 +44,29 @@ const minimalScenario = {
 };
 
 describe("role-play catalog field requirements", () => {
+  it("accepts and compacts incomplete random-generation drafts", () => {
+    expect(
+      personaDraftGenerationRequestSchema.safeParse({
+        currentDraft: { personalityTraitPresetIds: [] },
+      }).success,
+    ).toBe(true);
+    expect(
+      compactPersonaDraftGenerationContext({
+        name: " ",
+        gender: "unspecified",
+        age: null,
+        personalityTraitPresetIds: [],
+      }),
+    ).toBeUndefined();
+    expect(
+      compactScenarioDraftGenerationContext({
+        description: " ",
+        trainingGoalPresetIds: [],
+        voiceBehavior: {},
+      }),
+    ).toBeUndefined();
+  });
+
   it("accepts a persona with every optional field empty", () => {
     expect(personaInputSchema.safeParse(minimalPersona).success).toBe(true);
   });

@@ -2,8 +2,8 @@
   {
     "key": "scenario_sales_discovery",
     "input": {
-      "name": "Sales discovery call", "nameZhCn": "销售需求探索",
-      "description": "This is the first structured conversation with a potential buyer at a mid-sized company whose lead qualification and handoff process still relies on spreadsheets and manual follow-up. Slow response times are causing promising leads to go cold, but the buyer has not yet agreed internally on the size of the problem, the available budget, or who must approve a change. The buyer is comparing several approaches and will resist a generic product pitch. The learner must uncover the current workflow, quantify the business impact, identify the decision process, and earn a concrete next step.", "descriptionZhCn": "这是与一家中型企业潜在客户的首次正式沟通。该客户的线索筛选与交接仍依赖表格和人工跟进，响应缓慢已经导致部分高意向线索流失，但内部尚未就问题规模、可用预算和审批人形成共识。客户正在比较多种解决方式，并会抵触缺乏针对性的产品推销。学员需要了解当前流程、量化业务影响、确认决策机制，并争取一个明确的下一步。",
+      "name": "Business needs discovery", "nameZhCn": "业务需求探索",
+      "description": "This is the first structured conversation with a potential customer who knows that an important daily workflow is creating delays, rework, or lost business but has not yet defined the root problem. Information is moving between messages, spreadsheets, and disconnected tools, so exceptions are noticed late and employees compensate with manual work. The customer has heard competing explanations from colleagues and has not agreed on the economic impact, urgency, available budget, or decision participants. The learner must map the current workflow, uncover concrete consequences and stakeholder priorities, avoid a generic product pitch, and earn a specific next step.", "descriptionZhCn": "这是与一名潜在客户的首次正式沟通。客户已经意识到某项关键日常流程正在造成延误、返工或业务损失，但尚未明确问题根因。信息在消息、表格和多个割裂工具之间流转，异常往往被发现得太晚，员工只能依靠大量手工操作补救。客户内部对原因有不同判断，也尚未就经济影响、紧迫程度、可用预算和决策参与者达成共识。学员需要梳理当前流程，发现具体后果和相关方重点，避免泛泛推销，并争取一个明确的下一步。",
       "trainingGoalPresetKeys": ["goal_discover_needs", "goal_next_step"],
       "skillFocusPresetKeys": ["skill_open_questions", "skill_active_listening"],
       "toneStylePresetKey": "tone_professional",

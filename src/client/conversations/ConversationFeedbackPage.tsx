@@ -225,11 +225,16 @@ export function ConversationFeedbackPage({
 
   const copyTranscript = async () => {
     if (!view) return;
+    const personaName = localizedText(
+      view.conversation.persona.name,
+      view.conversation.persona.nameZhCn,
+      locale,
+    );
     const transcript = view.conversation.messages
       .map((item) => {
         const speaker = item.role === "user"
           ? t({ en: "You", zh: "你" })
-          : view.conversation.personaName;
+          : personaName;
         return `${speaker}: ${item.text}`;
       })
       .join("\n\n");
@@ -302,6 +307,16 @@ export function ConversationFeedbackPage({
   }
 
   const { conversation, feedback } = view;
+  const personaName = localizedText(
+    conversation.persona.name,
+    conversation.persona.nameZhCn,
+    locale,
+  );
+  const scenarioName = localizedText(
+    conversation.scenario.name,
+    conversation.scenario.nameZhCn,
+    locale,
+  );
   const userTurns = conversation.messages.filter(({ role }) => role === "user").length;
   const feedbackPending = feedback.status === "pending" || feedback.status === "processing";
   const audioAvailable = conversation.audioAvailable;
@@ -332,7 +347,7 @@ export function ConversationFeedbackPage({
 
   return (
     <main className={styles.page}>
-      {renderHeader(`${conversation.scenarioName} · ${conversation.personaName}`)}
+      {renderHeader(`${scenarioName} · ${personaName}`)}
 
       <section className={styles.content}>
         <Card className={styles.summaryCard}>
@@ -379,14 +394,20 @@ export function ConversationFeedbackPage({
                     )}
               />
             ) : (
-              <Typography.Paragraph>{feedback.overallAssessment}</Typography.Paragraph>
+              <Typography.Paragraph>
+                {localizedText(
+                  feedback.overallAssessment ?? "",
+                  feedback.overallAssessmentZhCn ?? "",
+                  locale,
+                )}
+              </Typography.Paragraph>
             )}
           </div>
         </Card>
 
         <div className={styles.metadataGrid}>
-          <Statistic title={t({ en: "Scenario", zh: "场景" })} value={conversation.scenarioName} />
-          <Statistic title={t({ en: "Role", zh: "角色" })} value={conversation.personaName} />
+          <Statistic title={t({ en: "Scenario", zh: "场景" })} value={scenarioName} />
+          <Statistic title={t({ en: "Role", zh: "角色" })} value={personaName} />
           <Statistic title={t({ en: "Duration", zh: "时长" })} value={formatDuration(durationSeconds, locale)} />
           <Statistic title={t({ en: "Your turns", zh: "你的轮次" })} value={userTurns} />
         </div>
@@ -399,7 +420,10 @@ export function ConversationFeedbackPage({
                   dataSource={feedback.strengths}
                   renderItem={(item) => (
                     <List.Item>
-                      <List.Item.Meta avatar={<CheckCircleOutlined className={styles.strengthIcon} />} description={item.text} />
+                      <List.Item.Meta
+                        avatar={<CheckCircleOutlined className={styles.strengthIcon} />}
+                        description={localizedText(item.text, item.textZhCn, locale)}
+                      />
                     </List.Item>
                   )}
                 />
@@ -409,7 +433,10 @@ export function ConversationFeedbackPage({
                   dataSource={feedback.improvementAreas}
                   renderItem={(item) => (
                     <List.Item>
-                      <List.Item.Meta avatar={<WarningOutlined className={styles.improvementIcon} />} description={item.text} />
+                      <List.Item.Meta
+                        avatar={<WarningOutlined className={styles.improvementIcon} />}
+                        description={localizedText(item.text, item.textZhCn, locale)}
+                      />
                     </List.Item>
                   )}
                 />
@@ -427,7 +454,13 @@ export function ConversationFeedbackPage({
                       <Tag>{criterion.weight}%</Tag>
                     </Flex>
                     <Progress percent={criterion.score} />
-                    <Typography.Paragraph type="secondary">{criterion.rationale}</Typography.Paragraph>
+                    <Typography.Paragraph type="secondary">
+                      {localizedText(
+                        criterion.rationale,
+                        criterion.rationaleZhCn,
+                        locale,
+                      )}
+                    </Typography.Paragraph>
                   </div>
                 ))}
               </div>
@@ -443,8 +476,12 @@ export function ConversationFeedbackPage({
                       <Space align="start">
                         <RiseOutlined className={styles.strengthIcon} />
                         <div>
-                          <Typography.Text strong>{tip.title}</Typography.Text>
-                          <Typography.Paragraph>{tip.advice}</Typography.Paragraph>
+                          <Typography.Text strong>
+                            {localizedText(tip.title, tip.titleZhCn, locale)}
+                          </Typography.Text>
+                          <Typography.Paragraph>
+                            {localizedText(tip.advice, tip.adviceZhCn, locale)}
+                          </Typography.Paragraph>
                         </div>
                       </Space>
                     </Card>
@@ -468,13 +505,28 @@ export function ConversationFeedbackPage({
                         ? t({ en: "Strong moment", zh: "亮点" })
                         : t({ en: "Could improve", zh: "可改进" })}
                     </Tag>
-                    <Typography.Text strong>{moment.title}</Typography.Text>
-                    <Typography.Text className={styles.momentText}>
-                      {moment.assessment}
+                    <Typography.Text strong>
+                      {localizedText(moment.title, moment.titleZhCn, locale)}
                     </Typography.Text>
-                    {moment.suggestedApproach && (
+                    <Typography.Text className={styles.momentText}>
+                      {localizedText(
+                        moment.assessment,
+                        moment.assessmentZhCn,
+                        locale,
+                      )}
+                    </Typography.Text>
+                    {localizedText(
+                      moment.suggestedApproach,
+                      moment.suggestedApproachZhCn,
+                      locale,
+                    ) && (
                       <Typography.Text className={styles.momentText} type="secondary">
-                        {t({ en: "Try: ", zh: "可以这样做：" })}{moment.suggestedApproach}
+                        {t({ en: "Try: ", zh: "可以这样做：" })}
+                        {localizedText(
+                          moment.suggestedApproach,
+                          moment.suggestedApproachZhCn,
+                          locale,
+                        )}
                       </Typography.Text>
                     )}
                   </button>
@@ -522,7 +574,7 @@ export function ConversationFeedbackPage({
                     text={item.text}
                     timestamp={new Date(item.createdAt)}
                     interrupted={item.interrupted}
-                    personaName={conversation.personaName}
+                    personaName={personaName}
                   />
                 </div>
               ))}

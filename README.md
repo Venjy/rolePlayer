@@ -174,7 +174,7 @@ Use `--interrupt-during-generation` to exercise the cancellation path. With no t
 - Conversation switching/new-practice/end actions are serialized and wait for response-specific user/assistant persistence acknowledgements before disconnecting; failed settlement is reported instead of silently dropping the last turn
 - Conservative in-session goal detection after each complete AI response: a separate asynchronous Qwen text assessment suggests ending only when every scenario success criterion has explicit evidence and at least 0.9 confidence; it never forces the conversation to end
 - Durable end-of-session lifecycle: ending locks further messages/realtime restoration, starts an asynchronous Qwen text-model review, survives process restarts, and exposes retryable pending/processing/completed/failed states
-- Responsive coaching page with a server-calculated weighted overall score, scenario-criterion breakdown, strengths, improvements, actionable tips, validated transcript-linked moments when available, session metadata, copyable transcript, existing text/audio export options, permanent record deletion, and **Try again** creation from the same persona/scenario/difficulty; highlight count follows the available learner turns, malformed optional highlights are discarded without losing the core review, and failures identify the data/model/validation/storage stage
+- Responsive coaching page focused exclusively on the real learner salesperson, with one server-calculated score set and faithfully translated English/Simplified Chinese assessment, breakdown, strengths, improvements, tips, and moments saved from a single generation; language switching reads the stored report without regeneration. It also includes session metadata, a copyable transcript, text/audio export, permanent record deletion, and **Try again** creation from the same persona/scenario/difficulty; malformed or wrongly attributed optional highlights are discarded without losing the core review, stale prompt versions regenerate lazily when opened, and failures identify the data/model/validation/storage stage
 - Bottom-anchored conversation history with live user and assistant drafts, timestamps, and interrupted-turn labels
 - Press-and-hold recording for mouse, touch, pen, Space, and Enter; release sends and upward slide cancels
 - Audio-reactive microphone waveform, recording duration, and release instruction while a gesture is active
@@ -189,7 +189,7 @@ Use `--interrupt-during-generation` to exercise the cancellation path. With no t
 
 ## Persistence status
 
-Fresh catalog and conversation files have independent migration histories and contain only their own domain tables. Every preset domain has its own physical table, and catalog records reference preset IDs instead of copying localized labels. The historical combined file retains migrations 1–17 so `pnpm database:split` can upgrade and copy old data safely. Schema migrations own structure only; current business defaults are installed explicitly. The catalog REST API is:
+Fresh catalog and conversation files have independent migration histories and contain only their own domain tables. Every preset domain has its own physical table, and catalog records reference preset IDs instead of copying localized labels. The historical combined file retains migrations 1–18 so `pnpm database:split` can upgrade and copy old data safely. Schema migrations own structure only; current business defaults are installed explicitly. The catalog REST API is:
 
 | Method | Path | Purpose |
 | --- | --- | --- |

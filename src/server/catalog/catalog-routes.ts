@@ -3,6 +3,8 @@ import type { ZodError } from "zod";
 import { z } from "zod";
 import { databaseIdSchema } from "../../shared/database-id";
 import {
+  compactPersonaDraftGenerationContext,
+  compactScenarioDraftGenerationContext,
   personaDraftGenerationRequestSchema,
   personaInputSchema,
   scenarioDraftGenerationRequestSchema,
@@ -52,7 +54,7 @@ export function registerCatalogRoutes(
     try {
       const draft = await getDraftGenerator().generatePersona(
         repository.listCatalog(),
-        parsed.data.currentDraft,
+        compactPersonaDraftGenerationContext(parsed.data.currentDraft),
       );
       return reply.send(draft);
     } catch (error) {
@@ -68,7 +70,7 @@ export function registerCatalogRoutes(
     try {
       const draft = await getDraftGenerator().generateScenario(
         repository.listCatalog(),
-        parsed.data.currentDraft,
+        compactScenarioDraftGenerationContext(parsed.data.currentDraft),
       );
       return reply.send(draft);
     } catch (error) {

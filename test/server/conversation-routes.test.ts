@@ -31,6 +31,7 @@ import {
   registerConversationRoutes,
   type ConversationRouteOptions,
 } from "../../src/server/conversations/conversation-routes";
+import { FEEDBACK_PROMPT_VERSION } from "../../src/server/conversations/conversation-feedback-service";
 import { registerDatabases } from "../../src/server/database/register-database";
 import {
   localizePersona,
@@ -73,7 +74,7 @@ function getCreateInput(app: ReturnType<typeof createApp>): TestCreateInput {
   const initialized = catalog.listCatalog();
   const persona = initialized.personas.find(({ name }) => name === "Alex");
   const scenario = initialized.scenarios.find(
-    ({ name }) => name === "Sales discovery call",
+    ({ name }) => name === "Business needs discovery",
   );
   if (!persona || !scenario) {
     throw new Error("The initialized starter catalog is missing.");
@@ -213,14 +214,16 @@ describe("conversation history routes", () => {
       expect(response.statusCode).toBe(201);
       const created = conversationDetailSchema.parse(response.json());
       expect(created).toMatchObject({
-        personaName: localizedInput.persona.name,
-        scenarioName: localizedInput.scenario.name,
+        personaName: input.persona.name,
+        personaNameZhCn: input.persona.nameZhCn,
+        scenarioName: input.scenario.name,
+        scenarioNameZhCn: input.scenario.nameZhCn,
         difficulty: input.difficulty,
         locale: input.locale,
         messageCount: 0,
         lastMessagePreview: null,
-        persona: localizedInput.persona,
-        scenario: localizedInput.scenario,
+        persona: toPersonaSnapshot(input.persona),
+        scenario: toScenarioSnapshot(input.scenario),
         messages: [],
       });
       expect(created.createdAt).toBe(created.updatedAt);
@@ -300,8 +303,8 @@ describe("conversation history routes", () => {
       });
       expect(detailResponse.statusCode).toBe(200);
       const restored = conversationDetailSchema.parse(detailResponse.json());
-      expect(restored.persona).toEqual(localizedInput.persona);
-      expect(restored.scenario).toEqual(localizedInput.scenario);
+      expect(restored.persona).toEqual(toPersonaSnapshot(input.persona));
+      expect(restored.scenario).toEqual(toScenarioSnapshot(input.scenario));
 
       const restoredRuntime = repository.getRuntimeConversation(created.id);
       expect(restoredRuntime?.instructions).toBe(expectedInstructions);
@@ -329,7 +332,8 @@ describe("conversation history routes", () => {
       ).getRuntimeConversation(created.id);
 
       expect(created.locale).toBe("zh");
-      expect(created.personaName).toBe(input.persona.nameZhCn);
+      expect(created.personaName).toBe(input.persona.name);
+      expect(created.personaNameZhCn).toBe(input.persona.nameZhCn);
       expect(runtime?.instructions).toContain("[客户角色]");
       expect(runtime?.instructions).toContain("[销售训练场景]");
       expect(runtime?.instructions).toContain("难度: 困难");
@@ -672,23 +676,44 @@ describe("conversation history routes", () => {
         if (!highlightedMessage) throw new Error("Expected a transcript message.");
         return {
           overallAssessment: "A focused discovery conversation.",
-          strengths: ["Asked a useful diagnostic question."],
-          improvementAreas: ["Confirm the business impact more explicitly."],
+          overallAssessmentZhCn: "这是一次聚焦的需求探索对话。",
+          strengths: [{
+            text: "Asked a useful diagnostic question.",
+            textZhCn: "提出了有用的诊断性问题。",
+          }],
+          improvementAreas: [{
+            text: "Confirm the business impact more explicitly.",
+            textZhCn: "需要更明确地确认业务影响。",
+          }],
           coachingTips: [
-            { title: "Quantify impact", advice: "Ask for a measurable baseline." },
-            { title: "Confirm next step", advice: "Close with a specific action." },
+            {
+              title: "Quantify impact",
+              titleZhCn: "量化影响",
+              advice: "Ask for a measurable baseline.",
+              adviceZhCn: "询问可衡量的现状基线。",
+            },
+            {
+              title: "Confirm next step",
+              titleZhCn: "确认下一步",
+              advice: "Close with a specific action.",
+              adviceZhCn: "以明确行动结束对话。",
+            },
           ],
           criterionScores: input.criteria.map((criterion, index) => ({
             criterionPosition: criterion.position,
             score: 80 + index,
             rationale: `Evidence for ${criterion.name}.`,
+            rationaleZhCn: `关于${criterion.nameZhCn}的证据。`,
           })),
           moments: Array.from({ length: 3 }, (_, index) => ({
             messageId: highlightedMessage.id,
             kind: index === 0 ? "strength" as const : "improvement" as const,
             title: `Moment ${index + 1}`,
+            titleZhCn: `关键时刻 ${index + 1}`,
             assessment: "A transcript-grounded observation.",
+            assessmentZhCn: "这是一项有对话依据的观察。",
             suggestedApproach: index === 0 ? "" : "Use one concise follow-up.",
+            suggestedApproachZhCn: index === 0 ? "" : "使用一句简洁的追问。",
           })),
         };
       },
@@ -739,6 +764,11 @@ describe("conversation history routes", () => {
       expect(receivedInput?.locale).toBe("zh");
       expect(receivedInput?.criteria.map(({ name }) => name)).toEqual(
         createInput.scenario.scoringCriteria.map(
+          ({ name, nameZhCn }) => name || nameZhCn,
+        ),
+      );
+      expect(receivedInput?.criteria.map(({ nameZhCn }) => nameZhCn)).toEqual(
+        createInput.scenario.scoringCriteria.map(
           ({ name, nameZhCn }) => nameZhCn || name,
         ),
       );
@@ -746,7 +776,12 @@ describe("conversation history routes", () => {
         status: "completed",
         model: "test-coach",
         overallAssessment: "A focused discovery conversation.",
-        strengths: [{ position: 0, text: "Asked a useful diagnostic question." }],
+        overallAssessmentZhCn: "这是一次聚焦的需求探索对话。",
+        strengths: [{
+          position: 0,
+          text: "Asked a useful diagnostic question.",
+          textZhCn: "提出了有用的诊断性问题。",
+        }],
       });
       expect(feedbackView.feedback.criterionScores[0]).toMatchObject({
         name: createInput.scenario.scoringCriteria[0]?.name,
@@ -776,6 +811,103 @@ describe("conversation history routes", () => {
           feedbackStatus: "completed",
         }),
       );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("regenerates an opened report created by an older coaching prompt", async () => {
+    let generationCount = 0;
+    const feedbackGenerator: ConversationFeedbackGenerator = {
+      model: "versioned-test-coach",
+      generate: async (input) => {
+        generationCount += 1;
+        return {
+          overallAssessment: `Learner-only review ${generationCount}.`,
+          overallAssessmentZhCn: `仅针对学员的复盘 ${generationCount}。`,
+          strengths: [{
+            text: `Learner strength ${generationCount}.`,
+            textZhCn: `学员亮点 ${generationCount}。`,
+          }],
+          improvementAreas: [],
+          coachingTips: [],
+          criterionScores: input.criteria.map((criterion) => ({
+            criterionPosition: criterion.position,
+            score: 80,
+            rationale: "The learner's message supports this score.",
+            rationaleZhCn: "学员的发言支持这一评分。",
+          })),
+          moments: [],
+        };
+      },
+    };
+    const app = createApp({ feedbackGenerator });
+    try {
+      await app.ready();
+      const repository = new ConversationRepository(app.conversationDatabase);
+      const conversation = repository.createConversation(getCreateInput(app));
+      repository.appendMessage({
+        conversationId: conversation.id,
+        role: "user",
+        text: "What business outcome would make this project worthwhile?",
+        interrupted: false,
+        sourceItemId: "versioned-feedback-user",
+      });
+
+      await app.inject({
+        method: "POST",
+        url: `/api/conversations/${conversation.id}/end`,
+      });
+      let feedbackView:
+        | ReturnType<typeof conversationFeedbackViewSchema.parse>
+        | undefined;
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const response = await app.inject({
+          method: "GET",
+          url: `/api/conversations/${conversation.id}/feedback`,
+        });
+        feedbackView = conversationFeedbackViewSchema.parse(response.json());
+        if (feedbackView.feedback.status === "completed") break;
+      }
+      expect(feedbackView?.feedback).toMatchObject({
+        status: "completed",
+        overallAssessment: "Learner-only review 1.",
+      });
+
+      app.conversationDatabase.raw
+        .prepare(
+          `UPDATE feedback_reports
+           SET prompt_version = 'sales-coach-v2'
+           WHERE conversation_id = ?`,
+        )
+        .run(conversation.id);
+
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const response = await app.inject({
+          method: "GET",
+          url: `/api/conversations/${conversation.id}/feedback`,
+        });
+        feedbackView = conversationFeedbackViewSchema.parse(response.json());
+        if (
+          feedbackView.feedback.status === "completed" &&
+          feedbackView.feedback.promptVersion === FEEDBACK_PROMPT_VERSION
+        ) {
+          break;
+        }
+      }
+
+      expect(generationCount).toBe(2);
+      expect(feedbackView?.feedback).toMatchObject({
+        status: "completed",
+        promptVersion: FEEDBACK_PROMPT_VERSION,
+        overallAssessment: "Learner-only review 2.",
+        overallAssessmentZhCn: "仅针对学员的复盘 2。",
+        strengths: [{
+          position: 0,
+          text: "Learner strength 2.",
+          textZhCn: "学员亮点 2。",
+        }],
+      });
     } finally {
       await app.close();
     }

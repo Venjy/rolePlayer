@@ -18,12 +18,15 @@ export const feedbackMomentKindSchema = z.enum(["strength", "improvement"]);
 const feedbackStrengthSchema = z.object({
   position: z.number().int().min(0),
   text: z.string().trim().min(1).max(1_000),
+  textZhCn: z.string().trim().min(1).max(1_000),
 });
 
 const feedbackCoachingTipSchema = z.object({
   position: z.number().int().min(0),
   title: z.string().trim().min(1).max(200),
+  titleZhCn: z.string().trim().min(1).max(200),
   advice: z.string().trim().min(1).max(1_500),
+  adviceZhCn: z.string().trim().min(1).max(1_500),
 });
 
 const feedbackCriterionScoreSchema = z
@@ -34,6 +37,7 @@ const feedbackCriterionScoreSchema = z
     weight: z.number().int().min(0).max(100),
     score: z.number().int().min(0).max(100),
     rationale: z.string().trim().min(1).max(1_500),
+    rationaleZhCn: z.string().trim().min(1).max(1_500),
   })
   .superRefine((value, context) => {
     if (!value.name && !value.nameZhCn) {
@@ -50,8 +54,11 @@ const feedbackMomentSchema = z.object({
   messageId: databaseIdSchema,
   kind: feedbackMomentKindSchema,
   title: z.string().trim().min(1).max(200),
+  titleZhCn: z.string().trim().min(1).max(200),
   assessment: z.string().trim().min(1).max(1_500),
+  assessmentZhCn: z.string().trim().min(1).max(1_500),
   suggestedApproach: z.string().trim().max(1_500),
+  suggestedApproachZhCn: z.string().trim().max(1_500),
 });
 
 export const conversationFeedbackSchema = z.object({
@@ -59,6 +66,7 @@ export const conversationFeedbackSchema = z.object({
   status: feedbackStatusSchema,
   locale: conversationLocaleSchema,
   overallAssessment: z.string().trim().max(2_000).nullable(),
+  overallAssessmentZhCn: z.string().trim().max(2_000).nullable(),
   overallScore: z.number().int().min(0).max(100).nullable(),
   model: z.string().trim().max(200).nullable(),
   promptVersion: z.string().trim().min(1).max(100),

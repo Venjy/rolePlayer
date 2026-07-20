@@ -12,12 +12,13 @@ import {
   Select,
   Space,
 } from "antd";
-import type {
-  Persona,
-  PersonaInput,
-  PersonaPreset,
-  PersonaPresetCategory,
-  QwenVoiceDefinition,
+import {
+  compactPersonaDraftGenerationContext,
+  type Persona,
+  type PersonaInput,
+  type PersonaPreset,
+  type PersonaPresetCategory,
+  type QwenVoiceDefinition,
 } from "../../shared/role-play-catalog";
 import { compilePersonaInstructions } from "../../shared/role-play-instructions";
 import { resolvePersonaPresetReferences } from "../../shared/role-play-preset-resolution";
@@ -32,6 +33,7 @@ import { generatePersonaDraft } from "../catalog/catalog-api";
 import { getCatalogGenerationErrorMessage } from "./catalog-generation-errors";
 import { buildPersonaPresetOptions } from "./persona-preset-options";
 import {
+  buildPersonaDraftGenerationContext,
   normalizePersonaFormValues,
   getPersonaFormInitialValues,
   type PersonaFormValues,
@@ -190,11 +192,19 @@ export function PersonaEditorDrawer({
     setSubmitError(undefined);
     setGenerating(true);
     try {
-      const currentDraft = normalizePersonaFormValues(
-        { ...initialValues, ...form.getFieldsValue(true) },
-        locale,
-        basePersona,
-      );
+      const currentValues = form.getFieldsValue(true);
+      const currentDraft = basePersona
+        ? compactPersonaDraftGenerationContext(
+            normalizePersonaFormValues(
+              { ...initialValues, ...currentValues },
+              locale,
+              basePersona,
+            ),
+          )
+        : buildPersonaDraftGenerationContext(
+            form.getFieldsValue(true, (metadata) => Boolean(metadata?.touched)),
+            locale,
+          );
       const generated = await generatePersonaDraft(
         currentDraft,
         controller.signal,

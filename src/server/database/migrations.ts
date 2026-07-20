@@ -5,7 +5,10 @@ import {
   moveCatalogVoiceBehaviorToScenarios,
   moveCombinedConversationVoiceBehaviorToScenarioSnapshots,
 } from "./scenario-voice-behavior-migration";
-import { createCombinedConversationFeedbackSchema } from "./conversation-feedback-migration";
+import {
+  addCombinedBilingualConversationFeedbackColumns,
+  createCombinedConversationFeedbackSchema,
+} from "./conversation-feedback-migration";
 
 /**
  * A migration is immutable after it has reached a deployed environment.
@@ -1510,6 +1513,11 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
     version: 17,
     name: "create_conversation_feedback",
     up: createCombinedConversationFeedbackSchema,
+  },
+  {
+    version: 18,
+    name: "make_conversation_feedback_bilingual",
+    up: addCombinedBilingualConversationFeedbackColumns,
   },
 ];
 

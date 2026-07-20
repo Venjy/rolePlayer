@@ -14,8 +14,10 @@ import {
 function toSummary(conversation: ConversationDetail): ConversationSummary {
   return {
     id: conversation.id,
-    personaName: conversation.persona.name,
-    scenarioName: conversation.scenario.name,
+    personaName: conversation.personaName,
+    personaNameZhCn: conversation.personaNameZhCn,
+    scenarioName: conversation.scenarioName,
+    scenarioNameZhCn: conversation.scenarioNameZhCn,
     difficulty: conversation.difficulty,
     locale: conversation.locale,
     status: conversation.status,

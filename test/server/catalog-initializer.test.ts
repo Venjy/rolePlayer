@@ -48,8 +48,15 @@ describe("initializeCatalogData", () => {
       expect(preset.value.trim()).not.toBe("");
       expect(preset.valueZhCn.trim()).not.toBe("");
     }
-    expect(INITIAL_PERSONA_PRESETS.filter(({ category }) => category === "occupation").length)
-      .toBeGreaterThanOrEqual(20);
+    const occupations = INITIAL_PERSONA_PRESETS.filter(
+      ({ category }) => category === "occupation",
+    );
+    expect(occupations).toHaveLength(36);
+    for (const occupation of occupations) {
+      expect(Array.from(occupation.valueZhCn).length).toBeLessThanOrEqual(8);
+      expect(occupation.value).not.toMatch(/\b(?:director|manager)\b/i);
+      expect(occupation.valueZhCn).not.toMatch(/总监|经理/);
+    }
     expect(INITIAL_PERSONA_PRESETS.some(({ category }) => category === "identity" as never))
       .toBe(false);
   });
@@ -112,13 +119,13 @@ describe("initializeCatalogData", () => {
         `UPDATE persona_occupation_presets
          SET occupation = ?, occupation_zh_cn = ?
          WHERE seed_key = ?`,
-      ).run("Custom occupation", "自定义职业", "occupation_sales_director");
+      ).run("Custom occupation", "自定义职业", "occupation_doctor");
       initializeCatalogData(database);
       expect(database.raw.prepare(
         `SELECT occupation, occupation_zh_cn
          FROM persona_occupation_presets
          WHERE seed_key = ?`,
-      ).get("occupation_sales_director")).toEqual({
+      ).get("occupation_doctor")).toEqual({
         occupation: "Custom occupation",
         occupation_zh_cn: "自定义职业",
       });
@@ -145,8 +152,8 @@ describe("initializeCatalogData", () => {
       ).get("persona_lin_yue")).toEqual({
         name: "Lin Yue",
         name_zh_cn: "林悦",
-        occupation: "Marketing Director",
-        occupation_zh_cn: "市场总监",
+        occupation: "Online Seller",
+        occupation_zh_cn: "电商卖家",
         communication_style: expect.any(String),
         communication_style_zh_cn: expect.any(String),
       });
@@ -154,17 +161,17 @@ describe("initializeCatalogData", () => {
         `SELECT name, name_zh_cn, description, description_zh_cn
          FROM scenarios WHERE seed_key = ?`,
       ).get("scenario_sales_discovery")).toEqual({
-        name: "Sales discovery call",
-        name_zh_cn: "销售需求探索",
+        name: "Business needs discovery",
+        name_zh_cn: "业务需求探索",
         description: expect.any(String),
         description_zh_cn: expect.any(String),
       });
       expect(database.raw.prepare(
         `SELECT occupation, occupation_zh_cn
          FROM persona_occupation_presets WHERE seed_key = ?`,
-      ).get("occupation_sales_director")).toEqual({
-        occupation: "Sales Director",
-        occupation_zh_cn: "销售总监",
+      ).get("occupation_doctor")).toEqual({
+        occupation: "Doctor",
+        occupation_zh_cn: "医生",
       });
     } finally {
       database.close();

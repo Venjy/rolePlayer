@@ -26,7 +26,7 @@ function presetId(catalog: RolePlayCatalog, valueZhCn: string): number {
 function personaInput(catalog: RolePlayCatalog): PersonaInput {
   return {
   name: "", nameZhCn: "张三", gender: "male", age: 29,
-  occupationPresetId: presetId(catalog, "物流运营经理"),
+  occupationPresetId: presetId(catalog, "采购专员"),
   background: "", backgroundZhCn: "负责区域物流运营与交付效率。",
   personalityTraitPresetIds: [presetId(catalog, "务实")],
   communicationStylePresetId: presetId(catalog, "直接简洁"),
@@ -81,10 +81,10 @@ describe("catalog routes", () => {
         }),
       ]));
       expect(catalog.personaPresets).toEqual(expect.arrayContaining([
-        expect.objectContaining({ category: "occupation", value: "Sales Director", valueZhCn: "销售总监" }),
+        expect.objectContaining({ category: "occupation", value: "Restaurant Owner", valueZhCn: "餐馆老板" }),
       ]));
       expect(catalog.personas).toEqual(expect.arrayContaining([
-        expect.objectContaining({ name: "Lin Yue", nameZhCn: "林悦", occupation: "Marketing Director" }),
+        expect.objectContaining({ name: "Lin Yue", nameZhCn: "林悦", occupation: "Online Seller" }),
       ]));
     } finally {
       await app.close();
@@ -102,7 +102,7 @@ describe("catalog routes", () => {
       const createdPersonaResponse = await app.inject({ method: "POST", url: "/api/personas", payload: personaInput(catalog) });
       expect(createdPersonaResponse.statusCode).toBe(201);
       const persona = createdPersonaResponse.json<Persona>();
-      expect(persona).toMatchObject({ name: "", nameZhCn: "张三", occupationZhCn: "物流运营经理" });
+      expect(persona).toMatchObject({ name: "", nameZhCn: "张三", occupationZhCn: "采购专员" });
 
       const createdScenarioResponse = await app.inject({
         method: "POST", url: "/api/scenarios", payload: scenarioInput(catalog, [persona.id]),
@@ -221,6 +221,40 @@ describe("catalog routes", () => {
           nameZhCn: "当前场景草稿",
           descriptionZhCn: "当前场景描述",
         }),
+      );
+
+      const emptyPersonaResponse = await app.inject({
+        method: "POST",
+        url: "/api/catalog/generate/persona",
+        payload: {
+          currentDraft: {
+            name: "",
+            personalityTraitPresetIds: [],
+            motivationPresetIds: [],
+          },
+        },
+      });
+      expect(emptyPersonaResponse.statusCode).toBe(200);
+      expect(generatePersona).toHaveBeenLastCalledWith(
+        expect.any(Object),
+        undefined,
+      );
+
+      const emptyScenarioResponse = await app.inject({
+        method: "POST",
+        url: "/api/catalog/generate/scenario",
+        payload: {
+          currentDraft: {
+            name: "",
+            trainingGoalPresetIds: [],
+            voiceBehavior: {},
+          },
+        },
+      });
+      expect(emptyScenarioResponse.statusCode).toBe(200);
+      expect(generateScenario).toHaveBeenLastCalledWith(
+        expect.any(Object),
+        undefined,
       );
       const after = rolePlayCatalogSchema.parse(
         (await app.inject({ method: "GET", url: "/api/catalog" })).json(),

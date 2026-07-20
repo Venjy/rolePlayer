@@ -4,6 +4,7 @@ import type {
   ConversationDetail,
   ConversationDownloadFormat,
 } from "../../shared/conversation-history";
+import { localizedText } from "../../shared/role-play-localization";
 import type { ConversationAudioSegment } from "./conversation-repository";
 
 const EXPORT_SAMPLE_RATE = 24_000;
@@ -97,6 +98,16 @@ export function createConversationTranscript(
   conversation: ConversationDetail,
 ): string {
   const chinese = conversation.locale === "zh";
+  const personaName = localizedText(
+    conversation.persona.name,
+    conversation.persona.nameZhCn,
+    conversation.locale,
+  );
+  const scenarioName = localizedText(
+    conversation.scenario.name,
+    conversation.scenario.nameZhCn,
+    conversation.locale,
+  );
   const locale = chinese ? "zh-CN" : "en-US";
   const dateFormatter = new Intl.DateTimeFormat(locale, {
     dateStyle: "medium",
@@ -106,8 +117,8 @@ export function createConversationTranscript(
   const lines = chinese
     ? [
         `会话 #${conversation.id}`,
-        `场景：${conversation.scenarioName}`,
-        `角色：${conversation.personaName}`,
+        `场景：${scenarioName}`,
+        `角色：${personaName}`,
         `难度：${DIFFICULTY_LABELS[conversation.difficulty].zh}`,
         `开始时间：${dateFormatter.format(new Date(conversation.createdAt))}`,
         "",
@@ -116,8 +127,8 @@ export function createConversationTranscript(
       ]
     : [
         `Conversation #${conversation.id}`,
-        `Scenario: ${conversation.scenarioName}`,
-        `Role: ${conversation.personaName}`,
+        `Scenario: ${scenarioName}`,
+        `Role: ${personaName}`,
         `Difficulty: ${DIFFICULTY_LABELS[conversation.difficulty].en}`,
         `Started: ${dateFormatter.format(new Date(conversation.createdAt))}`,
         "",
@@ -134,7 +145,7 @@ export function createConversationTranscript(
           ? chinese
             ? "你"
             : "You"
-          : conversation.personaName;
+          : personaName;
       const interrupted = message.interrupted
         ? chinese
           ? "（已打断）"
