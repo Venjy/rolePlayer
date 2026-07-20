@@ -16,6 +16,8 @@ export interface VoiceWaveformProps {
   cancelling?: boolean;
   /** Elapsed recording time in milliseconds. */
   durationMs: number;
+  /** Continuous recording ends with a button instead of gesture release. */
+  interaction?: "hold" | "continuous";
   /** Optional class name for layout positioning by the parent. */
   className?: string;
 }
@@ -55,6 +57,7 @@ export function VoiceWaveform({
   recording,
   cancelling = false,
   durationMs,
+  interaction = "hold",
   className,
 }: VoiceWaveformProps) {
   const { t } = useI18n();
@@ -67,7 +70,9 @@ export function VoiceWaveform({
   const duration = formatDuration(durationMs);
   const instruction = cancelling
     ? t({ en: "Release to cancel", zh: "松开取消" })
-    : t({ en: "Release to send", zh: "松开发送" });
+    : interaction === "continuous"
+      ? t({ en: "Tap End speaking when finished", zh: "说完后点击结束发言" })
+      : t({ en: "Release to send", zh: "松开发送" });
   const rootClassName = [
     styles.root,
     cancelling ? styles.cancelling : undefined,

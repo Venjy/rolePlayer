@@ -6,6 +6,8 @@ import {
   DownloadOutlined,
   HistoryOutlined,
   MoonOutlined,
+  PhoneOutlined,
+  PlusOutlined,
   PoweroffOutlined,
   ReloadOutlined,
   SoundOutlined,
@@ -57,6 +59,7 @@ import {
 } from "./catalog/catalog-selection";
 import { useRolePlayCatalog } from "./catalog/use-role-play-catalog";
 import { ConversationMessage } from "./components/ConversationMessage";
+import { VoiceOrb } from "./components/VoiceOrb";
 import { VoiceWaveform } from "./components/VoiceWaveform";
 import {
   ConversationFeedbackPage,
@@ -82,12 +85,23 @@ import {
   useAppRoute,
 } from "./routing";
 import { usePressToTalk } from "./voice/use-press-to-talk";
+import {
+  FreeConversationController,
+  type FreeConversationPhase,
+} from "./voice/free-conversation-controller";
 
 const THEME_STORAGE_KEY = "role-player:color-mode";
 
 type ColorMode = "light" | "dark";
-type UiPreviewMode = "session" | "recording" | null;
+type UiPreviewMode = "session" | "recording" | "long" | "free" | null;
 type UiError = string | LocalizedText;
+type VoiceInputMode = "push-to-talk" | "long-recording" | "free-conversation";
+
+interface FreeConversationAudioRouting {
+  enabled: boolean;
+  turnOpen: boolean;
+  preRoll: ArrayBuffer[];
+}
 
 interface ActiveSessionConfig {
   persona: PersonaSnapshot;
@@ -160,6 +174,7 @@ const ASSISTANT_SETTLEMENT_TIMEOUT_MS = 32_000;
 const USER_COMMIT_SETTLEMENT_TIMEOUT_MS = 32_000;
 const RUNTIME_RECOVERY_STABILITY_MS = 5_000;
 const SESSION_ERROR_MESSAGE_KEY = "session-error";
+const FREE_CONVERSATION_PRE_ROLL_CHUNKS = 5;
 
 const SETTLEMENT_SUCCEEDED = { ok: true } as const satisfies SettlementResult;
 
@@ -390,7 +405,12 @@ function readableServerError(code: string, message: string): UiError {
 
 function getUiPreviewMode(): UiPreviewMode {
   const preview = new URLSearchParams(window.location.search).get("preview");
-  return preview === "session" || preview === "recording" ? preview : null;
+  return preview === "session" ||
+    preview === "recording" ||
+    preview === "long" ||
+    preview === "free"
+    ? preview
+    : null;
 }
 
 function createPreviewTurns(): TranscriptTurn[] {
@@ -443,7 +463,10 @@ export function App() {
   const [messageApi, messageContextHolder] = antMessage.useMessage();
   const uiPreviewMode = UI_PREVIEW_FIXTURE?.mode ?? null;
   const sessionUiPreview = uiPreviewMode !== null;
-  const recordingUiPreview = uiPreviewMode === "recording";
+  const recordingUiPreview =
+    uiPreviewMode === "recording" || uiPreviewMode === "long";
+  const longRecordingUiPreview = uiPreviewMode === "long";
+  const freeConversationUiPreview = uiPreviewMode === "free";
   const [catalogSelection, setCatalogSelection] = useState({
     scenarioId: null as number | null,
     personaId: null as number | null,
@@ -478,6 +501,23 @@ export function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [inputLevel, setInputLevel] = useState(recordingUiPreview ? 0.68 : 0);
+  const [outputLevel, setOutputLevel] = useState(
+    freeConversationUiPreview ? 0.42 : 0,
+  );
+  const [voiceInputMode, setVoiceInputMode] =
+    useState<VoiceInputMode>(
+      freeConversationUiPreview
+        ? "free-conversation"
+        : longRecordingUiPreview
+          ? "long-recording"
+          : "push-to-talk",
+    );
+  const [voiceModeMenuOpen, setVoiceModeMenuOpen] = useState(false);
+  const [voiceModeTransitioning, setVoiceModeTransitioning] = useState(false);
+  const [freeConversationPhase, setFreeConversationPhase] =
+    useState<FreeConversationPhase>(
+      freeConversationUiPreview ? "listening" : "inactive",
+    );
   const [volume, setVolume] = useState(0.85);
   const [muted, setMuted] = useState(false);
   const [errorMessage, setErrorMessage] = useState<UiError | null>(null);
@@ -536,6 +576,14 @@ export function App() {
   const conversationViewportRef = useRef<HTMLDivElement | null>(null);
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
   const followLatestRef = useRef(true);
+  const freeConversationAudioRef = useRef<FreeConversationAudioRouting>({
+    enabled: false,
+    turnOpen: false,
+    preRoll: [],
+  });
+  const [freeConversationController] = useState(
+    () => new FreeConversationController(),
+  );
 
   const isDark = colorMode === "dark";
   const selectedScenario = resolveScenario(
@@ -800,6 +848,23 @@ export function App() {
   }, [muted, volume]);
 
   useEffect(() => {
+    freeConversationController.setBlocked(
+      voiceInputMode !== "free-conversation" ||
+        isSubmitting ||
+        isStarting ||
+        isUserCommitPending ||
+        runtimeRecoveryFailed,
+    );
+  }, [
+    freeConversationController,
+    isStarting,
+    isSubmitting,
+    isUserCommitPending,
+    runtimeRecoveryFailed,
+    voiceInputMode,
+  ]);
+
+  useEffect(() => {
     if (!sessionActive || !followLatestRef.current) return;
     const frame = window.requestAnimationFrame(() => {
       conversationEndRef.current?.scrollIntoView({ block: "end" });
@@ -819,6 +884,12 @@ export function App() {
       conversationStartedRef.current = false;
       sessionEstablishedRef.current = false;
       pendingRuntimeRecoveryRef.current = undefined;
+      freeConversationAudioRef.current = {
+        enabled: false,
+        turnOpen: false,
+        preRoll: [],
+      };
+      freeConversationController.disable();
       if (runtimeRecoveryStabilityTimerRef.current !== undefined) {
         window.clearTimeout(runtimeRecoveryStabilityTimerRef.current);
       }
@@ -826,7 +897,11 @@ export function App() {
       realtimeRef.current?.disconnect();
       void audioRef.current?.dispose();
     };
-  }, [completeAssistantSettlement, completeUserCommitSettlement]);
+  }, [
+    completeAssistantSettlement,
+    completeUserCommitSettlement,
+    freeConversationController,
+  ]);
 
   const tryFinalizeAssistant = useCallback(
     (responseId: string) => {
@@ -922,6 +997,12 @@ export function App() {
       activeResponseIdRef.current = undefined;
       recordingStartedAtRef.current = 0;
       assistantResponsesRef.current.clear();
+      freeConversationAudioRef.current = {
+        enabled: false,
+        turnOpen: false,
+        preRoll: [],
+      };
+      freeConversationController.disable();
 
       if (disconnectRealtime) realtime?.disconnect();
 
@@ -929,6 +1010,10 @@ export function App() {
       setIsSubmitting(false);
       setRecordingDuration(0);
       setInputLevel(0);
+      setOutputLevel(0);
+      setVoiceInputMode("push-to-talk");
+      setVoiceModeMenuOpen(false);
+      setVoiceModeTransitioning(false);
       setUserDraft("");
       setAssistantDraft(null);
       setIsReconciling(false);
@@ -955,7 +1040,12 @@ export function App() {
       cleanupPromiseRef.current = cleanup;
       return cleanup;
     },
-    [completeAssistantSettlement, completeUserCommitSettlement, messageApi],
+    [
+      completeAssistantSettlement,
+      completeUserCommitSettlement,
+      freeConversationController,
+      messageApi,
+    ],
   );
 
   const handleServerMessage = useCallback(
@@ -1371,6 +1461,17 @@ export function App() {
           return;
         }
         try {
+          const freeConversation = freeConversationAudioRef.current;
+          if (freeConversation.enabled && !freeConversation.turnOpen) {
+            freeConversation.preRoll.push(buffer);
+            if (
+              freeConversation.preRoll.length >
+              FREE_CONVERSATION_PRE_ROLL_CHUNKS
+            ) {
+              freeConversation.preRoll.shift();
+            }
+            return;
+          }
           realtime.sendAudio(buffer);
         } catch (error) {
           reportContextualError(readableError(error));
@@ -1380,7 +1481,18 @@ export function App() {
         }
       },
       onInputLevel: (level) => {
-        if (isCurrentRuntime()) setInputLevel(level);
+        if (!isCurrentRuntime()) return;
+        setInputLevel(level);
+        if (freeConversationAudioRef.current.enabled) {
+          freeConversationController.handleLevel(
+            level,
+            performance.now(),
+            playbackActiveRef.current,
+          );
+        }
+      },
+      onPlaybackLevel: (level) => {
+        if (isCurrentRuntime()) setOutputLevel(level);
       },
       onPlaybackStarted: (responseId) => {
         if (!isCurrentRuntime()) return;
@@ -1511,6 +1623,7 @@ export function App() {
   }, [
     completeAssistantSettlement,
     completeUserCommitSettlement,
+    freeConversationController,
     handleServerMessage,
     muted,
     queueRuntimeRecovery,
@@ -2003,6 +2116,149 @@ export function App() {
     }
   }, [isReconciling, reportContextualError]);
 
+  const beginFreeConversationTurn = useCallback(async (): Promise<boolean> => {
+    const runtimeEpoch = runtimeEpochRef.current;
+    const realtime = realtimeRef.current;
+    const freeConversation = freeConversationAudioRef.current;
+    const isCurrentRuntime = () =>
+      runtimeEpochRef.current === runtimeEpoch &&
+      realtimeRef.current === realtime &&
+      freeConversationAudioRef.current === freeConversation &&
+      freeConversation.enabled;
+    if (
+      !sessionActive ||
+      transitionInProgressRef.current ||
+      userCommitPendingRef.current ||
+      recordingRef.current ||
+      submissionRef.current ||
+      !realtime ||
+      !freeConversation.enabled
+    ) {
+      return false;
+    }
+
+    setErrorMessage(null);
+    const activeResponseId = activeResponseIdRef.current;
+    if (activeResponseId) void interruptActivePlaybackAndWait();
+
+    let inputStarted = false;
+    try {
+      acceptUserTranscriptRef.current = true;
+      realtime.startInput();
+      inputStarted = true;
+      freeConversation.turnOpen = true;
+      const preRoll = freeConversation.preRoll.splice(0);
+      for (const buffer of preRoll) realtime.sendAudio(buffer);
+      if (!isCurrentRuntime()) return false;
+
+      recordingRef.current = true;
+      recordingStartedAtRef.current = performance.now();
+      setRecordingDuration(0);
+      setIsRecording(true);
+      setSessionState("listening");
+      return true;
+    } catch (error) {
+      freeConversation.turnOpen = false;
+      freeConversation.preRoll = [];
+      if (inputStarted) {
+        await realtime.clearInput().catch(() => undefined);
+      }
+      if (isCurrentRuntime()) {
+        acceptUserTranscriptRef.current = false;
+        recordingRef.current = false;
+        setIsRecording(false);
+        setUserDraft("");
+        reportContextualError(readableError(error));
+      }
+      return false;
+    }
+  }, [interruptActivePlaybackAndWait, reportContextualError, sessionActive]);
+
+  const submitFreeConversationTurn = useCallback(async (): Promise<void> => {
+    const runtimeEpoch = runtimeEpochRef.current;
+    const realtime = realtimeRef.current;
+    const freeConversation = freeConversationAudioRef.current;
+    const isCurrentRuntime = () =>
+      runtimeEpochRef.current === runtimeEpoch &&
+      realtimeRef.current === realtime &&
+      freeConversationAudioRef.current === freeConversation;
+    if (
+      !freeConversation.turnOpen ||
+      !recordingRef.current ||
+      submissionRef.current ||
+      !realtime
+    ) {
+      return;
+    }
+
+    submissionRef.current = true;
+    freeConversation.turnOpen = false;
+    setIsSubmitting(true);
+    let completeSubmission: () => void = () => undefined;
+    submissionCompletionRef.current = new Promise<void>((resolve) => {
+      completeSubmission = resolve;
+    });
+
+    try {
+      if (!isCurrentRuntime()) return;
+      recordingRef.current = false;
+      setIsRecording(false);
+      setRecordingDuration(0);
+      void createUserCommitSettlement();
+      freeConversationController.setBlocked(true);
+      try {
+        realtime.commitInput();
+      } catch (error) {
+        acceptUserTranscriptRef.current = false;
+        setUserDraft("");
+        completeUserCommitSettlement(
+          {
+            ok: false,
+            error:
+              error instanceof Error
+                ? error
+                : new Error("Realtime WebSocket is not open."),
+          },
+          true,
+        );
+        throw error;
+      }
+      setSessionState("processing");
+    } catch (error) {
+      await realtime.clearInput().catch(() => undefined);
+      if (isCurrentRuntime()) {
+        acceptUserTranscriptRef.current = false;
+        setUserDraft("");
+        recordingRef.current = false;
+        setIsRecording(false);
+        reportContextualError(readableError(error));
+      }
+    } finally {
+      if (isCurrentRuntime()) {
+        submissionRef.current = false;
+        setIsSubmitting(false);
+      }
+      completeSubmission();
+    }
+  }, [
+    completeUserCommitSettlement,
+    createUserCommitSettlement,
+    freeConversationController,
+    reportContextualError,
+  ]);
+
+  useEffect(() => {
+    freeConversationController.updateHandlers({
+      startTurn: beginFreeConversationTurn,
+      submitTurn: submitFreeConversationTurn,
+      onPhaseChange: setFreeConversationPhase,
+    });
+  }, [
+    beginFreeConversationTurn,
+    freeConversationController,
+    submitFreeConversationTurn,
+  ]);
+
   const stopResponse = useCallback(() => {
     const responseId = activeResponseIdRef.current;
     if (
@@ -2022,6 +2278,7 @@ export function App() {
 
   const pressToTalk = usePressToTalk({
     enabled:
+      voiceInputMode === "push-to-talk" &&
       sessionActive &&
       !isSubmitting &&
       !isStarting &&
@@ -2031,6 +2288,104 @@ export function App() {
     submit: submitRecording,
     cancel: cancelRecording,
   });
+
+  const startLongRecording = useCallback(async () => {
+    if (voiceModeTransitioning) return;
+    setVoiceModeMenuOpen(false);
+    setVoiceModeTransitioning(true);
+    try {
+      await pressToTalk.cancelActiveGesture();
+      setVoiceInputMode("long-recording");
+      const started = await beginRecording();
+      if (!started) setVoiceInputMode("push-to-talk");
+    } finally {
+      if (componentMountedRef.current) setVoiceModeTransitioning(false);
+    }
+  }, [beginRecording, pressToTalk, voiceModeTransitioning]);
+
+  const finishLongRecording = useCallback(async () => {
+    if (voiceModeTransitioning) return;
+    setVoiceModeTransitioning(true);
+    try {
+      await submitRecording();
+      setVoiceInputMode("push-to-talk");
+    } finally {
+      if (componentMountedRef.current) setVoiceModeTransitioning(false);
+    }
+  }, [submitRecording, voiceModeTransitioning]);
+
+  const enterFreeConversation = useCallback(async () => {
+    if (voiceModeTransitioning) return;
+    const audio = audioRef.current;
+    if (!audio) return;
+    setVoiceModeMenuOpen(false);
+    setVoiceModeTransitioning(true);
+    try {
+      await pressToTalk.cancelActiveGesture();
+      if (recordingRef.current) await cancelRecording();
+      const freeConversation = freeConversationAudioRef.current;
+      freeConversation.enabled = true;
+      freeConversation.turnOpen = false;
+      freeConversation.preRoll = [];
+      freeConversationController.enable();
+      // The controller was blocked while push-to-talk owned the composer.
+      // A repeat entry can restart capture before React's mode-change effect
+      // runs, so unblock synchronously to avoid losing an immediate first word.
+      freeConversationController.setBlocked(false);
+      setVoiceInputMode("free-conversation");
+      await audio.startCapture();
+    } catch (error) {
+      freeConversationAudioRef.current = {
+        enabled: false,
+        turnOpen: false,
+        preRoll: [],
+      };
+      freeConversationController.disable();
+      setVoiceInputMode("push-to-talk");
+      reportContextualError(readableError(error));
+    } finally {
+      if (componentMountedRef.current) setVoiceModeTransitioning(false);
+    }
+  }, [
+    cancelRecording,
+    freeConversationController,
+    pressToTalk,
+    reportContextualError,
+    voiceModeTransitioning,
+  ]);
+
+  const exitFreeConversation = useCallback(async () => {
+    if (voiceModeTransitioning) return;
+    const audio = audioRef.current;
+    const freeConversation = freeConversationAudioRef.current;
+    setVoiceModeTransitioning(true);
+    freeConversationController.disable();
+    freeConversation.enabled = false;
+    try {
+      await freeConversationController.waitForLifecycle();
+      if (freeConversation.turnOpen && recordingRef.current && audio) {
+        // Flush the worklet's final partial frame before committing the words
+        // spoken immediately before the learner exits hands-free mode.
+        await audio.finishCapture();
+        await submitFreeConversationTurn();
+      } else {
+        await submissionCompletionRef.current;
+        await audio?.cancelCapture();
+      }
+      freeConversation.preRoll = [];
+      setInputLevel(0);
+      setVoiceInputMode("push-to-talk");
+    } catch (error) {
+      reportContextualError(readableError(error));
+    } finally {
+      if (componentMountedRef.current) setVoiceModeTransitioning(false);
+    }
+  }, [
+    freeConversationController,
+    reportContextualError,
+    submitFreeConversationTurn,
+    voiceModeTransitioning,
+  ]);
 
   const endSession = async () => {
     if (transitionInProgressRef.current) return;
@@ -2151,7 +2506,13 @@ export function App() {
   const gestureActive = pressToTalk.visualState.pressed || isRecording;
   const isRecoveringConnection =
     sessionActive && isStarting && sessionState === "connecting";
-  const holdButtonLabel = runtimeRecoveryFailed
+  const holdButtonLabel = voiceInputMode === "long-recording"
+    ? isSubmitting
+      ? t({ en: "Sending…", zh: "正在发送…" })
+      : voiceModeTransitioning && !isRecording
+        ? t({ en: "Starting recording…", zh: "正在开始录音…" })
+        : t({ en: "End speaking", zh: "结束发言" })
+    : runtimeRecoveryFailed
     ? t({ en: "Retry voice connection", zh: "重试语音连接" })
     : isRecoveringConnection
       ? t({ en: "Reconnecting…", zh: "正在重新连接…" })
@@ -2167,6 +2528,14 @@ export function App() {
                   zh: "按住打断并说话",
                 })
               : t({ en: "Hold to talk", zh: "按住说话" });
+  const voiceModeOptionsDisabled =
+    !sessionActive ||
+    isSubmitting ||
+    isStarting ||
+    isUserCommitPending ||
+    runtimeRecoveryFailed ||
+    voiceModeTransitioning ||
+    voiceInputMode !== "push-to-talk";
   const errorMessageText = resolveUiError(errorMessage);
   const launchError =
     errorMessageText ??
@@ -2283,6 +2652,49 @@ export function App() {
       >
         {t({ en: "Stop current AI speech", zh: "停止当前 AI 语音" })}
       </Button>
+    </div>
+  );
+
+  const voiceModeOptions = (
+    <div className="voice-mode-popover" role="menu">
+      <Tooltip
+        placement="left"
+        mouseEnterDelay={0.25}
+        title={t({
+          en: "Click once to record a longer message without holding the button, then click End speaking to send it.",
+          zh: "点击一次即可持续录音，无需一直按住；说完后点击“结束发言”发送。",
+        })}
+      >
+        <Button
+          type="text"
+          block
+          role="menuitem"
+          icon={<AudioFilled />}
+          disabled={voiceModeOptionsDisabled}
+          onClick={() => void startLongRecording()}
+        >
+          {t({ en: "Start recording", zh: "开始录音" })}
+        </Button>
+      </Tooltip>
+      <Tooltip
+        placement="left"
+        mouseEnterDelay={0.25}
+        title={t({
+          en: "Talk hands-free like a phone call. Pauses send your turn automatically, and speaking interrupts the AI.",
+          zh: "像打电话一样免提交谈；停顿后自动发送，说话时可以随时打断 AI。",
+        })}
+      >
+        <Button
+          type="text"
+          block
+          role="menuitem"
+          icon={<PhoneOutlined />}
+          disabled={voiceModeOptionsDisabled}
+          onClick={() => void enterFreeConversation()}
+        >
+          {t({ en: "Free conversation", zh: "自由对话" })}
+        </Button>
+      </Tooltip>
     </div>
   );
 
@@ -2634,115 +3046,206 @@ export function App() {
               </section>
             )}
 
-            <section
-              className="conversation-viewport"
-              ref={conversationViewportRef}
-              onScroll={handleConversationScroll}
-              role="log"
-              aria-live="polite"
-              aria-label={t({ en: "Conversation history", zh: "对话记录" })}
-            >
-              <div className="conversation-list">
-                {turns.length === 0 && !userDraft && !assistantDraft && (
-                  <Empty
-                    className="empty-conversation"
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    description={t(
-                      {
-                        en: "Hold the button below and say your first sentence to {name}",
-                        zh: "按住下方按钮，向 {name} 说出你的第一句话",
-                      },
-                      { name: personaName },
-                    )}
-                  />
-                )}
+            {voiceInputMode === "free-conversation" ? (
+              <VoiceOrb
+                inputLevel={inputLevel}
+                outputLevel={outputLevel}
+                sessionState={sessionState}
+                listening={freeConversationPhase === "recording"}
+              />
+            ) : (
+              <section
+                className="conversation-viewport"
+                ref={conversationViewportRef}
+                onScroll={handleConversationScroll}
+                role="log"
+                aria-live="polite"
+                aria-label={t({ en: "Conversation history", zh: "对话记录" })}
+              >
+                <div className="conversation-list">
+                  {turns.length === 0 && !userDraft && !assistantDraft && (
+                    <Empty
+                      className="empty-conversation"
+                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      description={t(
+                        {
+                          en: "Hold the button below and say your first sentence to {name}",
+                          zh: "按住下方按钮，向 {name} 说出你的第一句话",
+                        },
+                        { name: personaName },
+                      )}
+                    />
+                  )}
 
-                {turns.map((turn) => (
-                  <ConversationMessage
-                    key={turn.id}
-                    role={turn.role}
-                    text={turn.text}
-                    timestamp={turn.timestamp}
-                    interrupted={turn.interrupted}
-                    personaName={personaName}
-                  />
-                ))}
+                  {turns.map((turn) => (
+                    <ConversationMessage
+                      key={turn.id}
+                      role={turn.role}
+                      text={turn.text}
+                      timestamp={turn.timestamp}
+                      interrupted={turn.interrupted}
+                      personaName={personaName}
+                    />
+                  ))}
 
-                {userDraft && (
-                  <ConversationMessage
-                    role="user"
-                    text={userDraft}
-                    personaName={personaName}
-                    draft
-                  />
-                )}
+                  {userDraft && (
+                    <ConversationMessage
+                      role="user"
+                      text={userDraft}
+                      personaName={personaName}
+                      draft
+                    />
+                  )}
 
-                {assistantDraft && (
-                  <ConversationMessage
-                    role="assistant"
-                    text={assistantDraft.text}
-                    personaName={personaName}
-                    draft
-                  />
-                )}
+                  {assistantDraft && (
+                    <ConversationMessage
+                      role="assistant"
+                      text={assistantDraft.text}
+                      personaName={personaName}
+                      draft
+                    />
+                  )}
 
-                {gestureActive && (
-                  <div className="recording-overlay-spacer" aria-hidden="true" />
-                )}
-                <div ref={conversationEndRef} aria-hidden="true" />
-              </div>
-            </section>
+                  {gestureActive && (
+                    <div
+                      className="recording-overlay-spacer"
+                      aria-hidden="true"
+                    />
+                  )}
+                  <div ref={conversationEndRef} aria-hidden="true" />
+                </div>
+              </section>
+            )}
 
             <footer className="voice-composer">
-              <VoiceWaveform
-                className="recording-waveform"
-                level={inputLevel}
-                recording={gestureActive}
-                cancelling={pressToTalk.visualState.cancelling}
-                durationMs={recordingDuration}
-              />
+              {voiceInputMode === "free-conversation" ? (
+                <Button
+                  className="exit-free-conversation-button"
+                  size="large"
+                  block
+                  icon={<PhoneOutlined />}
+                  loading={voiceModeTransitioning}
+                  onClick={() => void exitFreeConversation()}
+                >
+                  {t({
+                    en: "Exit free conversation mode",
+                    zh: "退出自由对话模式",
+                  })}
+                </Button>
+              ) : (
+                <>
+                  <VoiceWaveform
+                    className="recording-waveform"
+                    level={inputLevel}
+                    recording={gestureActive}
+                    cancelling={
+                      voiceInputMode === "push-to-talk" &&
+                      pressToTalk.visualState.cancelling
+                    }
+                    durationMs={recordingDuration}
+                    interaction={
+                      voiceInputMode === "long-recording"
+                        ? "continuous"
+                        : "hold"
+                    }
+                  />
 
-              <Button
-                className="hold-to-talk-button"
-                type="primary"
-                size="large"
-                block
-                danger={pressToTalk.visualState.cancelling}
-                icon={
-                  runtimeRecoveryFailed || isRecoveringConnection ? (
-                    <ReloadOutlined />
-                  ) : (
-                    <AudioFilled />
-                  )
-                }
-                loading={isSubmitting || isRecoveringConnection}
-                disabled={
-                  !sessionActive ||
-                  isSubmitting ||
-                  isStarting ||
-                  isUserCommitPending
-                }
-                aria-label={holdButtonLabel}
-                aria-pressed={gestureActive}
-                data-speaking={sessionState === "speaking" || undefined}
-                {...pressToTalk.bindings}
-                onClick={
-                  runtimeRecoveryFailed ? retryRuntimeRecovery : undefined
-                }
-              >
-                {holdButtonLabel}
-              </Button>
-              <Typography.Text type="secondary" className="gesture-hint">
-                {runtimeRecoveryFailed
-                  ? t({
-                      en: "The conversation is kept. Retry to continue speaking.",
-                      zh: "当前会话已保留，重试连接后可继续交谈。",
-                    })
-                  : t({
-                      en: "Hold to record · Release to send · Slide up to cancel",
-                      zh: "按住录音 · 松开发送 · 上滑取消",
-                    })}
-              </Typography.Text>
+                  <div className="voice-composer-controls">
+                    <Button
+                      className="hold-to-talk-button"
+                      type="primary"
+                      size="large"
+                      block
+                      danger={
+                        voiceInputMode === "push-to-talk" &&
+                        pressToTalk.visualState.cancelling
+                      }
+                      icon={
+                        runtimeRecoveryFailed || isRecoveringConnection ? (
+                          <ReloadOutlined />
+                        ) : (
+                          <AudioFilled />
+                        )
+                      }
+                      loading={
+                        isSubmitting ||
+                        isRecoveringConnection ||
+                        (voiceModeTransitioning &&
+                          voiceInputMode === "long-recording")
+                      }
+                      disabled={
+                        !sessionActive ||
+                        isSubmitting ||
+                        isStarting ||
+                        isUserCommitPending
+                      }
+                      aria-label={holdButtonLabel}
+                      aria-pressed={gestureActive}
+                      data-speaking={
+                        sessionState === "speaking" || undefined
+                      }
+                      {...(voiceInputMode === "push-to-talk"
+                        ? pressToTalk.bindings
+                        : {})}
+                      onClick={
+                        runtimeRecoveryFailed
+                          ? retryRuntimeRecovery
+                          : voiceInputMode === "long-recording"
+                            ? () => void finishLongRecording()
+                            : undefined
+                      }
+                    >
+                      {holdButtonLabel}
+                    </Button>
+                    <Popover
+                      key={locale}
+                      content={voiceModeOptions}
+                      trigger="click"
+                      placement="topRight"
+                      open={voiceModeMenuOpen}
+                      onOpenChange={setVoiceModeMenuOpen}
+                    >
+                      <Tooltip
+                        title={t({
+                          en: "More speaking modes",
+                          zh: "更多说话模式",
+                        })}
+                      >
+                        <span className="voice-mode-trigger-anchor">
+                          <Button
+                            className="voice-mode-trigger"
+                            size="large"
+                            shape="circle"
+                            icon={<PlusOutlined />}
+                            loading={voiceModeTransitioning}
+                            disabled={voiceModeOptionsDisabled}
+                            aria-label={t({
+                              en: "More speaking modes",
+                              zh: "更多说话模式",
+                            })}
+                          />
+                        </span>
+                      </Tooltip>
+                    </Popover>
+                  </div>
+                  <Typography.Text type="secondary" className="gesture-hint">
+                    {voiceInputMode === "long-recording"
+                      ? t({
+                          en: "Keep speaking hands-free · Tap End speaking when finished",
+                          zh: "无需按住，可连续说话 · 说完后点击结束发言",
+                        })
+                      : runtimeRecoveryFailed
+                        ? t({
+                            en: "The conversation is kept. Retry to continue speaking.",
+                            zh: "当前会话已保留，重试连接后可继续交谈。",
+                          })
+                        : t({
+                            en: "Hold to record · Release to send · Slide up to cancel",
+                            zh: "按住录音 · 松开发送 · 上滑取消",
+                          })}
+                  </Typography.Text>
+                </>
+              )}
             </footer>
           </main>
               )}

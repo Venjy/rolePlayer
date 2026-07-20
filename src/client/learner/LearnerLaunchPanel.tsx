@@ -580,24 +580,6 @@ export function LearnerLaunchPanel({
                 </div>
               </section>
 
-              {(selectedScenario || selectedPersona) && (
-                <div className={styles.summaryGrid}>
-                  {selectedScenario && (
-                    <ScenarioSummary scenario={selectedScenario} />
-                  )}
-                  {selectedPersona && (
-                    <PersonaSummary persona={selectedPersona} />
-                  )}
-                </div>
-              )}
-
-              {selectedScenario && selectedPersona && (
-                <InstructionsPreview
-                  instructions={instructions}
-                  tooLong={instructionsTooLong}
-                />
-              )}
-
               <Flex
                 className={styles.startArea}
                 align="center"
@@ -621,6 +603,24 @@ export function LearnerLaunchPanel({
                   {t({ en: "Start voice role-play", zh: "开始语音对练" })}
                 </Button>
               </Flex>
+
+              {(selectedScenario || selectedPersona) && (
+                <div className={styles.summaryGrid}>
+                  {selectedScenario && (
+                    <ScenarioSummary scenario={selectedScenario} />
+                  )}
+                  {selectedPersona && (
+                    <PersonaSummary persona={selectedPersona} />
+                  )}
+                </div>
+              )}
+
+              {selectedScenario && selectedPersona && (
+                <InstructionsPreview
+                  instructions={instructions}
+                  tooLong={instructionsTooLong}
+                />
+              )}
             </>
           )}
         </Card>

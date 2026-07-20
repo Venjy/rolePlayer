@@ -4,7 +4,7 @@
 
 A single-repository React + Node/TypeScript application for configurable realtime voice sales role-play. Learners choose an SQLite-backed sales scenario, compatible customer persona, and difficulty; the browser then connects its microphone to Qwen `qwen-audio-3.0-realtime-plus` through a server-side WebSocket gateway, streams transcripts into a chat timeline, and plays the selected persona's voice. Finalized conversations, heard audio, and launch snapshots are stored in SQLite and listed in responsive history navigation. Active sessions can be continued through a fresh Qwen connection; ended sessions become immutable and receive asynchronous Qwen text-model coaching, weighted scoring, highlighted moments, and a reviewable transcript. Conversations can be downloaded as a transcript, one alternating-speaker MP3, or a ZIP containing both. A responsive admin console provides persona/scenario CRUD and an inspectable model-Instructions preview.
 
-The UI uses one responsive React component tree for mobile and desktop. Ant Design supplies the standard controls and theme algorithms; project CSS handles the chat layout, message bubbles, recording overlay, and audio-reactive waveform.
+The UI uses one responsive React component tree for mobile and desktop. Ant Design supplies the standard controls and theme algorithms; project CSS handles the chat layout, message bubbles, recording overlay, and audio-reactive visuals. In addition to push-to-talk, the composer supports click-to-start long recording and a hands-free free-conversation mode that automatically submits a turn after sustained silence.
 
 ## Repository shape
 
@@ -22,12 +22,12 @@ This is one root package, not a monorepo. Client, server, tests, and shared prot
 │   │   ├── admin/                  # Persona/scenario management console
 │   │   ├── audio/                  # Microphone capture and streamed playback
 │   │   ├── catalog/                # Catalog API and selection state
-│   │   ├── components/             # Chat messages and VoiceWaveform
+│   │   ├── components/             # Chat messages, waveform, and voice orb
 │   │   ├── conversations/          # History API, state, desktop rail/mobile Drawer
 │   │   ├── i18n/                   # Locale state, persistence, Ant Design locale
 │   │   ├── learner/                # Scenario/persona/difficulty launcher
 │   │   ├── realtime/               # Application-protocol WebSocket client
-│   │   └── voice/                  # Press-to-talk gesture state machine
+│   │   └── voice/                  # Hold gesture and hands-free VAD controllers
 │   ├── server/
 │   │   ├── catalog/                # Catalog repository, routes, initializer
 │   │   ├── conversations/          # Durable conversation repository and REST API
@@ -223,7 +223,7 @@ The default `data/` directory is ignored by Git. A future single-container deplo
 
 Interrupted-response truncation is an estimate because Qwen does not provide word-level audio timestamps and browsers cannot prove what reached the user's physical output device. The application prefers deleting the entire interrupted assistant turn when evidence is weak.
 
-Scenario `voiceBehavior.interruptFrequency` changes prompt-level conversational patience/interjection/challenge behavior only. Because the demo uses manual push-to-talk (`turn_detection: null`), it cannot make Qwen autonomously interrupt a learner in the middle of an utterance. Learner barge-in while the persona speaks is the separate playback-interruption feature.
+Scenario `voiceBehavior.interruptFrequency` changes prompt-level conversational patience/interjection/challenge behavior only. Push-to-talk, long recording, and free conversation all preserve manual Qwen turn detection (`turn_detection: null`); free conversation adds browser-side automatic speech/silence segmentation. The learner can barge in while the persona speaks, but Qwen cannot autonomously begin speaking over an uncommitted learner utterance.
 
 History continuation is text-level context reconstruction, not revival of the old Qwen session or replay of original audio. It restores semantic transcript context but not acoustic details such as the learner's tone or emotion. The model currently receives the most recent 20 user turns while the UI keeps the complete stored transcript.
 

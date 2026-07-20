@@ -208,13 +208,45 @@ The user can record while Node repairs Qwen's conversation item. Node blocks onl
 
 Scenario `voiceBehavior.interruptFrequency` is not this mechanism. It influences whether the role is patient or uses brief interjections/challenges inside its own model turns for that scenario. Manual push-to-talk means the model cannot detect and interrupt the learner mid-recording; only the learner can barge in on model playback.
 
+## Alternate speaking modes
+
+A small circular plus button sits to the right of the primary hold control. Its
+Ant Design Popover contains **Start recording / 开始录音** and
+**Free conversation / 自由对话**. Each option has a localized hover Tooltip;
+the trigger and options are disabled while input is being submitted, a user
+transcript is awaiting persistence, the connection is changing, or another
+voice mode is active.
+
+Long recording is a click-to-start mode for extended speech. The primary button
+becomes **End speaking / 结束发言**, the waveform remains visible, and the
+instruction no longer mentions releasing. Clicking the primary button flushes
+and submits through the normal manual-turn path. Returning to push-to-talk does
+not create a second session or alter history semantics.
+
+Free conversation replaces the transcript viewport with `VoiceOrb`; transcript
+state continues updating and becomes visible again on exit. The orb uses real
+microphone RMS for learner speech and an output `AnalyserNode` RMS for AI speech,
+with a state-dependent status line and reduced-motion support. A single
+**Exit free conversation mode / 退出自由对话模式** button replaces the composer.
+The microphone stays open, confirmed speech starts a turn, and sustained silence
+submits it. Speaking clearly while AI audio is playing invokes the same learner
+barge-in and heard-prefix reconciliation as push-to-talk. Exiting while a turn
+is active flushes and submits it before returning to the transcript; exiting
+while idle discards only local pre-roll silence.
+
+The orb uses a square-root response curve and a bounded 18% scale excursion so
+quiet speech is visible while loud input cannot overlap the surrounding text.
+Repeated free-mode entry unblocks detection synchronously before restarting the
+already-prepared microphone; do not defer that unblock solely to a React effect,
+because later capture starts have no initial settle delay.
+
 ## Waveform feedback
 
-`VoiceWaveform` is visible for the complete active gesture, including asynchronous startup. It contains:
+`VoiceWaveform` is visible for the complete active gesture or long recording, including asynchronous startup. It contains:
 
 - nine decorative vertical bars;
 - elapsed recording time, updated by the parent every 100 ms;
-- localized `Release to send` / `松开发送` or `Release to cancel` / `松开取消` status text.
+- localized `Release to send` / `松开发送`, `Release to cancel` / `松开取消`, or long-recording end-button guidance.
 
 The audio engine reports normalized microphone RMS. The component clamps it to 0–1 and applies a square-root curve before scaling the bars, which makes quiet speech visible without letting loud input escape the component bounds. It is feedback only; it does not transform the audio sent to Qwen.
 
@@ -269,7 +301,7 @@ only their captured audio/realtime objects and must not mutate the next session.
 
 After `pnpm check`, exercise the following in a real browser when changing this subsystem:
 
-For layout-only work, `?preview=session` and `?preview=recording` provide development-only static fixtures that reuse the production component tree without requesting microphone access or connecting to Qwen. They are ignored by production builds and do not replace real gesture/audio verification.
+For layout-only work, `?preview=session`, `?preview=recording`, `?preview=long`, and `?preview=free` provide development-only static fixtures that reuse the production component tree without requesting microphone access or connecting to Qwen. They are ignored by production builds and do not replace real gesture/audio verification.
 
 1. Inspect approximately 360 px, 767 px, 768 px, 1199 px, 1200 px, and a wide desktop; confirm no horizontal overflow and the rail/Drawer switch occurs once.
 2. Confirm the latest message and waveform do not hide behind the composer or mobile safe area.

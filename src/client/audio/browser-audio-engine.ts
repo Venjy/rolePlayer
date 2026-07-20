@@ -29,6 +29,7 @@ type WorkletMessage =
 export interface BrowserAudioEngineHandlers {
   onInputPcm: (buffer: ArrayBuffer) => void;
   onInputLevel: (level: number) => void;
+  onPlaybackLevel?: (level: number) => void;
   onPlaybackStarted: (responseId: string) => void;
   onPlaybackDrained: (responseId: string) => void;
   onError: (error: Error) => void;
@@ -72,6 +73,9 @@ export class BrowserAudioEngine {
   private captureNode?: AudioWorkletNode;
   private monitorGain?: GainNode;
   private playbackGain?: GainNode;
+  private playbackAnalyser?: AnalyserNode;
+  private playbackLevelFrame?: number;
+  private playbackLevelSamples?: Float32Array<ArrayBuffer>;
   private nextPlaybackTime = 0;
   private playback?: ResponsePlayback;
   private readonly discardedResponseIds = new Set<string>();
@@ -128,6 +132,9 @@ export class BrowserAudioEngine {
       this.monitorGain = context.createGain();
       this.monitorGain.gain.value = 0;
       this.playbackGain = context.createGain();
+      this.playbackAnalyser = context.createAnalyser();
+      this.playbackAnalyser.fftSize = 256;
+      this.playbackAnalyser.smoothingTimeConstant = 0.5;
 
       this.captureNode.port.onmessage = (event: MessageEvent<WorkletMessage>) => {
         this.handleWorkletMessage(event.data);
@@ -138,7 +145,9 @@ export class BrowserAudioEngine {
 
       this.captureSource.connect(this.captureFilter).connect(this.captureNode);
       this.captureNode.connect(this.monitorGain).connect(context.destination);
-      this.playbackGain.connect(context.destination);
+      this.playbackGain
+        .connect(this.playbackAnalyser)
+        .connect(context.destination);
       await context.resume();
       this.captureReadyAt = performance.now() + MICROPHONE_SETTLE_MS;
       this.handlers.onCaptureSettings?.(
@@ -229,6 +238,7 @@ export class BrowserAudioEngine {
 
     if (!this.playbackActive) {
       this.playbackActive = true;
+      this.startPlaybackLevelUpdates();
       this.handlers.onPlaybackStarted(responseId);
     }
 
@@ -242,6 +252,7 @@ export class BrowserAudioEngine {
       source.disconnect();
       if (current.sources.size === 0) {
         this.playbackActive = false;
+        this.stopPlaybackLevelUpdates();
         this.nextPlaybackTime = 0;
         this.notifyPlaybackDrainedIfReady(current);
       }
@@ -294,6 +305,7 @@ export class BrowserAudioEngine {
     this.stopPlaybackSources(playback);
     this.playback = undefined;
     this.playbackActive = false;
+    this.stopPlaybackLevelUpdates();
     this.nextPlaybackTime = 0;
 
     return {
@@ -318,6 +330,7 @@ export class BrowserAudioEngine {
     }
     this.playback = undefined;
     this.playbackActive = false;
+    this.stopPlaybackLevelUpdates();
     this.nextPlaybackTime = 0;
   }
 
@@ -346,11 +359,14 @@ export class BrowserAudioEngine {
     this.captureNode?.disconnect();
     this.monitorGain?.disconnect();
     this.playbackGain?.disconnect();
+    this.playbackAnalyser?.disconnect();
     this.captureSource = undefined;
     this.captureFilter = undefined;
     this.captureNode = undefined;
     this.monitorGain = undefined;
     this.playbackGain = undefined;
+    this.playbackAnalyser = undefined;
+    this.playbackLevelSamples = undefined;
 
     for (const track of this.stream?.getTracks() ?? []) track.stop();
     this.stream = undefined;
@@ -407,6 +423,38 @@ export class BrowserAudioEngine {
       playback.drainNotified = true;
       this.handlers.onPlaybackDrained(playback.responseId);
     }
+  }
+
+  private startPlaybackLevelUpdates(): void {
+    if (!this.handlers.onPlaybackLevel || this.playbackLevelFrame !== undefined) {
+      return;
+    }
+    const update = () => {
+      this.playbackLevelFrame = undefined;
+      const analyser = this.playbackAnalyser;
+      if (!this.playbackActive || !analyser) {
+        this.handlers.onPlaybackLevel?.(0);
+        return;
+      }
+      const samples =
+        this.playbackLevelSamples ??
+        new Float32Array(new ArrayBuffer(analyser.fftSize * 4));
+      this.playbackLevelSamples = samples;
+      analyser.getFloatTimeDomainData(samples);
+      let squareSum = 0;
+      for (const sample of samples) squareSum += sample * sample;
+      this.handlers.onPlaybackLevel?.(Math.sqrt(squareSum / samples.length));
+      this.playbackLevelFrame = window.requestAnimationFrame(update);
+    };
+    this.playbackLevelFrame = window.requestAnimationFrame(update);
+  }
+
+  private stopPlaybackLevelUpdates(): void {
+    if (this.playbackLevelFrame !== undefined) {
+      window.cancelAnimationFrame(this.playbackLevelFrame);
+      this.playbackLevelFrame = undefined;
+    }
+    this.handlers.onPlaybackLevel?.(0);
   }
 
   private stopPlaybackSources(playback: ResponsePlayback): void {

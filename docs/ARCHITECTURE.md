@@ -209,6 +209,33 @@ idle → starting → recording → finishing → idle
 
 When the AI is speaking, the same control remains available for barge-in. `beginRecording` first stops scheduled playback and sends the conservative `playback.interrupted` receipt for the active response, then sends `input.start` and begins microphone capture. This lets the user speak while Node performs the assistant-context repair barrier. Normal release later flushes capture and commits the turn. Cancelled input removes its browser draft immediately, waits for Qwen's clear acknowledgement, and is never committed. Final user transcription is persisted only when its `item_id` matches the acknowledgement for the pending audio commit, so late events from a cancelled turn cannot leak into history or a later recording.
 
+## Alternate voice-input modes
+
+The plus control beside push-to-talk exposes two modes without changing the
+application wire protocol:
+
+- **Long recording** calls the same `input.start` and capture startup as a
+  normal hold, but keeps capture open until the learner clicks **End speaking**.
+  Worklet flush, `input.commit`, transcription, persistence, and response
+  handling remain identical to push-to-talk.
+- **Free conversation** keeps browser capture open and uses
+  `FreeConversationController` to convert RMS levels into turns. It confirms
+  speech for 120 ms, retains five 100 ms PCM chunks as pre-roll, opens
+  `input.start` before flushing that pre-roll, and commits after 900 ms of
+  silence. A modestly higher speech threshold while AI playback is active
+  reduces echo false positives without excluding a quiet learner; confirmed
+  learner speech still runs the normal conservative playback-interruption flow.
+  Re-entry explicitly clears the push-to-talk block before capture restarts so
+  an immediate first word is not lost. One turn is capped at two minutes.
+
+Free conversation intentionally keeps Qwen at `turn_detection: null`. This
+preserves the existing item-ID persistence barrier, exact per-turn PCM capture,
+cancel/recovery semantics, and best-effort heard-prefix reconciliation. It is
+hands-free and supports learner barge-in, but the model cannot autonomously
+start talking over an input turn before browser silence commits it. True Qwen
+`smart_turn` duplex would require a new session configuration plus server-side
+VAD audio segmentation/persistence and is not silently approximated here.
+
 ## Audio pipeline
 
 ### Input
@@ -226,7 +253,7 @@ When the AI is speaking, the same control remains available for barge-in. `begin
 
 When capture stops, the Worklet first emits its final partial chunk and then emits a `stopped` acknowledgement. The browser sends `input.commit` only after that acknowledgement. This ordering is an invariant.
 
-The capture engine also reports a normalized RMS input level. `VoiceWaveform` applies a square-root perceptual curve to that value so quiet speech remains visible; the waveform is feedback only and does not affect encoded audio.
+The capture engine also reports a normalized RMS input level. `VoiceWaveform` applies a square-root perceptual curve to that value so quiet speech remains visible; the waveform is feedback only and does not affect encoded audio. The playback path owns an `AnalyserNode` and reports output RMS while scheduled sources are audible; free-conversation mode uses the input/output levels only to animate its orb.
 
 ### Output
 

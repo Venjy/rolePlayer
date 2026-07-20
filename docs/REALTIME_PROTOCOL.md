@@ -411,6 +411,14 @@ protocol messages is a contract:
 | Microphone startup fails after `input.start` | best-effort `input.clear`; no binary commit |
 | Switch/new/end after a commit | settle current assistant → wait for persisted `transcript.user.done` → settle any newly-created assistant → close |
 
+Long recording uses the same rows with a longer interval between `input.start`
+and capture stop. Free conversation also retains manual Qwen turn detection: a
+browser RMS detector sends `input.start`, flushes a bounded local PCM pre-roll,
+streams the open turn, and sends `input.commit` after sustained silence. Capture
+continues locally between turns, but Node ignores no implicit audio: the browser
+does not forward its between-turn pre-roll until the next explicit
+`input.start`. The one-pending-user-turn barrier remains unchanged.
+
 Pointer capture keeps a normal release observable when the pointer leaves the
 button. A release can also occur while microphone startup is still awaiting
 permission or device initialization. The client retains that release intent and
