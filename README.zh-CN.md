@@ -2,6 +2,9 @@
 
 [English](README.md) | **简体中文**
 
+> [!IMPORTANT]
+> **在线体验：** [https://aia.jiangwenjie.cn](https://aia.jiangwenjie.cn)
+
 这是一个采用 React + Node.js/TypeScript、前后端位于同一仓库的可配置实时语音销售对练应用。学员可以选择存储在 SQLite 中的销售场景、兼容的客户角色和训练难度；浏览器随后通过服务端 WebSocket 网关将麦克风音频发送给 Qwen `qwen-audio-3.0-realtime-plus`，在聊天时间线中展示实时转写，并播放所选角色的语音。已经完成的对话文字、实际播放音频、会话启动快照、暂停状态和有效对练时长会保存在 SQLite 中。未结束会话可以暂停、通过新的 Qwen 连接继续，或在保留原配置的前提下重启；结束后的会话会被锁定，并由 Qwen 文本模型异步生成评分、优缺点、改进建议和关键时刻。会话可下载为文字、一段双方轮流说话的 MP3，或同时包含两者的 ZIP。项目还提供响应式管理控制台，用于维护角色和场景，并预览最终发送给模型的 Instructions。
 
 移动端和桌面端共用同一套响应式 React 组件树。Ant Design 提供标准控件和主题算法，项目 CSS 负责聊天布局、消息气泡、录音浮层和随声音变化的视觉效果。除按住说话外，输入区还支持点击开始的长录音，以及在持续静音后自动提交当前轮次的免提自由对话。
@@ -131,6 +134,7 @@
 | `pnpm dev:server` | 仅运行 Node.js TypeScript 服务端 |
 | `pnpm catalog:init` | 使用 TypeScript 源码执行迁移，并幂等补充缺少的预设和示例角色 |
 | `pnpm catalog:init:prod` | 构建后，在启动服务前对部署数据库运行初始化器 |
+| `pnpm database:init:prod` | 对部署环境执行两个数据库的构建后迁移，并幂等初始化目录数据 |
 | `pnpm database:split` | 将旧的合并数据库一次性复制为独立的目录库和会话库 |
 | `pnpm database:split:prod` | 执行构建后的一次性数据库拆分器 |
 | `pnpm lint` | 运行共享 ESLint 配置 |
@@ -139,6 +143,77 @@
 | `pnpm smoke:realtime <pcm-file> [interrupt flag]` | 通过本地 Node.js 网关验证正常或中断的 Qwen 实时会话 |
 | `pnpm build` | 将 Node.js 服务端/初始化器构建到 `dist/server`，将 React 构建到 `dist/client` |
 | `pnpm check` | 依次执行 lint、类型检查、测试和两端构建 |
+
+## Docker 部署
+
+在仓库根目录构建包含前后端的单一生产镜像。从 Apple Silicon 电脑为常见的
+x86_64 Linux 服务器构建时，需要明确指定目标平台：
+
+```bash
+docker buildx build \
+  --platform linux/amd64 \
+  -t ai-role-player:latest \
+  --load .
+```
+
+如果直接在 x86_64 服务器上构建，可以使用较短的等价命令：
+
+```bash
+docker build -t ai-role-player:latest .
+```
+
+构建镜像时会执行目录库与会话库的全部迁移，并把双语目录初始数据写入镜像内的
+`/app/data`。第一次使用新建的 Docker 数据卷时，Docker 会用镜像中的这两个数据库填充
+数据卷。容器入口仍会再次运行同一个部署初始化器，因此已有数据卷或目录挂载也能获得后续
+迁移和缺失的初始化记录；该过程幂等，不会覆盖管理员修改。
+
+### 挂载自有证书并直接提供 HTTPS
+
+`compose.yaml` 由 Fastify 直接终止 TLS。请先在部署服务器上准备 PEM 格式的完整证书链和与其匹配的 PEM 私钥：
+
+```text
+certs/fullchain.pem
+certs/privkey.pem
+```
+
+`fullchain.pem` 必须包含服务器证书以及所需的中间证书；只有一个原始公钥文件是不够的。
+这两个文件会被 Git 和 Docker 构建忽略，只在运行时以只读方式挂载。容器以 UID/GID 1000
+运行，因此该用户必须拥有两个文件的读取权限。
+
+在已有百炼凭据的 `.env` 中加入部署配置：
+
+```dotenv
+PUBLIC_ORIGIN=https://role-player.example.com
+TLS_CERT_HOST_PATH=./certs
+```
+
+`PUBLIC_ORIGIN` 必须是浏览器实际访问的完整源，并且域名必须包含在证书中。镜像构建完成后启动：
+
+```bash
+docker compose up -d
+```
+
+可以通过日志检查启动过程和证书文件错误：
+
+```bash
+docker compose logs -f role-player
+```
+
+随后访问 `PUBLIC_ORIGIN`。Compose 会将服务器 443 端口映射到应用，使用具名卷
+`role-player-data` 保存两个 SQLite 数据库，并将证书目录只读挂载到 `/app/certs`。
+Fastify 在同一个端口提供 HTTPS 和 WSS。入口脚本会在每次启动前执行两个数据库的迁移和幂等的双语
+目录初始化，后续启动不会覆盖管理员修改。镜像健康检查会自动识别 TLS，并在容器内部访问
+`/api/health`，但不会降低浏览器侧的证书校验。
+
+替换任意 PEM 文件后，需要重启进程来重新读取：
+
+```bash
+docker compose restart role-player
+```
+
+`DASHSCOPE_API_KEY` 和 `DASHSCOPE_WORKSPACE_ID` 只能通过运行时环境变量或密钥管理服务
+传入，不能写进镜像。不要省略 `/app/data` 数据卷，否则替换容器时会丢失目录修改、会话、音频和复盘。
+自签名证书只有在每台学员设备上显式信任对应根证书后才适用；否则浏览器会拒绝 HTTPS/WSS 和麦克风访问。
 
 ### 可选：实时语音冒烟测试
 
@@ -242,7 +317,7 @@ pnpm smoke:realtime /absolute/path/to/input.pcm --interrupt
 
 历史会话续聊属于文字上下文重建，并不是恢复旧 Qwen 会话或重放原始音频。它可以恢复转写语义上下文，但不能恢复学员语气或情绪等声音细节。模型会接收最近 50 个用户轮次，即 `qwen-audio-3.0-realtime-plus` 支持的上限；SQLite 和界面仍保留完整历史记录。重连时不会额外调用模型总结更早的轮次，以免增加延迟、费用、故障点和语义偏差。
 
-演示应用尚未实现身份认证/管理权限、按用户区分的历史记录归属、自动保留期限控制、评分规则版本管理、复盘任务自动多次重试与退避、生产限流、Docker，以及生产环境静态文件服务。
+演示应用尚未实现身份认证/管理权限、按用户区分的历史记录归属、自动保留期限控制、评分规则版本管理、复盘任务自动多次重试与退避，以及生产限流。
 
 当前构建产物已经按以下结构分离：
 
@@ -251,7 +326,7 @@ dist/client/   # Vite SPA 构建结果
 dist/server/   # Node.js 服务端、目录初始化器与数据库拆分器
 ```
 
-计划中的生产部署步骤是：为 Fastify 增加 `dist/client` 静态文件服务，将两个目录打包进同一个 Docker 镜像，并只暴露 Node.js 服务。容器启动时必须挂载持久化数据库目录，针对该卷运行 `pnpm catalog:init:prod`，然后再启动 Node.js 服务。初始化不依赖 Qwen 凭据。Docker 和静态服务工作会在真实凭据验证实时语音核心后继续推进。
+生产镜像会打包这两个目录，并只暴露 Node.js 服务。Fastify 负责托管 `dist/client`；无扩展名的 SPA 地址会回落到 `index.html`，但 `/api`、`/ws` 和不存在的资源不会被伪装成前端页面。容器入口脚本会先针对已挂载的数据库目录运行构建后的幂等目录初始化器，再启动 Fastify；初始化过程不依赖 Qwen 凭据。
 
 ## 常见问题
 

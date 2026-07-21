@@ -6,26 +6,39 @@ import { z } from "zod";
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: resolve(moduleDirectory, "../../.env"), quiet: true });
 
-const serverEnvSchema = z.object({
-  SERVER_HOST: z.string().default("127.0.0.1"),
-  SERVER_PORT: z.coerce.number().int().min(1).max(65_535).default(3001),
-  CLIENT_ORIGIN: z.string().url().default("http://localhost:5173"),
-  CATALOG_DATABASE_PATH: z
-    .string()
-    .trim()
-    .min(1)
-    .default("data/catalog.sqlite"),
-  CONVERSATION_DATABASE_PATH: z
-    .string()
-    .trim()
-    .min(1)
-    .default("data/conversations.sqlite"),
-  LEGACY_DATABASE_PATH: z.string().trim().min(1).optional(),
-  DATABASE_PATH: z.string().trim().min(1).optional(),
-  LOG_LEVEL: z
-    .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
-    .default("info"),
-});
+const serverEnvSchema = z
+  .object({
+    SERVER_HOST: z.string().default("127.0.0.1"),
+    SERVER_PORT: z.coerce.number().int().min(1).max(65_535).default(3001),
+    CLIENT_ORIGIN: z.string().url().default("http://localhost:5173"),
+    SERVE_STATIC: z.enum(["true", "false"]).optional(),
+    STATIC_CLIENT_PATH: z.string().trim().min(1).default("dist/client"),
+    TLS_CERT_PATH: z.string().trim().min(1).optional(),
+    TLS_KEY_PATH: z.string().trim().min(1).optional(),
+    CATALOG_DATABASE_PATH: z
+      .string()
+      .trim()
+      .min(1)
+      .default("data/catalog.sqlite"),
+    CONVERSATION_DATABASE_PATH: z
+      .string()
+      .trim()
+      .min(1)
+      .default("data/conversations.sqlite"),
+    LEGACY_DATABASE_PATH: z.string().trim().min(1).optional(),
+    DATABASE_PATH: z.string().trim().min(1).optional(),
+    LOG_LEVEL: z
+      .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
+      .default("info"),
+  })
+  .superRefine((value, context) => {
+    if (Boolean(value.TLS_CERT_PATH) === Boolean(value.TLS_KEY_PATH)) return;
+    context.addIssue({
+      code: "custom",
+      path: [value.TLS_CERT_PATH ? "TLS_KEY_PATH" : "TLS_CERT_PATH"],
+      message: "TLS_CERT_PATH and TLS_KEY_PATH must be configured together.",
+    });
+  });
 
 const qwenEnvSchema = z
   .object({
@@ -74,6 +87,10 @@ export function getServerConfig() {
   const parsed = serverEnvSchema.parse(process.env);
   return {
     ...parsed,
+    SERVE_STATIC:
+      parsed.SERVE_STATIC === undefined
+        ? process.env.NODE_ENV === "production"
+        : parsed.SERVE_STATIC === "true",
     // DATABASE_PATH is accepted only as the source path for the one-time split
     // command so existing local .env files do not need an immediate edit.
     LEGACY_DATABASE_PATH:

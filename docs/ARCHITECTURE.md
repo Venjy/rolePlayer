@@ -127,6 +127,7 @@ Keep this directory platform-neutral. It must remain safe to bundle into the bro
 ### `scripts`
 
 - `initialize-catalog.ts` powers `pnpm catalog:init` and is bundled as `dist/server/initialize-catalog.js` for `pnpm catalog:init:prod`. It reads database configuration, opens only the catalog database, applies pending catalog migrations, runs the transactional initializer, reports inserted/skipped counts, and never starts Fastify or reads Qwen credentials;
+- `initialize-deployment-databases.ts` is bundled as `dist/server/initialize-deployment-databases.js` for `pnpm database:init:prod`. It applies both independent migration chains, initializes the catalog transactionally, closes both files, and is used during both image construction and container startup;
 - `split-database.ts` powers the guarded `database:split` commands. It upgrades the historical combined database, copies both domains into fresh destination files, validates the result, and never merges into or overwrites existing destinations;
 - `smoke-realtime.ts` exercises the real browser/Node application protocol with a supplied PCM file and can verify normal persistence or either interruption-reconciliation path.
 
@@ -183,7 +184,7 @@ After Qwen emits a complete assistant response and the associated learner transc
 
 The text evaluator must return exactly one structured result per criterion, cite only transcript turn indexes, provide direct evidence, and assign at least `0.9` confidence. Node—not the model—requires every criterion to pass all of those checks before sending `scenario.success.detected` to the browser. Any uncertainty, partial progress, missing evidence, timeout, malformed response, or missing feedback-model configuration fails open: voice practice continues and no suggestion appears. The browser then offers an explicit choice to end and review or keep practicing; the server never ends the conversation automatically.
 
-Schema evolution and business initialization are separate. All business defaults live in `src/server/catalog/initial-data/*.json`. `pnpm catalog:init` uses source TypeScript and `pnpm catalog:init:prod` uses the built initializer; both apply migrations and transactionally insert missing rows/links without overwriting existing rows. JSON seed keys provide idempotency, while SQLite assigns every public database ID. Neither command starts Fastify or needs Qwen credentials.
+Schema evolution and business initialization are separate. All business defaults live in `src/server/catalog/initial-data/*.json`. `pnpm catalog:init` uses source TypeScript and `pnpm catalog:init:prod` uses the catalog-only built initializer; both apply catalog migrations and transactionally insert missing rows/links without overwriting existing rows. `pnpm database:init:prod` additionally applies the conversation migration chain and is the Docker deployment entrypoint. JSON seed keys provide idempotency, while SQLite assigns every public database ID. None of these commands starts Fastify or needs Qwen credentials.
 
 Localized entity fields use unsuffixed English names and explicit Simplified Chinese `ZhCn` names. Display/prompt code falls back only when preferred content is empty. Admin forms represent one locale at a time and never persist visible fallback text as a translation. Preset-backed form fields submit numeric IDs; the catalog API resolves their English/Chinese labels. There is one occupation preset reference and no separate identity concept.
 
@@ -378,16 +379,38 @@ tsup server + scripts         → dist/server
 
 The Node build keeps `removeNodeProtocol: false` and externalizes `node:sqlite`. Removing that setting can rewrite the valid built-in specifier to a nonexistent bare `sqlite` module and break both the server and production initializer.
 
-The next deployment milestone should add static file serving to Fastify:
+Production registers `@fastify/static` with `dist/client`. Hashed files under
+`assets/` receive immutable one-year caching, while `index.html` and unhashed
+AudioWorklet files use `no-cache`. Only extensionless HTML navigation outside
+`/api` and `/ws` receives the SPA fallback, so unknown APIs and missing assets
+remain real 404 responses.
 
-1. register `@fastify/static` with `dist/client`;
-2. return `index.html` for SPA routes that are not `/api` or `/ws`;
-3. build both outputs in one Docker build stage;
-4. run only `dist/server/index.js` in the final image;
-5. mount the directory containing both configured database paths as a persistent volume;
-6. run `pnpm catalog:init:prod` against that volume before starting the Node service.
+The multi-stage `Dockerfile` builds both outputs, installs only production
+dependencies in the final Node 22 image, and runs as the non-root `node` user.
+The build stage runs the built deployment initializer against `/app/image-data`,
+applying both migration chains and catalog seeds, and copies those prepared
+files to `/app/data` before the volume is declared. A new Docker volume therefore
+starts from a complete database pair. The final image exposes only Fastify on
+port 3001. Its entrypoint reruns the same transactional/idempotent deployment
+initializer against the mounted `/app/data` and then replaces itself with
+`dist/server/index.js`, preserving correct signal delivery. This second pass is
+required because an existing volume or bind mount hides the image files and may
+need later migrations or restored seed rows. `/api/health` drives the image
+health check.
 
-No client/server repository split and no separately deployed database service are planned.
+When `TLS_CERT_PATH` and `TLS_KEY_PATH` are both absent, Fastify retains its
+normal HTTP development mode. When both are present, the server reads the PEM
+certificate chain and private key once at process startup and substitutes a
+Node HTTPS server through Fastify's HTTPS option; REST, static SPA responses,
+and WebSocket upgrades therefore share one HTTPS/WSS port. Partial,
+missing, or empty TLS input fails startup instead of silently falling back to
+HTTP. `compose.yaml` maps host port 443 to Fastify, mounts `/app/certs` read-only,
+and keeps certificate material outside Git and the image. Certificate rotation
+requires a container restart. `CLIENT_ORIGIN` remains a runtime setting and
+must exactly match the external HTTPS origin.
+
+No client/server repository split and no separately deployed database service
+are planned.
 
 ## Growth path
 
@@ -402,4 +425,4 @@ Recommended additions, in order:
    of the current bounded response retry and one-shot same-conversation runtime
    recovery;
 7. add metrics, rate limiting, quotas, and cost controls;
-8. add production static serving and a single Docker image with persistent SQLite storage.
+8. add deployment-specific authentication, automated certificate rotation, backups, and observability around the existing single Docker image.

@@ -1,0 +1,37 @@
+services:
+  role-player:
+    image: ${ROLE_PLAYER_IMAGE:-ai-role-player:latest}
+    container_name: ${ROLE_PLAYER_CONTAINER_NAME:-ai-role-player}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 3001
+      CLIENT_ORIGIN: ${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN in .env, for example https://role-player.example.com}
+      SERVE_STATIC: "true"
+      STATIC_CLIENT_PATH: dist/client
+      TLS_CERT_PATH: /app/certs/fullchain.pem
+      TLS_KEY_PATH: /app/certs/privkey.pem
+      CATALOG_DATABASE_PATH: /app/data/catalog.sqlite
+      CONVERSATION_DATABASE_PATH: /app/data/conversations.sqlite
+      LEGACY_DATABASE_PATH: /app/data/role-player.sqlite
+    ports:
+      - "${HTTPS_PORT:-443}:3001"
+    volumes:
+      - role-player-data:/app/data
+      - type: bind
+        source: ${TLS_CERT_HOST_PATH:-./certs}
+        target: /app/certs
+        read_only: true
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  role-player-data:
+    name: ${ROLE_PLAYER_DATA_VOLUME:-role-player-data}

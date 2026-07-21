@@ -4,6 +4,8 @@ export default defineConfig({
   entry: {
     index: "src/server/index.ts",
     "initialize-catalog": "scripts/initialize-catalog.ts",
+    "initialize-deployment-databases":
+      "scripts/initialize-deployment-databases.ts",
     "split-database": "scripts/split-database.ts",
   },
   format: ["esm"],

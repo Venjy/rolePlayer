@@ -2,6 +2,9 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
+> [!IMPORTANT]
+> **Live demo:** [https://aia.jiangwenjie.cn](https://aia.jiangwenjie.cn)
+
 A single-repository React + Node/TypeScript application for configurable realtime voice sales role-play. Learners choose an SQLite-backed sales scenario, compatible customer persona, and difficulty; the browser then connects its microphone to Qwen `qwen-audio-3.0-realtime-plus` through a server-side WebSocket gateway, streams transcripts into a chat timeline, and plays the selected persona's voice. Finalized conversations, heard audio, launch snapshots, pause state, and active practice time are stored in SQLite and listed in responsive history navigation. Active sessions can be paused, continued through a fresh Qwen connection, or restarted with the same configuration; ended sessions become immutable and receive asynchronous Qwen text-model coaching, optional weighted scoring, highlighted moments, and a reviewable transcript. Conversations can be downloaded as a transcript, one alternating-speaker MP3, or a ZIP containing both. A responsive admin console provides persona/scenario CRUD and an inspectable model-Instructions preview.
 
 The UI uses one responsive React component tree for mobile and desktop. Ant Design supplies the standard controls and theme algorithms; project CSS handles the chat layout, message bubbles, recording overlay, and audio-reactive visuals. In addition to push-to-talk, the composer supports click-to-start long recording and a hands-free free-conversation mode that automatically submits a turn after sustained silence.
@@ -131,6 +134,7 @@ These URLs reuse the production React components but inject static in-memory sta
 | `pnpm dev:server` | Run only the Node TypeScript server |
 | `pnpm catalog:init` | Apply migrations and idempotently add missing presets/starter personas using TypeScript sources |
 | `pnpm catalog:init:prod` | Run the built initializer against the deployment database before starting the built server |
+| `pnpm database:init:prod` | Apply both built migration chains and idempotently initialize catalog data for a deployment |
 | `pnpm database:split` | One-time copy from the legacy combined database into fresh catalog and conversation files |
 | `pnpm database:split:prod` | Run the built one-time database splitter |
 | `pnpm lint` | Run the shared ESLint configuration |
@@ -139,6 +143,87 @@ These URLs reuse the production React components but inject static in-memory sta
 | `pnpm smoke:realtime <pcm-file> [interrupt flag]` | Exercise a normal or interrupted live Qwen turn through the local Node gateway |
 | `pnpm build` | Build the Node server/initializer to `dist/server` and React to `dist/client` |
 | `pnpm check` | Run lint, type-check, tests, and both builds |
+
+## Docker deployment
+
+Build the single production image from the repository root. When building on
+Apple Silicon for a typical x86_64 Linux server, select the target platform:
+
+```bash
+docker buildx build \
+  --platform linux/amd64 \
+  -t ai-role-player:latest \
+  --load .
+```
+
+On an x86_64 server itself, the shorter equivalent is:
+
+```bash
+docker build -t ai-role-player:latest .
+```
+
+The image build applies every catalog and conversation migration and inserts
+the bilingual catalog defaults into `/app/data`. A newly created Docker volume
+is populated from those image files on first use. The runtime entrypoint repeats
+the same deployment initializer so an existing volume or bind mount also
+receives later migrations and any missing seed rows; this is idempotent and does
+not overwrite administrator edits.
+
+### Direct HTTPS with mounted certificates
+
+`compose.yaml` terminates TLS directly in Fastify. Prepare a PEM certificate
+chain and its matching PEM private key on the deployment host:
+
+```text
+certs/fullchain.pem
+certs/privkey.pem
+```
+
+`fullchain.pem` must contain the server certificate plus any required
+intermediate certificates; a raw public-key file is not sufficient. The files
+are ignored by Git and Docker builds and are mounted read-only at runtime. The
+container runs as UID/GID 1000, so that user must be able to read both files.
+
+Add these deployment values to `.env` alongside the DashScope credentials:
+
+```dotenv
+PUBLIC_ORIGIN=https://role-player.example.com
+TLS_CERT_HOST_PATH=./certs
+```
+
+`PUBLIC_ORIGIN` must be the exact browser origin and must match the names in the
+certificate. Then start the already-built image:
+
+```bash
+docker compose up -d
+```
+
+Inspect startup and TLS-file errors with:
+
+```bash
+docker compose logs -f role-player
+```
+
+Open the configured `PUBLIC_ORIGIN`. Compose publishes host port 443, mounts
+both SQLite databases in the named `role-player-data` volume, and mounts the
+certificate directory at `/app/certs:ro`. Fastify serves HTTPS and WSS on the
+same port. The entrypoint applies both database migration chains and runs the
+idempotent bilingual catalog initializer before every server start; later starts preserve
+administrator edits. The image health check detects TLS automatically and calls
+`/api/health` internally without weakening browser-side certificate validation.
+
+After replacing either PEM file, restart the process to load it:
+
+```bash
+docker compose restart role-player
+```
+
+Keep `DASHSCOPE_API_KEY` and `DASHSCOPE_WORKSPACE_ID` in runtime environment
+variables or a secret manager, never in the image. Do not omit the `/app/data`
+volume: replacing a container without it loses catalog changes, conversations,
+audio, and feedback. A self-signed certificate is suitable only when its root
+CA is explicitly trusted on every learner device; otherwise browsers reject
+HTTPS/WSS and microphone access.
 
 ### Optional live smoke test
 
@@ -242,7 +327,7 @@ Scenario `voiceBehavior.interruptFrequency` changes prompt-level conversational 
 
 History continuation is text-level context reconstruction, not revival of the old Qwen session or replay of original audio. It restores semantic transcript context but not acoustic details such as the learner's tone or emotion. The model receives the most recent 50 user turns—the maximum supported by `qwen-audio-3.0-realtime-plus`—while SQLite and the UI keep the complete transcript. Older turns are not summarized during reconnect because a second model call would add latency, cost, failure modes, and possible semantic drift.
 
-The demo does not yet include authentication/admin authorization, per-user history ownership, automatic retention controls, rubric-version administration, automatic multi-attempt feedback backoff, production rate limiting, Docker, or production static file serving.
+The demo does not yet include authentication/admin authorization, per-user history ownership, automatic retention controls, rubric-version administration, automatic multi-attempt feedback backoff, or production rate limiting.
 
 The build already separates artifacts as follows:
 
@@ -251,7 +336,7 @@ dist/client/   # Vite SPA output
 dist/server/   # Node server, catalog initializer, and database splitter output
 ```
 
-The intended production step is to add Fastify static serving for `dist/client`, then package both directories into one Docker image and expose only the Node service. Container startup must mount the persistent database directory, run `pnpm catalog:init:prod` against that volume, and only then start the Node service. Initialization does not depend on Qwen credentials. Docker/static serving work is intentionally deferred until the realtime core has been validated with real credentials.
+The production image packages both directories and exposes only the Node service. Fastify serves `dist/client` with an extensionless SPA fallback that excludes `/api`, `/ws`, and missing asset paths. The container entrypoint runs the built idempotent catalog initializer against the mounted database directory before starting Fastify; initialization does not depend on Qwen credentials.
 
 ## Troubleshooting
 
