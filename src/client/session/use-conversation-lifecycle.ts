@@ -30,6 +30,8 @@ import type {
   TranscriptTurn,
 } from "./session-types";
 import { readableError, type UiError } from "../app/app-errors";
+import { verifyMicrophoneAccess } from "../audio/browser-audio-engine";
+import { createConversationAfterMicrophonePreflight } from "./conversation-start";
 
 interface RuntimeRef<T> {
   current: T;
@@ -153,12 +155,15 @@ export function useConversationLifecycle({
     setIsStarting(true);
     clearSessionError();
     try {
-      const conversation = await createConversation({
-        personaId: selectedPersona.id,
-        scenarioId: selectedScenario.id,
-        difficulty,
-        locale,
-      });
+      const conversation = await createConversationAfterMicrophonePreflight(
+        {
+          personaId: selectedPersona.id,
+          scenarioId: selectedScenario.id,
+          difficulty,
+          locale,
+        },
+        { verifyMicrophoneAccess, createConversation },
+      );
       await activateConversation(conversation);
       if (requestedRouteRef.current.page === "home") {
         navigate({ page: "chat", conversationId: conversation.id });
@@ -188,12 +193,15 @@ export function useConversationLifecycle({
     setErrorMessage(null);
     clearSessionError();
     try {
-      const conversation = await createConversation({
-        personaId: source.persona.id,
-        scenarioId: source.scenario.id,
-        difficulty: source.difficulty,
-        locale,
-      });
+      const conversation = await createConversationAfterMicrophonePreflight(
+        {
+          personaId: source.persona.id,
+          scenarioId: source.scenario.id,
+          difficulty: source.difficulty,
+          locale,
+        },
+        { verifyMicrophoneAccess, createConversation },
+      );
       await activateConversation(conversation);
       navigate({ page: "chat", conversationId: conversation.id });
     } finally {

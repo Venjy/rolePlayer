@@ -6,6 +6,40 @@ const PLAYBACK_LEAD_SECONDS = 0.08;
 const MICROPHONE_SETTLE_MS = 350;
 const CAPTURE_HIGH_PASS_HZ = 80;
 
+export const MICROPHONE_INPUT_CONSTRAINTS: MediaTrackConstraints = {
+  channelCount: { ideal: 1 },
+  echoCancellation: true,
+  noiseSuppression: true,
+  // Browser AGC can change gain substantially while its estimator is
+  // settling. Keep capture deterministic and normalize persisted speech
+  // offline when producing a downloadable conversation.
+  autoGainControl: false,
+  sampleRate: { ideal: 16_000 },
+};
+
+interface MicrophoneMediaDevices {
+  getUserMedia(constraints: MediaStreamConstraints): Promise<MediaStream>;
+}
+
+/**
+ * Requests and immediately releases a microphone stream before a durable
+ * conversation is created. The realtime audio engine opens its own stream
+ * only after the server has accepted the conversation snapshot.
+ */
+export async function verifyMicrophoneAccess(
+  mediaDevices: MicrophoneMediaDevices | null =
+    typeof navigator === "undefined" ? null : navigator.mediaDevices,
+): Promise<void> {
+  if (!mediaDevices?.getUserMedia) {
+    throw new Error("This browser does not support microphone capture.");
+  }
+
+  const stream = await mediaDevices.getUserMedia({
+    audio: MICROPHONE_INPUT_CONSTRAINTS,
+  });
+  for (const track of stream.getTracks()) track.stop();
+}
+
 interface WorkletAudioMessage {
   type: "audio";
   buffer: ArrayBuffer;
@@ -106,16 +140,7 @@ export class BrowserAudioEngine {
 
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: { ideal: 1 },
-          echoCancellation: true,
-          noiseSuppression: true,
-          // Browser AGC can change gain substantially while its estimator is
-          // settling. Keep capture deterministic and normalize persisted
-          // speech offline when producing a downloadable conversation.
-          autoGainControl: false,
-          sampleRate: { ideal: 16_000 },
-        },
+        audio: MICROPHONE_INPUT_CONSTRAINTS,
       });
 
       await context.audioWorklet.addModule("/audio-recorder-worklet.js");

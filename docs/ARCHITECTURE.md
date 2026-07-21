@@ -189,7 +189,7 @@ Localized entity fields use unsuffixed English names and explicit Simplified Chi
 
 Compatibility is a many-to-many relationship with an explicit position per scenario. Scenario writes validate that every referenced persona exists and replace compatibility rows transactionally. Persona deletion is rejected while any scenario references it; scenario deletion cascades its compatibility rows.
 
-When the learner starts a session, the application controller sends only `personaId`, `scenarioId`, the selected locale, and `Difficulty`. `POST /api/conversations` reloads both authoritative catalog records, validates compatibility, resolves every preset ID to bilingual text, stores that resolved snapshot, projects the selected locale on Node, and compiles Instructions with:
+When the learner starts a session, the browser first requests and immediately releases a temporary microphone stream. Permission denial, a missing input device, or unsupported capture therefore fails on the launcher before any durable conversation ID or history row is created. After that preflight succeeds, the application controller sends only `personaId`, `scenarioId`, the selected locale, and `Difficulty`. `POST /api/conversations` reloads both authoritative catalog records, validates compatibility, resolves every preset ID to bilingual text, stores that resolved snapshot, projects the selected locale on Node, and compiles Instructions with:
 
 ```ts
 compileRolePlayInstructions({ persona, scenario, difficulty, locale })
