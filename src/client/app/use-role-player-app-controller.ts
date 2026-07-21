@@ -231,10 +231,17 @@ export function useRolePlayerAppController() {
   const activeLocalizedScenario = activeSessionConfig
     ? localizeScenario(activeSessionConfig.scenario, locale)
     : null;
+  const selectedLocalizedPersona = selectedPersona
+    ? localizePersona(selectedPersona, locale)
+    : null;
   const personaName =
     activeLocalizedPersona?.name ??
-    (selectedPersona ? localizePersona(selectedPersona, locale).name : null) ??
+    selectedLocalizedPersona?.name ??
     t({ en: "Alex", zh: "亚历克斯" });
+  const personaOccupation =
+    activeLocalizedPersona?.occupation ??
+    selectedLocalizedPersona?.occupation ??
+    "";
   const resolveUiError = useCallback(
     (error: UiError | null | undefined): string | null => {
       if (!error) return null;
@@ -697,6 +704,7 @@ export function useRolePlayerAppController() {
     },
     sessionHeader: {
       personaName,
+      personaOccupation,
       sessionState,
       paused: sessionPaused,
       controlsLocked: sessionControlsLocked,

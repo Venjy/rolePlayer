@@ -6,7 +6,7 @@ The application is a single Node/TypeScript project containing a React SPA, a Fa
 
 The browser must not connect directly to Qwen Audio Realtime. Qwen requires an `Authorization` header during the WebSocket handshake, which browser WebSocket APIs cannot safely provide. More importantly, direct access would expose the permanent Model Studio API key.
 
-SQLite is embedded in the Node process so the eventual deployment can remain one service and one container. Both database files should live on storage mounted into that container, not in a separately deployed database server or an ephemeral image layer. The catalog file persists editable configuration; the conversation file persists launch-time snapshots, pause/active-time state, plus authoritative text and PCM audio for finalized messages. Transient transcript drafts, unheard assistant suffixes, users, and evaluations are not persisted.
+SQLite is embedded in the Node process so the eventual deployment can remain one service and one container. Both database files should live on storage mounted into that container, not in a separately deployed database server or an ephemeral image layer. The catalog file persists editable configuration; the conversation file persists launch-time snapshots, pause/active-time state, authoritative finalized text/PCM, and bilingual feedback reports. Transient transcript drafts, unheard assistant suffixes, user-account records, and cross-attempt analytics are not persisted.
 
 ## Runtime topology
 
@@ -14,6 +14,7 @@ SQLite is embedded in the Node process so the eventual deployment can remain one
 flowchart LR
     Mic["Browser microphone"]
     Initializer["Explicit catalog initializer\nsource or built command"]
+    TextModel["Qwen text model\nOpenAI-compatible HTTPS"]
     subgraph Browser["React + Ant Design SPA"]
         Admin["Admin console"]
         Learner["Learner launcher"]
@@ -26,6 +27,7 @@ flowchart LR
         ConversationApi["Conversation API"]
         Gateway["Realtime gateway"]
         Reconciler["Speech-prefix estimator\nand context-repair barrier"]
+        TextServices["Draft generation, goal detection,\nand feedback services"]
         Lifecycle["Fastify application lifecycle"]
         Repository["CatalogRepository"]
         ConversationRepository["ConversationRepository"]
@@ -37,6 +39,10 @@ flowchart LR
         CatalogApi --> Repository --> CatalogDB
         ConversationApi --> ConversationRepository --> ConversationDB
         Gateway --> ConversationRepository
+        CatalogApi --> TextServices
+        ConversationApi --> TextServices
+        Gateway --> TextServices
+        TextServices --> TextModel
     end
     Admin -->|"catalog CRUD"| CatalogApi
     CatalogApi -->|"persona presets + catalog"| Admin
@@ -86,9 +92,10 @@ React components do not know the upstream Qwen event schema. They use the stable
 - environment validation and health reporting;
 - Fastify and browser WebSocket lifecycle;
 - SQLite connection ownership and migrations;
-- validated persona/scenario CRUD routes and the server-only `CatalogRepository`;
+- validated persona/scenario CRUD and bilingual draft-generation routes plus the server-only `CatalogRepository`;
 - validated conversation create/list/detail/pause/resume/restart/end/feedback/download routes plus server-only conversation and feedback repositories;
 - asynchronous Qwen text-model feedback generation with structured JSON validation, transcript-reference validation, durable retry state, and optional server-calculated weighted scoring;
+- conservative post-response success-criteria evaluation that can suggest—but never force—ending a session;
 - input validation and audio frame limits;
 - Qwen authentication and WebSocket lifecycle;
 - translation between application messages and Qwen events;
@@ -100,7 +107,7 @@ React components do not know the upstream Qwen event schema. They use the stable
 - completed-response speech-rate samples;
 - interrupted assistant-item reconciliation;
 - a delete/recreate barrier before the next inference.
-- authoritative finalized-message persistence and bounded text-context rehydration before session readiness.
+- authoritative finalized-message persistence and bounded text-context rehydration before session readiness;
 - request-time transcript rendering, mono timeline assembly, 16-to-24 kHz resampling, MP3 encoding, and ZIP packaging for downloads.
 
 The permanent API key and database file paths exist only in this process.
@@ -109,7 +116,7 @@ The permanent API key and database file paths exist only in this process.
 
 - Zod schemas for browser control messages;
 - Zod schemas for server events;
-- Zod schemas and TypeScript types for bilingual persona/scenario presets, bilingual personas/scenarios, compatibility, voice behavior, difficulty, conversation summaries/details, and finalized messages;
+- Zod schemas and TypeScript types for bilingual persona/scenario presets, bilingual personas/scenarios, compatibility, voice behavior, difficulty, conversation summaries/details, finalized messages, and bilingual feedback reports;
 - pure current-locale-with-fallback catalog projection helpers;
 - the platform-neutral deterministic `compileRolePlayInstructions` template;
 - shared TypeScript types;
@@ -119,16 +126,15 @@ Keep this directory platform-neutral. It must remain safe to bundle into the bro
 
 ### `scripts`
 
-- `initialize-catalog.ts` is the source entry point for `pnpm catalog:init` and is also bundled to `dist/server/initialize-catalog.js` for `pnpm catalog:init:prod`;
-- `split-database.ts` is the guarded one-time migration from the historical combined file to the two current files;
-- it reads only server/database configuration, opens `ApplicationDatabase`, applies pending migrations through normal database startup, invokes the transactional catalog initializer, reports inserted/skipped counts, and closes the connection;
-- it does not start Fastify or read Qwen credentials.
+- `initialize-catalog.ts` powers `pnpm catalog:init` and is bundled as `dist/server/initialize-catalog.js` for `pnpm catalog:init:prod`. It reads database configuration, opens only the catalog database, applies pending catalog migrations, runs the transactional initializer, reports inserted/skipped counts, and never starts Fastify or reads Qwen credentials;
+- `split-database.ts` powers the guarded `database:split` commands. It upgrades the historical combined database, copies both domains into fresh destination files, validates the result, and never merges into or overwrites existing destinations;
+- `smoke-realtime.ts` exercises the real browser/Node application protocol with a supplied PCM file and can verify normal persistence or either interruption-reconciliation path.
 
 ## Responsive UI architecture
 
 The learner launcher, admin console, and active session each have one component structure across viewport sizes. CSS changes layout and dimensions; React does not branch into separate mobile and desktop applications.
 
-The learner launcher fetches `GET /api/catalog`, lets the learner search for a scenario, filters personas through the scenario's compatibility IDs, and offers easy/medium/hard difficulty. It summarizes goals, skill focus, role traits, behavior, and voice, then uses the shared deterministic compiler to preview the localized final Instructions and shared length budget before start. This browser result is presentation and early validation only; Node remains authoritative. The admin console uses the same catalog state for searchable persona/scenario tabs and responsive edit drawers. Persona and scenario editors keep preset IDs as form values while localizing only the option labels. A successful mutation applies its returned result locally and then reloads the complete catalog, so returning to the learner view shows saved changes immediately without rebuilding the SPA.
+The learner launcher fetches `GET /api/catalog`, lets the learner search for a scenario, filters personas through the scenario's compatibility IDs, and offers easy/medium/hard difficulty. It summarizes preparation-relevant scenario and persona details, then uses the shared deterministic compiler to preview the localized final Instructions and shared length budget before start. Provider voice labels and scenario tone/pace/interjection controls remain admin-only and do not appear in those learner summary cards. This browser result is presentation and early validation only; Node remains authoritative. The admin console uses the same catalog state for searchable persona/scenario tabs and responsive edit drawers. Persona and scenario editors keep preset IDs as form values while localizing only the option labels. A successful mutation applies its returned result locally and then reloads the complete catalog, so returning to the learner view shows saved changes immediately without rebuilding the SPA.
 
 The learner workspace adds one responsive navigation region around the launcher or active session. At 1200 px and above, a 288 px history rail remains on the left. Below 1200 px, the rail is hidden and the same list content opens in an Ant Design Drawer from a header button. The Drawer/rail can select any persisted conversation or return to a new launch without creating a separate mobile page.
 
@@ -224,7 +230,7 @@ retry failure does not recursively reconnect forever: the current fault chain
 remains consumed until an assistant response is persisted, and a second fatal
 failure exposes the existing manual reconnect action.
 
-The conversation repository stores the exact snapshot in normalized snapshot tables together with compiled text and selected voice. Browser `session.configure` sends only the durable conversation ID and a bounded history-turn limit. Normal application recovery requests the documented `qwen-audio-3.0-realtime-plus` maximum of 50 historical QA turns. Node walks backward to the oldest user message inside that window, preserves every following user/assistant item in chronological order, reloads the stored Instructions/voice, opens a new Qwen WebSocket, and injects the finalized text with `conversation.item.create`. It emits `session.ready` only after Qwen acknowledges every injected item. Conversations longer than 50 user turns retain their complete SQLite/UI transcript but replay only the newest provider-supported window; no reconnect-time summary model is used, avoiding extra latency, cost, failure modes, and semantic drift. This is semantic text-context restoration, not revival of an expired Qwen session; original audio tone/emotion is not restored. The active snapshot also supplies the persona name shown in chat, and later catalog edits affect only new conversations.
+The conversation repository stores the exact snapshot in normalized snapshot tables together with compiled text and selected voice. Browser `session.configure` sends only the durable conversation ID and a bounded history-turn limit. Normal application recovery requests the documented `qwen-audio-3.0-realtime-plus` maximum of 50 historical QA turns. Node walks backward to the oldest user message inside that window, preserves every following user/assistant item in chronological order, reloads the stored Instructions/voice, opens a new Qwen WebSocket, and injects the finalized text with `conversation.item.create`. It emits `session.ready` only after Qwen acknowledges every injected item. Conversations longer than 50 user turns retain their complete SQLite/UI transcript but replay only the newest provider-supported window; no reconnect-time summary model is used, avoiding extra latency, cost, failure modes, and semantic drift. This is semantic text-context restoration, not revival of an expired Qwen session; original audio tone/emotion is not restored. The active snapshot also supplies the localized persona name and occupation shown in chat, and later catalog edits affect only new conversations.
 
 Scenario `voiceBehavior.interruptFrequency` is prompt-level conversational behavior. With manual push-to-talk it cannot make Qwen seize the microphone while the learner is still speaking. Learner barge-in is the separate playback interruption/reconciliation mechanism.
 
@@ -357,7 +363,7 @@ Startup enables SQLite `DELETE` journal mode, foreign-key enforcement, and a 5-s
 
 Each fresh file has its own migration table and domain schema migration. Schema migrations do not own current business defaults. Catalog records use `CatalogRepository`; conversation records use `ConversationRepository`, and its snapshots intentionally have no foreign keys to the catalog file. This separation means catalog backup/reset/initialization and conversation retention can evolve independently.
 
-The current ownership contract is a private single-user deployment with one global history. Text and audio share the owning finalized message and are retained with the SQLite file. The user may permanently delete ended conversations, but there is no automatic retention job; active conversations cannot be deleted. The service must not be publicly or multi-tenant exposed until authentication, authorization, owner filtering, and a retention policy are added. MP3/ZIP artifacts are generated per request and are not retained. Users and evaluations remain intentionally absent. Because `DatabaseSync` is synchronous, long queries must not run on the Node event loop without redesign; request-time MP3 encoding is currently bounded to 64 MiB of source PCM and processes one message segment at a time.
+The current ownership contract is a private single-user deployment with one global history. Text and audio share the owning finalized message, and bilingual per-conversation feedback is retained with the SQLite file. The user may permanently delete ended conversations, but there is no automatic retention job; active conversations cannot be deleted. The service must not be publicly or multi-tenant exposed until authentication, authorization, owner filtering, and a retention policy are added. MP3/ZIP artifacts are generated per request and are not retained. User-account records, aggregate learner profiles, and cross-attempt analytics remain intentionally absent. Because `DatabaseSync` is synchronous, long queries must not run on the Node event loop without redesign; request-time MP3 encoding is currently bounded to 64 MiB of source PCM and processes one message segment at a time.
 
 See `docs/DATABASE.md` for operational and migration details.
 
@@ -367,7 +373,7 @@ Both parts live in one package but have separate build outputs:
 
 ```text
 Vite                          → dist/client
-tsup server + initializer     → dist/server
+tsup server + scripts         → dist/server
 ```
 
 The Node build keeps `removeNodeProtocol: false` and externalizes `node:sqlite`. Removing that setting can rewrite the valid built-in specifier to a nonexistent bare `sqlite` module and break both the server and production initializer.
@@ -390,7 +396,7 @@ Recommended additions, in order:
 1. validate real Qwen history-injection behavior and latency with longer test conversations;
 2. add application authentication, admin authorization, per-owner history filtering, and WebSocket authorization;
 3. define automatic retention rules and ownership-aware deletion for a future authenticated deployment;
-4. add structured post-session evaluation with a text model;
+4. add rubric-version administration, aggregate multi-attempt learner progress, and exportable coaching analytics after an ownership model exists;
 5. add catalog audit/version history and tenant ownership when product requirements require them;
 6. add network-aware exponential backoff and an explicit offline state on top
    of the current bounded response retry and one-shot same-conversation runtime

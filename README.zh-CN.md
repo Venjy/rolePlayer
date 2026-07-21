@@ -19,21 +19,24 @@
 │   └── smoke-realtime.ts           # 实时语音冒烟测试工具
 ├── src/
 │   ├── client/
+│   │   ├── app/                    # 根应用控制器、路由渲染、主题/错误/预览状态
 │   │   ├── admin/                  # 角色/场景管理控制台
 │   │   ├── audio/                  # 麦克风采集与流式播放
 │   │   ├── catalog/                # 目录 API 与选择状态
-│   │   ├── components/             # 聊天消息、波形与语音球
-│   │   ├── conversations/          # 历史 API、状态、桌面侧栏/移动端 Drawer
+│   │   ├── components/             # 全局顶栏、聊天消息、波形与语音球
+│   │   ├── conversations/          # 历史、复盘、下载 API、桌面侧栏/移动端 Drawer
 │   │   ├── i18n/                   # 语言状态、持久化、Ant Design locale
 │   │   ├── learner/                # 场景/角色/难度启动页
-│   │   ├── realtime/               # 应用协议 WebSocket 客户端
-│   │   └── voice/                  # 按住说话与免提 VAD 状态机
+│   │   ├── realtime/               # WebSocket 客户端、运行时投影/恢复与结算
+│   │   ├── routing/                # SPA URL 解析与 History API 协调
+│   │   ├── session/                # 会话页面、控制区与生命周期操作
+│   │   └── voice/                  # 按住说话、长录音与免提状态机
 │   ├── server/
-│   │   ├── catalog/                # 目录仓储、路由和初始化器
-│   │   ├── conversations/          # 持久化会话仓储与 REST API
+│   │   ├── catalog/                # 目录仓储、CRUD/随机生成路由和初始化器
+│   │   ├── conversations/          # 历史、导出、复盘与目标检测服务
 │   │   ├── database/               # SQLite 生命周期与迁移
 │   │   └── realtime/               # Qwen 网关与上下文修复
-│   └── shared/                     # 协议、目录 Schema、提示词编译器
+│   └── shared/                     # 协议、目录/历史/复盘 Schema、提示词编译器
 ├── test/                           # 单元测试与适配器测试
 ├── docs/                           # 架构与工程契约
 ├── index.html
@@ -99,7 +102,7 @@
    pnpm dev
    ```
 
-6. 打开 [http://localhost:5173](http://localhost:5173)，选择训练场景、兼容角色和难度，点击 **Start voice practice（开始语音对练）**，并允许浏览器使用麦克风。在宽屏设备上使用左侧历史栏，在较小屏幕上使用页面头部的 Drawer 按钮，即可继续未结束会话或查看已结束会话的复盘。管理控制台拥有独立地址 [http://localhost:5173/admin](http://localhost:5173/admin)。聊天会话使用 `/chat/:conversationId`，结束后的复盘使用 `/feedback/:conversationId`；刷新任一地址都会读取对应的持久化数据。界面首次使用时默认为英文，可通过右上角语言按钮切换到中文。
+6. 打开 [http://localhost:5173](http://localhost:5173)，选择训练场景、兼容角色和难度，点击 **Start voice role-play（开始语音对练）**，并允许浏览器使用麦克风。在宽屏设备上使用左侧历史栏，在较小屏幕上使用页面头部的 Drawer 按钮，即可继续未结束会话或查看已结束会话的复盘。管理控制台拥有独立地址 [http://localhost:5173/admin](http://localhost:5173/admin)。聊天会话使用 `/chat/:conversationId`，结束后的复盘使用 `/feedback/:conversationId`；刷新任一地址都会读取对应的持久化数据。界面首次使用时默认为英文，可通过右上角语言按钮切换到中文。
 
 7. 说话时按住 **Hold to talk（按住说话）**，松开发送；向上滑动至少 72 px 后再松开可取消。如果角色正在说话，按钮会变为 **Hold to interrupt and talk（按住打断并说话）**；按住后会立即停止当前播放、开始上下文修复，并录制下一轮输入。
 
@@ -112,6 +115,8 @@
 - [http://localhost:5173/?preview=session](http://localhost:5173/?preview=session) — Alex 正在说话的已填充对话
 - [http://localhost:5173/?preview=paused](http://localhost:5173/?preview=paused) — 已持久化的暂停状态及继续按钮
 - [http://localhost:5173/?preview=recording](http://localhost:5173/?preview=recording) — 正在录音的波形和底部布局
+- [http://localhost:5173/?preview=long](http://localhost:5173/?preview=long) — 点击开始的长录音及结束/取消按钮
+- [http://localhost:5173/?preview=free](http://localhost:5173/?preview=free) — 隐藏文字记录的语音球自由对话界面
 
 这些地址复用生产环境 React 组件，但注入静态内存状态。语音控件在预览模式下不会实际工作，生产构建会忽略 `preview` 参数。
 
@@ -241,7 +246,7 @@ pnpm smoke:realtime /absolute/path/to/input.pcm --interrupt
 
 ```text
 dist/client/   # Vite SPA 构建结果
-dist/server/   # Node.js 服务端与目录初始化器
+dist/server/   # Node.js 服务端、目录初始化器与数据库拆分器
 ```
 
 计划中的生产部署步骤是：为 Fastify 增加 `dist/client` 静态文件服务，将两个目录打包进同一个 Docker 镜像，并只暴露 Node.js 服务。容器启动时必须挂载持久化数据库目录，针对该卷运行 `pnpm catalog:init:prod`，然后再启动 Node.js 服务。初始化不依赖 Qwen 凭据。Docker 和静态服务工作会在真实凭据验证实时语音核心后继续推进。

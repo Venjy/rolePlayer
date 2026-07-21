@@ -19,21 +19,24 @@ This is one root package, not a monorepo. Client, server, tests, and shared prot
 │   └── smoke-realtime.ts           # Live realtime smoke harness
 ├── src/
 │   ├── client/
+│   │   ├── app/                    # Root application controller, route renderer, theme/errors/previews
 │   │   ├── admin/                  # Persona/scenario management console
 │   │   ├── audio/                  # Microphone capture and streamed playback
 │   │   ├── catalog/                # Catalog API and selection state
-│   │   ├── components/             # Chat messages, waveform, and voice orb
-│   │   ├── conversations/          # History API, state, desktop rail/mobile Drawer
+│   │   ├── components/             # Shared header, chat messages, waveform, and voice orb
+│   │   ├── conversations/          # History, feedback, download APIs, rail/mobile Drawer
 │   │   ├── i18n/                   # Locale state, persistence, Ant Design locale
 │   │   ├── learner/                # Scenario/persona/difficulty launcher
-│   │   ├── realtime/               # Application-protocol WebSocket client
-│   │   └── voice/                  # Hold gesture and hands-free VAD controllers
+│   │   ├── realtime/               # WebSocket client, runtime projection/recovery, settlement
+│   │   ├── routing/                # SPA URL parsing and History API coordination
+│   │   ├── session/                # Active-session views, controls, and lifecycle operations
+│   │   └── voice/                  # Hold, long-recording, and hands-free controllers
 │   ├── server/
-│   │   ├── catalog/                # Catalog repository, routes, initializer
-│   │   ├── conversations/          # Durable conversation repository and REST API
+│   │   ├── catalog/                # Catalog repository, CRUD/generation routes, initializer
+│   │   ├── conversations/          # History, export, feedback, and goal-detection services
 │   │   ├── database/               # SQLite lifecycle and migrations
 │   │   └── realtime/               # Qwen gateway and context repair
-│   └── shared/                     # Protocol, catalog schemas, prompt compiler
+│   └── shared/                     # Protocol, catalog/history/feedback schemas, prompt compiler
 ├── test/                           # Unit and adapter tests
 ├── docs/                           # Architecture and engineering contracts
 ├── index.html
@@ -99,7 +102,7 @@ Official setup references:
    pnpm dev
    ```
 
-6. Open [http://localhost:5173](http://localhost:5173), choose a training scenario, compatible persona, and difficulty, then select **Start voice practice** and allow microphone access. Use the left history rail on wide screens—or its header Drawer button on smaller screens—to reopen an active session or review an ended one. The admin console has its own route at [http://localhost:5173/admin](http://localhost:5173/admin). Active conversations use `/chat/:conversationId`; ended-session feedback uses `/feedback/:conversationId`. Refreshing either address reloads its durable data. The interface starts in English; use the upper-right language control to switch to Chinese.
+6. Open [http://localhost:5173](http://localhost:5173), choose a training scenario, compatible persona, and difficulty, then select **Start voice role-play** and allow microphone access. Use the left history rail on wide screens—or its header Drawer button on smaller screens—to reopen an active session or review an ended one. The admin console has its own route at [http://localhost:5173/admin](http://localhost:5173/admin). Active conversations use `/chat/:conversationId`; ended-session feedback uses `/feedback/:conversationId`. Refreshing either address reloads its durable data. The interface starts in English; use the upper-right language control to switch to Chinese.
 
 7. Hold **Hold to talk** while speaking. Release to send, or slide upward at least 72 px before releasing to cancel. While the selected persona is speaking, the control changes to **Hold to interrupt and talk**; holding it stops the current playback, begins context reconciliation, and records the next turn. The Chinese interface uses the equivalent **按住说话** and **按住打断并说话** labels.
 
@@ -112,6 +115,8 @@ When reviewing layout without granting microphone permission or opening a Qwen s
 - [http://localhost:5173/?preview=session](http://localhost:5173/?preview=session) — populated conversation while Alex is speaking
 - [http://localhost:5173/?preview=paused](http://localhost:5173/?preview=paused) — persisted paused state with the continue action
 - [http://localhost:5173/?preview=recording](http://localhost:5173/?preview=recording) — active recording waveform and composer spacing
+- [http://localhost:5173/?preview=long](http://localhost:5173/?preview=long) — click-to-start long recording with end/cancel actions
+- [http://localhost:5173/?preview=free](http://localhost:5173/?preview=free) — transcript-free voice-orb conversation surface
 
 These URLs reuse the production React components but inject static in-memory state. Voice controls are intentionally not functional there, and `preview` is ignored in a production build.
 
@@ -241,7 +246,7 @@ The build already separates artifacts as follows:
 
 ```text
 dist/client/   # Vite SPA output
-dist/server/   # Node server and catalog initializer output
+dist/server/   # Node server, catalog initializer, and database splitter output
 ```
 
 The intended production step is to add Fastify static serving for `dist/client`, then package both directories into one Docker image and expose only the Node service. Container startup must mount the persistent database directory, run `pnpm catalog:init:prod` against that volume, and only then start the Node service. Initialization does not depend on Qwen credentials. Docker/static serving work is intentionally deferred until the realtime core has been validated with real credentials.

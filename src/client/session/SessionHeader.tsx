@@ -29,6 +29,7 @@ import type { SessionControlAction } from "./session-types";
 
 export interface SessionHeaderProps {
   personaName: string;
+  personaOccupation: string;
   sessionState: SessionState;
   paused: boolean;
   controlsLocked: boolean;
@@ -53,6 +54,7 @@ export interface SessionHeaderProps {
 
 export function SessionHeader({
   personaName,
+  personaOccupation,
   sessionState,
   paused,
   controlsLocked,
@@ -199,6 +201,15 @@ export function SessionHeader({
               </span>
             )}
           </Flex>
+          {personaOccupation && (
+            <Typography.Text
+              className="persona-occupation"
+              type="secondary"
+              title={personaOccupation}
+            >
+              {personaOccupation}
+            </Typography.Text>
+          )}
           <Badge
             status={STATE_BADGE_STATUS[sessionState]}
             text={sessionStateLabel}

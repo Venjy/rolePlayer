@@ -7,7 +7,7 @@ The backend uses SQLite through Node's built-in `node:sqlite` API. React build o
 Runtime data is split by lifecycle and responsibility:
 
 - `data/catalog.sqlite` owns personas, scenarios, presets, scoring configuration, and scenario/persona compatibility.
-- `data/conversations.sqlite` owns immutable launch snapshots, compiled Instructions, and finalized messages.
+- `data/conversations.sqlite` owns immutable launch snapshots, compiled Instructions, finalized text/audio, pause and active-time state, and bilingual end-of-session feedback.
 
 `registerDatabases` creates one process-owned synchronous connection per file, enables foreign keys and a 5-second busy timeout, and applies that file's independent migration chain. Production must mount the directory containing both files; storing it only in an ephemeral image layer loses catalog edits and history when the container is replaced.
 
@@ -29,7 +29,7 @@ database_metadata
 qwen_voices
 ├── id (INTEGER AUTOINCREMENT), seed_key, voice (official provider ID)
 ├── name / name_zh_cn
-├── position
+├── gender (structured female or male capability), position
 └── created_at, updated_at
 
 personas

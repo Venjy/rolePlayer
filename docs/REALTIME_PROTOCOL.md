@@ -338,6 +338,26 @@ does not move its draft into finalized history until it receives the matching:
 { "type": "response.persisted", "responseId": "resp_..." }
 ```
 
+### Conservative scenario-success suggestion
+
+```json
+{
+  "type": "scenario.success.detected",
+  "responseId": "resp_..."
+}
+```
+
+After one assistant response has completed, Node may asynchronously evaluate the
+immutable scenario success criteria against the conversation evidence. It emits
+this event only when the scenario has at least one criterion and every criterion
+has direct evidence with at least the server's conservative confidence
+threshold. The assessment does not wait for audio playback and does not alter
+the realtime conversation context. Missing configuration, timeout, malformed
+output, partial completion, or uncertainty produces no event and does not block
+the next voice turn. The browser uses `responseId` to avoid repeating a
+suggestion for the same response and asks the learner whether to end through the
+normal REST/settlement flow; this event never ends the session by itself.
+
 ### Authoritative persistence points
 
 SQLite stores authoritative finalized conversation text and its matching spoken
@@ -439,7 +459,7 @@ protocol messages is a contract:
 | Upward slide of at least 72 px, then release | hide draft → cancel capture → `input.clear` → wait for `input.cleared`; never `input.commit` |
 | `pointercancel`, unexpected lost capture, window blur, hidden document, disabled input, unmount, or session end | hide draft → cancel capture → `input.clear` → wait for `input.cleared`; never `input.commit` |
 | Microphone startup fails after `input.start` | best-effort `input.clear`; no binary commit |
-| Switch/new/end after a commit | settle current assistant → wait for persisted `transcript.user.done` → settle any newly-created assistant → close |
+| Switch/new/pause/restart/end after a commit | settle current assistant → wait for persisted `transcript.user.done` → settle any newly-created assistant → close |
 
 Long recording uses the same rows with a longer interval between `input.start`
 and capture stop. Its explicit cancel action follows the same `input.clear` →

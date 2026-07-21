@@ -406,6 +406,11 @@ input {
   white-space: nowrap;
 }
 
+.persona-summary .persona-occupation {
+  color: var(--message-meta);
+  font-size: 12px;
+}
+
 .persona-summary .ant-badge-status-text {
   max-width: min(48vw, 260px);
   overflow: hidden;

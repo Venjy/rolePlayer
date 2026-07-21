@@ -2,7 +2,7 @@
 
 ## Project goal
 
-Build an AI sales role-player around realtime voice conversations. The current milestone combines a reliable browser ↔ Node ↔ Qwen Audio voice loop with an editable, SQLite-backed persona/scenario catalog, durable finalized text/audio conversation history, downloadable transcript/MP3 exports, and a responsive learner/admin interface. Preserve the working voice, history-recovery, download, and catalog contracts while extending the product.
+Build an AI sales role-player around realtime voice conversations. The current milestone combines a reliable browser ↔ Node ↔ Qwen Audio voice loop with an editable, SQLite-backed persona/scenario catalog, durable finalized text/audio history, pause/continue/restart controls, downloadable transcript/MP3 exports, bilingual end-of-session coaching, and a responsive learner/admin interface. Preserve the working voice, history-recovery, lifecycle, feedback, download, and catalog contracts while extending the product.
 
 Before changing a subsystem, read its focused contract:
 
@@ -159,7 +159,7 @@ Catalog initializer tests must also use an explicit temporary `CATALOG_DATABASE_
 - Keep catalog access behind `CatalogRepository`. Avoid long synchronous queries in request handlers because `DatabaseSync` blocks the Node event loop.
 - Keep conversation access behind `ConversationRepository`. Current ownership is a single private deployment with one global history; ended records have explicit user deletion, but there is no automatic retention job. Add authentication/authorization and per-owner filtering before any multi-user or public deployment.
 - All initializer business data lives in `src/server/catalog/initial-data/*.json`; TypeScript initializer code contains validation and writes only. Each preset table has its own JSON file and preset JSON never carries a category discriminator. JSON `key` values are stable initializer-only markers stored as nullable `seed_key` metadata; never put database IDs in initializer JSON. `pnpm catalog:init` and `pnpm catalog:init:prod` are transactional and idempotent, preserve existing rows, never require Qwen credentials, enforce compatibility capacity, and validate seeded prompt combinations before writing.
-- Do not add user, evaluation, or parallel session/transcript tables speculatively. Extend conversation storage only after defining ownership, retention, deletion, recovery, and authorization for the new behavior. Current finalized audio shares the private global-history authorization/retention boundary, cascades with messages, is not replayed into Qwen recovery, and is encoded into temporary response-only MP3/ZIP artifacts.
+- Do not add user-account, aggregate learner profile/evaluation, or parallel session/transcript tables speculatively. Extend conversation storage only after defining ownership, retention, deletion, recovery, and authorization for the new behavior. Current per-conversation feedback and finalized audio share the private global-history authorization/retention boundary, cascade with their session/messages, are not replayed into Qwen recovery, and produce only temporary response artifacts for MP3/ZIP downloads.
 - Database files and any SQLite journal sidecars are runtime data and must remain uncommitted. Production must mount the directory containing both database files rather than store them only in the container image layer.
 
 ## Engineering conventions
