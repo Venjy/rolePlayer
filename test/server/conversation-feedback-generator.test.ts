@@ -144,7 +144,7 @@ describe("QwenConversationFeedbackGenerator", () => {
     const generator = new QwenConversationFeedbackGenerator({
       apiKey: "test-key",
       endpoint: "https://example.test/chat/completions",
-      model: "qwen-plus",
+      model: "qwen3.6-flash",
       timeoutMs: 10_000,
     });
 
@@ -173,7 +173,7 @@ describe("QwenConversationFeedbackGenerator", () => {
     expect(request?.[0]).toBe("https://example.test/chat/completions");
     expect(init?.headers).toMatchObject({ Authorization: "Bearer test-key" });
     expect(body).toMatchObject({
-      model: "qwen-plus",
+      model: "qwen3.6-flash",
       enable_thinking: false,
       max_completion_tokens: 8_000,
       response_format: { type: "json_object" },
@@ -234,7 +234,7 @@ describe("QwenConversationFeedbackGenerator", () => {
     const generator = new QwenConversationFeedbackGenerator({
       apiKey: "test-key",
       endpoint: "https://example.test/chat/completions",
-      model: "qwen-plus",
+      model: "qwen3.6-flash",
       timeoutMs: 10_000,
     });
 
@@ -270,7 +270,7 @@ describe("QwenConversationFeedbackGenerator", () => {
     const generator = new QwenConversationFeedbackGenerator({
       apiKey: "test-key",
       endpoint: "https://example.test/chat/completions",
-      model: "qwen-plus",
+      model: "qwen3.6-flash",
       timeoutMs: 10_000,
     });
 
@@ -346,7 +346,7 @@ describe("QwenConversationFeedbackGenerator", () => {
     const generator = new QwenConversationFeedbackGenerator({
       apiKey: "test-key",
       endpoint: "https://example.test/chat/completions",
-      model: "qwen-plus",
+      model: "qwen3.6-flash",
       timeoutMs: 10_000,
     });
 
@@ -391,7 +391,7 @@ describe("QwenConversationFeedbackGenerator", () => {
     const generator = new QwenConversationFeedbackGenerator({
       apiKey: "test-key",
       endpoint: "https://example.test/chat/completions",
-      model: "qwen-plus",
+      model: "qwen3.6-flash",
       timeoutMs: 10_000,
     });
 
@@ -438,7 +438,7 @@ describe("QwenConversationFeedbackGenerator", () => {
     const generator = new QwenConversationFeedbackGenerator({
       apiKey: "test-key",
       endpoint: "https://example.test/chat/completions",
-      model: "qwen-plus",
+      model: "qwen3.6-flash",
       timeoutMs: 10_000,
     });
 
@@ -469,7 +469,7 @@ describe("QwenConversationFeedbackGenerator", () => {
     const generator = new QwenConversationFeedbackGenerator({
       apiKey: "test-key",
       endpoint: "https://example.test/chat/completions",
-      model: "qwen-plus",
+      model: "qwen3.6-flash",
       timeoutMs: 10_000,
     });
 
@@ -499,7 +499,7 @@ describe("QwenConversationFeedbackGenerator", () => {
     const generator = new QwenConversationFeedbackGenerator({
       apiKey: "test-key",
       endpoint: "https://example.test/chat/completions",
-      model: "qwen-plus",
+      model: "qwen3.6-flash",
       timeoutMs: 10_000,
     });
 
@@ -532,7 +532,7 @@ describe("QwenConversationFeedbackGenerator", () => {
     const generator = new QwenConversationFeedbackGenerator({
       apiKey: "test-key",
       endpoint: "https://example.test/chat/completions",
-      model: "qwen-plus",
+      model: "qwen3.6-flash",
       timeoutMs: 10_000,
     });
 
@@ -552,7 +552,7 @@ describe("QwenConversationFeedbackGenerator", () => {
     const generator = new QwenConversationFeedbackGenerator({
       apiKey: "test-key",
       endpoint: "https://example.test/chat/completions",
-      model: "qwen-plus",
+      model: "qwen3.6-flash",
       timeoutMs: 10_000,
     });
 
@@ -571,7 +571,7 @@ describe("QwenConversationFeedbackGenerator", () => {
     const generator = new QwenConversationFeedbackGenerator({
       apiKey: "test-key",
       endpoint: "https://example.test/chat/completions",
-      model: "qwen-plus",
+      model: "qwen3.6-flash",
       timeoutMs: 10_000,
     });
 
@@ -588,7 +588,7 @@ describe("QwenConversationFeedbackGenerator", () => {
     const generator = new QwenConversationFeedbackGenerator({
       apiKey: "test-key",
       endpoint: "https://example.test/chat/completions",
-      model: "qwen-plus",
+      model: "qwen3.6-flash",
       timeoutMs: 10_000,
     });
 
@@ -612,7 +612,7 @@ describe("QwenConversationFeedbackGenerator", () => {
       const generator = new QwenConversationFeedbackGenerator({
         apiKey: "test-key",
         endpoint: "https://example.test/chat/completions",
-        model: "qwen-plus",
+        model: "qwen3.6-flash",
         timeoutMs: 50,
       });
 

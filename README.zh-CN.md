@@ -81,8 +81,10 @@
    ```dotenv
    DASHSCOPE_API_KEY=sk-ws-...
    DASHSCOPE_WORKSPACE_ID=ws_...
-   DASHSCOPE_FEEDBACK_MODEL=qwen-plus
+   DASHSCOPE_FEEDBACK_MODEL=qwen3.6-flash
    ```
+
+   `DASHSCOPE_FEEDBACK_MODEL` 由复盘生成、角色/场景草稿生成和保守的目标达成检测共同使用。三者都采用非思考 JSON 模式，并由 Node 校验返回结构。
 
    SQLite 默认使用两个文件：`data/catalog.sqlite` 保存角色、场景、预设和兼容关系；`data/conversations.sqlite` 保存会话快照与最终消息。可分别通过 `CATALOG_DATABASE_PATH` 和 `CONVERSATION_DATABASE_PATH` 覆盖。相对路径从进程工作目录解析，父目录会自动创建。
 

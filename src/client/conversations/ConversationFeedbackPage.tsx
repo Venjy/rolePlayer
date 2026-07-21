@@ -4,7 +4,7 @@ import {
   App as AntApp,
   Button,
   Flex,
-  Skeleton,
+  Spin,
   Typography,
 } from "antd";
 import {
@@ -34,6 +34,20 @@ import styles from "./ConversationFeedbackPage.module.css";
 
 const POLL_INTERVAL_MS = 2_000;
 const TRANSCRIPT_HIGHLIGHT_DURATION_MS = 2_800;
+
+function FeedbackLoadingState({ message }: { message: string }) {
+  return (
+    <section
+      className={styles.feedbackLoadingState}
+      role="status"
+      aria-busy="true"
+      aria-live="polite"
+    >
+      <Spin size="large" />
+      <Typography.Text type="secondary">{message}</Typography.Text>
+    </section>
+  );
+}
 
 export interface ConversationFeedbackPageProps {
   conversationId: number;
@@ -252,7 +266,9 @@ export function ConversationFeedbackPage({
     return (
       <main className={styles.page} aria-busy="true">
         {renderHeader()}
-        <Skeleton active paragraph={{ rows: 12 }} />
+        <FeedbackLoadingState
+          message={t({ en: "Loading feedback…", zh: "正在加载复盘……" })}
+        />
       </main>
     );
   }
@@ -287,25 +303,37 @@ export function ConversationFeedbackPage({
     conversation.scenario.nameZhCn,
     locale,
   );
+  const feedbackPending =
+    view.feedback.status === "pending" ||
+    view.feedback.status === "processing";
 
   return (
-    <main className={styles.page}>
+    <main className={styles.page} aria-busy={feedbackPending}>
       {renderHeader(`${scenarioName} · ${personaName}`)}
-      <FeedbackReportContent
-        conversationId={conversationId}
-        view={view}
-        retrying={retrying}
-        downloading={downloading}
-        deleting={deleting}
-        tryingAgain={tryingAgain}
-        highlightedMessage={highlightedMessage}
-        onRetry={() => void retry()}
-        onRevealTranscriptMessage={revealTranscriptMessage}
-        onCopyTranscript={() => void copyTranscript()}
-        onDownload={(format) => void download(format)}
-        onTryAgain={() => void tryAgain(conversation)}
-        onDelete={() => void deleteCurrentConversation()}
-      />
+      {feedbackPending ? (
+        <FeedbackLoadingState
+          message={t({
+            en: "AI is reading the conversation and generating your feedback. This usually takes 15–30 seconds.",
+            zh: "AI 正在读取对话内容并生成复盘结果，预计需要 15–30 秒。",
+          })}
+        />
+      ) : (
+        <FeedbackReportContent
+          conversationId={conversationId}
+          view={view}
+          retrying={retrying}
+          downloading={downloading}
+          deleting={deleting}
+          tryingAgain={tryingAgain}
+          highlightedMessage={highlightedMessage}
+          onRetry={() => void retry()}
+          onRevealTranscriptMessage={revealTranscriptMessage}
+          onCopyTranscript={() => void copyTranscript()}
+          onDownload={(format) => void download(format)}
+          onTryAgain={() => void tryAgain(conversation)}
+          onDelete={() => void deleteCurrentConversation()}
+        />
+      )}
     </main>
   );
 }

@@ -24,37 +24,54 @@ function createEvaluator() {
   return new QwenConversationSuccessEvaluator({
     apiKey: "test-key",
     endpoint: "https://example.test/chat/completions",
-    model: "qwen-plus",
+    model: "qwen3.6-flash",
     timeoutMs: 10_000,
   });
 }
 
 describe("QwenConversationSuccessEvaluator", () => {
   it("reports success only when every criterion has high-confidence evidence", async () => {
-    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({
-      choices: [{ message: { content: JSON.stringify({
-        criteria: [
-          {
-            criterionPosition: 0,
-            completed: true,
-            confidence: 0.97,
-            evidenceTurnIndexes: [0, 1],
-            rationale: "客户明确说出了痛点。",
-          },
-          {
-            criterionPosition: 1,
-            completed: true,
-            confidence: 0.95,
-            evidenceTurnIndexes: [2, 3],
-            rationale: "双方明确约定了下一步。",
-          },
-        ],
-      }) } }],
-    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const fetchMock = vi.fn(async (
+      _requestInput: string | URL | Request,
+      _requestInit?: RequestInit,
+    ) => {
+      void _requestInput;
+      void _requestInit;
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({
+          criteria: [
+            {
+              criterionPosition: 0,
+              completed: true,
+              confidence: 0.97,
+              evidenceTurnIndexes: [0, 1],
+              rationale: "客户明确说出了痛点。",
+            },
+            {
+              criterionPosition: 1,
+              completed: true,
+              confidence: 0.95,
+              evidenceTurnIndexes: [2, 3],
+              rationale: "双方明确约定了下一步。",
+            },
+          ],
+        }) } }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
     await expect(createEvaluator().evaluate(input)).resolves.toMatchObject({
       allCriteriaCompleted: true,
       criteria: [{ completed: true }, { completed: true }],
+    });
+    const requestBody = JSON.parse(
+      String(fetchMock.mock.calls[0]?.[1]?.body),
+    ) as Record<string, unknown>;
+    expect(requestBody).toMatchObject({
+      model: "qwen3.6-flash",
+      enable_thinking: false,
+      max_completion_tokens: 1_500,
+      response_format: { type: "json_object" },
     });
   });
 

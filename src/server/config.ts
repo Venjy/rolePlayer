@@ -55,7 +55,11 @@ const feedbackEnvSchema = z.object({
     .string()
     .url()
     .default("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"),
-  DASHSCOPE_FEEDBACK_MODEL: z.string().trim().min(1).default("qwen-plus"),
+  DASHSCOPE_FEEDBACK_MODEL: z
+    .string()
+    .trim()
+    .min(1)
+    .default("qwen3.6-flash"),
   DASHSCOPE_FEEDBACK_TIMEOUT_MS: z.coerce
     .number()
     .int()
@@ -108,9 +112,9 @@ export function hasQwenConfig(): boolean {
 export type FeedbackConfig = ReturnType<typeof getFeedbackConfig>;
 
 /**
- * Feedback is optional at process startup. This getter is called only when a
- * completed conversation needs coaching feedback, so realtime voice remains
- * usable even when the text-model configuration has not been supplied yet.
+ * Text-model features are optional at process startup. Feedback generation,
+ * catalog draft generation, and success detection resolve this configuration
+ * lazily, so realtime voice remains usable when it has not been supplied yet.
  */
 export function getFeedbackConfig() {
   const parsed = feedbackEnvSchema.safeParse(process.env);

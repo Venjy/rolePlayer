@@ -81,8 +81,10 @@ Official setup references:
    ```dotenv
    DASHSCOPE_API_KEY=sk-ws-...
    DASHSCOPE_WORKSPACE_ID=ws_...
-   DASHSCOPE_FEEDBACK_MODEL=qwen-plus
+   DASHSCOPE_FEEDBACK_MODEL=qwen3.6-flash
    ```
+
+   `DASHSCOPE_FEEDBACK_MODEL` is shared by feedback generation, catalog draft generation, and conservative success detection. All three use non-thinking JSON mode and validate the returned structure on Node.
 
    SQLite uses two files by default: `data/catalog.sqlite` for personas, scenarios, presets, and compatibility; and `data/conversations.sqlite` for conversation snapshots and finalized messages. Override them with `CATALOG_DATABASE_PATH` and `CONVERSATION_DATABASE_PATH`. Relative paths resolve from the process working directory and parent directories are created automatically.
 

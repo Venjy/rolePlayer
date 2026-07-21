@@ -31,7 +31,7 @@ const idParametersSchema = z.object({
 });
 
 interface CatalogRouteOptions {
-  /** Test/alternate provider injection; the default lazily reuses qwen-plus. */
+  /** Test/alternate provider injection; the default lazily reuses qwen3.6-flash. */
   draftGenerator?: CatalogDraftGenerator;
 }
 

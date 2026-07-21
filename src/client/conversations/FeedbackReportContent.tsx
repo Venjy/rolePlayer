@@ -19,7 +19,6 @@ import {
   List,
   Popconfirm,
   Progress,
-  Skeleton,
   Space,
   Statistic,
   Tag,
@@ -95,8 +94,6 @@ export function FeedbackReportContent({
   const userTurns = conversation.messages.filter(
     ({ role }) => role === "user",
   ).length;
-  const feedbackPending =
-    feedback.status === "pending" || feedback.status === "processing";
   const conversationTooShortForMinimumMoments =
     userTurns < MIN_FEEDBACK_MOMENT_COUNT;
   const audioAvailable = conversation.audioAvailable;
@@ -156,9 +153,7 @@ export function FeedbackReportContent({
           <Typography.Title level={3}>
             {t({ en: "Overall assessment", zh: "整体评价" })}
           </Typography.Title>
-          {feedbackPending ? (
-            <Skeleton active paragraph={{ rows: 2 }} title={false} />
-          ) : feedback.status === "failed" ? (
+          {feedback.status === "failed" ? (
             <Alert
               type="warning"
               showIcon
@@ -332,8 +327,8 @@ export function FeedbackReportContent({
                     type="warning"
                     showIcon
                     title={t({
-                      en: `This conversation has only ${userTurns} ${userTurns === 1 ? "learner turn" : "learner turns"}, so there is not enough distinct evidence to generate at least ${MIN_FEEDBACK_MOMENT_COUNT} highlighted moments.`,
-                      zh: `本次对话只有 ${userTurns} 轮有效学员发言，对话证据太少，无法生成至少 ${MIN_FEEDBACK_MOMENT_COUNT} 个互不重复的关键时刻。`,
+                      en: `This conversation has only ${userTurns} valid ${userTurns === 1 ? "learner turn" : "learner turns"}. There is too little evidence to generate a sufficient number of highlighted moments.`,
+                      zh: `本次对话只有 ${userTurns} 轮有效学员发言，对话证据太少，无法生成足量的关键时刻。`,
                     })}
                   />
                 )}

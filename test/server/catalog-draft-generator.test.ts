@@ -105,7 +105,7 @@ function configuredGenerator(): QwenCatalogDraftGenerator {
   return new QwenCatalogDraftGenerator({
     apiKey: "test-key",
     endpoint: "https://example.test/chat/completions",
-    model: "qwen-plus",
+    model: "qwen3.6-flash",
     timeoutMs: 10_000,
   });
 }
@@ -137,7 +137,13 @@ describe("QwenCatalogDraftGenerator", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     const requestBody = JSON.parse(
       String(fetchMock.mock.calls[0]?.[1]?.body),
-    ) as { temperature: number; messages: Array<{ content: string }> };
+    ) as {
+      model: string;
+      enable_thinking: boolean;
+      temperature: number;
+      response_format: { type: string };
+      messages: Array<{ content: string }>;
+    };
     const prompt = requestBody.messages[1]?.content ?? "";
     const promptObject = JSON.parse(prompt) as {
       creativeVariation?: {
@@ -146,7 +152,10 @@ describe("QwenCatalogDraftGenerator", () => {
       };
       rules?: string[];
     };
+    expect(requestBody.model).toBe("qwen3.6-flash");
+    expect(requestBody.enable_thinking).toBe(false);
     expect(requestBody.temperature).toBe(0.9);
+    expect(requestBody.response_format).toEqual({ type: "json_object" });
     expect(Number.isInteger(promptObject.creativeVariation?.token)).toBe(true);
     expect(promptObject.creativeVariation?.appliesOnlyTo).toEqual([
       "name",
